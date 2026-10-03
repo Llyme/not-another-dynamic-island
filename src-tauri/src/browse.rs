@@ -45,6 +45,27 @@ pub struct BrowseInfo {
     pub blocked: bool,
 }
 
+fn is_new_tab_or_empty(url: Option<&str>, title: &str) -> bool {
+    const EMPTY_TITLES: &[&str] = &["new tab", "new tab page", "start page", "home", "about:blank", ""];
+    let t = title.to_lowercase();
+    if EMPTY_TITLES.contains(&t.as_str()) {
+        return true;
+    }
+    if let Some(u) = url {
+        let ul = u.to_lowercase();
+        const NEW_TAB_URLS: &[&str] = &[
+            "about:blank", "chrome://newtab", "chrome://new-tab-page", "chrome://home",
+            "edge://newtab", "edge://new-tab-page", "brave://newtab",
+            "vivaldi://newtab", "vivaldi://startpage", "opera://newtab", "opera://startpage",
+            "firefox://newtab", "about:newtab", "about:home",
+        ];
+        if NEW_TAB_URLS.iter().any(|&prefix| ul.starts_with(prefix)) || ul == "about:newtab" || ul == "about:home" {
+            return true;
+        }
+    }
+    false
+}
+
 /// "Rust docs - Google Chrome - Michael" -> "Rust docs"
 pub fn clean_title(title: &str) -> String {
     let lower = title.to_lowercase();
@@ -256,6 +277,12 @@ pub fn spawn(state: Arc<IslandState>) {
                 last_key.clear();
                 continue;
             }
+            // new tab or empty page: ignore completely
+            if is_new_tab_or_empty(url.as_deref(), &title) {
+                *state.activity.browsing.lock().unwrap() = None;
+                last_key.clear();
+                continue;
+            }
             let key = format!("{exe}|{title}");
             let page_changed = key != last_key;
             let target = crate::scan::visible_windows().into_iter().find(|w| {
@@ -327,6 +354,12 @@ pub fn spawn(state: Arc<IslandState>) {
             if domain.is_none() {
                 domain = url.as_deref().and_then(domain_of);
             }
+            // new tab or empty page: ignore completely
+            if is_new_tab_or_empty(url.as_deref(), &title) {
+                *state.activity.browsing.lock().unwrap() = None;
+                last_key.clear();
+                continue;
+            }
             // blocked sites are never read: what was taken so far is thrown away
             if pagekind::is_blocked(url.as_deref(), &title, &blocklist) {
                 preview = None;
@@ -346,6 +379,11 @@ pub fn spawn(state: Arc<IslandState>) {
                     if let Some(p) = r.read(w.hwnd) {
                         if p.url.is_some() {
                             url = p.url.clone();
+                        }
+                        if is_new_tab_or_empty(url.as_deref(), &title) {
+                            *state.activity.browsing.lock().unwrap() = None;
+                            last_key.clear();
+                            continue;
                         }
                         preview = pagetext::preview_from_page(&p, w.hwnd).or(preview);
                         page = Some(p);
