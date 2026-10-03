@@ -695,9 +695,10 @@ const LI_PATHS = {
   tag: "M2.5 8.5V3.5h5l6 6-5 5zM5.5 6h.01",
   play: "M4.5 3.5v9l8-4.5z",
   branch: "M4.5 3v10M11.5 5.5v1c0 2-3 2-7 4",
+  chat: "M2.8 3.5h10.4v6.8H8l-2.6 2.2v-2.2H2.8zM5 6.2h6M5 8.2h4",
 };
 // which glyph stands for a kind of page (see pagekind.rs)
-const KIND_GLYPH = { walkthrough: "steps", wiki: "book", news: "news", video: "play", recipe: "pot", qna: "ask", api: "code", product: "tag", search: "search", webapp: "branch" };
+const KIND_GLYPH = { walkthrough: "steps", wiki: "book", news: "news", video: "play", recipe: "pot", qna: "ask", api: "code", product: "tag", search: "search", webapp: "branch", social: "chat" };
 
 function li(name) {
   return `<svg class="li" viewBox="0 0 16 16" aria-hidden="true"><path d="${LI_PATHS[name] || LI_PATHS.dot}"/></svg>`;

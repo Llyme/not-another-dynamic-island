@@ -34,6 +34,9 @@ const REFRESH_S: u64 = 12;
 const CHROME_EPOCH_OFFSET_US: i64 = 11_644_473_600_000_000;
 /// how often open tabs are re-enumerated to drop closed ones from the MRU list
 const PRUNE_EVERY_S: u64 = 5;
+/// a page missing from every tab strip must miss this many re-checks in a row
+/// before it is dropped: mid-load titles flicker, closed tabs do not come back
+const PRUNE_GRACE_S: u64 = 10;
 
 /// same browser list as `work::BROWSER_EXES`, by exe file name
 fn is_browser_exe(exe: &str) -> bool {
@@ -273,12 +276,15 @@ pub fn spawn(state: Arc<IslandState>) {
         let mut ocr: Vec<String> = Vec::new();
         let mut info = BrowseInfo::default();
         let mut last_prune = std::time::Instant::now() - Duration::from_secs(PRUNE_EVERY_S);
+        // pages missing from the tab strips, and since when: grace before dropping
+        let mut absent: std::collections::HashMap<String, std::time::Instant> = std::collections::HashMap::new();
         loop {
             std::thread::sleep(Duration::from_millis(1000));
             let hub = state.hub_open.load(Ordering::Relaxed);
             // closed tabs and windows drop out of the MRU list: the tab strip
             // names every open tab, so a page no window names anymore is gone
-            // (background tabs stay named and are kept)
+            // (background tabs stay named and are kept). Missing pages get a
+            // grace period first, so mid-load titles do not flicker the card.
             if last_prune.elapsed() >= Duration::from_secs(PRUNE_EVERY_S) {
                 last_prune = std::time::Instant::now();
                 if let Some(r) = &reader {
@@ -292,23 +298,43 @@ pub fn spawn(state: Arc<IslandState>) {
                         if let Some(names) = r.open_tabs(w.hwnd) {
                             let entry = tabs.entry(k).or_default();
                             for n in names {
-                                let c = clean_title(&n);
+                                let c = clean_title(&n).to_lowercase();
                                 if !c.is_empty() && !entry.contains(&c) {
                                     entry.push(c);
                                 }
                             }
                         }
                     }
-                    state.activity.prune_browse(|exe, title| {
-                        let k = exe.to_lowercase();
-                        if !seen.contains(&k) {
-                            return false; // no window of this browser left
+                    // an empty scan is a hiccup, not "everything closed": prune nothing
+                    if !seen.is_empty() {
+                        let keys = state.activity.browse_keys();
+                        let mut drop: Vec<String> = Vec::new();
+                        for (exe, title) in &keys {
+                            let k = exe.to_lowercase();
+                            let open = if !seen.contains(&k) {
+                                false // no window of this browser left
+                            } else {
+                                match tabs.get(&k) {
+                                    Some(list) if !list.is_empty() => list.iter().any(|t| *t == title.to_lowercase()),
+                                    _ => true, // no tab data (e.g. Firefox): TTL stays the fallback
+                                }
+                            };
+                            let key = crate::activity::browse_key(&exe, &title);
+                            if open {
+                                absent.remove(&key);
+                            } else if absent.get(&key).map_or(false, |t| t.elapsed() >= Duration::from_secs(PRUNE_GRACE_S)) {
+                                drop.push(key.clone());
+                                absent.remove(&key);
+                            } else {
+                                absent.entry(key).or_insert_with(std::time::Instant::now);
+                            }
                         }
-                        match tabs.get(&k) {
-                            Some(list) if !list.is_empty() => list.iter().any(|t| t == title),
-                            _ => true, // no tab data (e.g. Firefox): TTL stays the fallback
+                        // entries re-observed while grace was pending are back: forget them
+                        absent.retain(|k, _| keys.iter().any(|(e, t)| &crate::activity::browse_key(e, t) == k));
+                        if !drop.is_empty() {
+                            state.activity.prune_browse(|exe, title| !drop.contains(&crate::activity::browse_key(exe, title)));
                         }
-                    });
+                    }
                 }
             }
             let Some((exe, title)) = state.activity.active_browser() else {
@@ -478,7 +504,12 @@ pub fn spawn(state: Arc<IslandState>) {
             info.domain = domain;
             info.preview = preview.clone();
             info.blocked = false;
-            state.activity.upsert_browsing(key.clone(), info.clone());
+            // publish only once there is something to show: the first loops
+            // after a switch still read an empty page, and that blank must not
+            // hide (then unhide) the card
+            if !info.is_empty() {
+                state.activity.upsert_browsing(key.clone(), info.clone());
+            }
         }
     });
 }

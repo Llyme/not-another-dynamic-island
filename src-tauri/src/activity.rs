@@ -251,6 +251,11 @@ impl ActivityState {
         self.browsing.lock().unwrap().remove(key);
     }
 
+    /// (exe, title) of every MRU page, most recent first
+    pub fn browse_keys(&self) -> Vec<(String, String)> {
+        self.inner.lock().unwrap().browse_mru.iter().map(|e| (e.exe.clone(), e.title.clone())).collect()
+    }
+
     /// drop MRU pages `keep` rejects (closed tab or window), then forget their info.
     /// Entries with no data (a browser that exposes no tab strip) are kept by the
     /// caller returning true, so the TTL stays the fallback there.
