@@ -196,9 +196,9 @@
 
   // ---------------------------------------------------------------- the browser page and downloads
   const page = (W.page = {
-    title: "NADI downloads",
+    title: "How to install NADI",
     domain: "nadi.dev",
-    lead: "NADI is a small pill with a pair of eyes at the top of your screen. Grab the installer below, or the source, or the demo reel.",
+    lead: "NADI is a small pill with a pair of eyes at the top of your screen. This guide takes about two minutes.",
     buttons: ["Download installer", "Download source", "Download demo reel"],
   });
   const FILES = {
@@ -527,12 +527,52 @@
     const category = confirmed || "idle";
     const has = !NON_SESSION.includes(category);
     st.hasWork = has;
-    NADI.emit("work-tick", { has_session: has, category, label: LABELS[category] || "Away", app_name: confirmedApp, started_at_secs: now() - confirmedSince });
+    // browsing a page the island understands: the pill names the page, not the activity
+    const k = category === "browsing" ? W.pageKind() : null;
+    NADI.emit("work-tick", {
+      has_session: has,
+      category,
+      label: LABELS[category] || "Away",
+      app_name: confirmedApp,
+      started_at_secs: now() - confirmedSince,
+      page_kind: k ? k.id : null,
+      page_main: k ? k.main : null,
+      page_sub: k ? k.sub : null,
+      page_progress: k ? k.progress : null,
+    });
   }
   setInterval(workPoll, 1000);
   W.setFg = (id) => {
     W.fg = id;
   };
+
+  // What the island makes of the page in the browser window (pagekind.rs): a walkthrough, found by its numbered
+  // steps, that knows which step you are on and how far down you are. The browser app reports its own scroll.
+  const blockedPage = () => {
+    const list = String(S().page_blocklist || "").toLowerCase().split(/[,;\n]/).map((x) => x.trim()).filter(Boolean);
+    return list.some((x) => page.domain.includes(x) || page.title.toLowerCase().includes(x));
+  };
+  function pageKind() {
+    const r = NADI.browserReading && NADI.browserReading();
+    if (!r || !r.steps.length) return null;
+    const total = r.steps.length;
+    const at = r.step;
+    const fields = [];
+    let main = page.title;
+    let sub = `${total} steps ahead`;
+    if (at >= 0) {
+      const st = r.steps[at];
+      fields.push({ key: "Doing now", value: st.name, rough: false }, { key: "Step", value: `${st.n} of ${total}`, rough: false });
+      if (r.steps[at + 1]) fields.push({ key: "Next", value: r.steps[at + 1].name, rough: false });
+      main = st.name;
+      sub = `Step ${st.n} of ${total}`;
+    } else {
+      fields.push({ key: "Doing now", value: "Introduction", rough: false }, { key: "Steps", value: `${total} ahead`, rough: false }, { key: "Next", value: r.steps[0].name, rough: false });
+    }
+    fields.push({ key: "Progress", value: `${Math.round(r.progress * 100)}% down the page`, rough: false });
+    return { id: "walkthrough", label: "Walkthrough", confidence: 0.97, fields, main, sub, progress: r.progress };
+  }
+  W.pageKind = () => (S().page_preview && !blockedPage() ? pageKind() : null);
 
   C.get_activity = () => {
     const snap = { games: [], downloads: [], llm: [], work: [], coding: null };
@@ -566,12 +606,16 @@
           app_name: r.app,
           icon: ICONS[r.id] || null,
           going_secs: now() - r.started,
-          page: browsing ? page.title : null,
+          page: browsing && !blockedPage() ? page.title : null,
           browse: browsing
-            ? {
-                domain: page.domain,
-                preview: S().page_preview ? { lead: page.lead, buttons: page.buttons.map((label, i) => ({ label, x: 40, y: 120 + i * 30 })) } : null,
-              }
+            ? blockedPage()
+              ? { domain: null, preview: null, kind: null, blocked: true }
+              : {
+                  domain: page.domain,
+                  preview: S().page_preview ? { lead: page.lead, buttons: page.buttons.map((label, i) => ({ label, x: 40, y: 120 + i * 30 })) } : null,
+                  kind: W.pageKind(),
+                  blocked: false,
+                }
             : null,
         });
       }

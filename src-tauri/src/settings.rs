@@ -72,6 +72,9 @@ pub struct Settings {
     pub glow_intensity: u64,
     /// browsing card: fetch the page in front of you (public https pages only) to show its gist
     pub page_preview: bool,
+    /// sites (domains or words, comma separated) that are never read, on top of the built-in ones
+    /// (banking, mail, health, password managers)
+    pub page_blocklist: String,
 }
 
 impl Default for Settings {
@@ -107,6 +110,7 @@ impl Default for Settings {
             bg_dim: 50,
             glow_intensity: 70,
             page_preview: true,
+            page_blocklist: String::new(),
         }
     }
 }

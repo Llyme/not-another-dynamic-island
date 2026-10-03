@@ -1,10 +1,18 @@
-//! "What are you browsing": for the hub's browsing card. The window title only
-//! names the page, so the rest comes from the browser's own history database
-//! (Chromium family: Chrome, Edge, Brave, Vivaldi, Opera). The live file is
-//! locked by the browser, so a copy is read -- only while the hub is open and a
-//! browser is in use, and only when the file changed since the last copy.
+//! "What are you browsing": for the browsing card and the work pill. The window title only names the page,
+//! so the rest is read in tiers, cheapest first:
+//!
+//! 1. the address and the title (free): what kind of page it probably is,
+//! 2. the page's structure through UI Automation, while the browser is in front or the hub is open,
+//!    at most every few seconds (see `uia`),
+//! 3. OCR of the window, only while the hub is open and there was no tree to read (see `pagetext`),
+//! 4. the browser's own history database (Chromium family), only while the hub is open: the full address and
+//!    the page you came from. The live file is locked by the browser, so a copy is read, and only when the
+//!    file changed since the last copy.
+//!
+//! Private windows and blocked sites (banking, mail, health, your own list) are never read at all.
 
 use crate::IslandState;
+use crate::pagekind::{self, Evidence, PageKind, Trail};
 use crate::pagetext::{self, PagePreview};
 use serde::Serialize;
 use std::path::{Path, PathBuf};
@@ -12,6 +20,15 @@ use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use std::time::{Duration, SystemTime};
 
+/// the page has to stay this long before its structure is read (it may still be loading, or you may be passing by)
+const SETTLE_S: f64 = 2.5;
+/// at most one full read of a page's structure per this long (a long page costs the browser about half a second)
+const FULL_READ_COOLDOWN_S: u64 = 10;
+/// a read this old is redone when the hub opens
+const STALE_S: u64 = 60;
+/// how often the scroll position of the page in front is looked at (one cheap call)
+const SCROLL_EVERY_S: u64 = 2;
+/// how often the history is looked at again while the hub is open
 const REFRESH_S: u64 = 12;
 /// gap between the Windows FILETIME-style epoch Chromium uses (1601) and Unix
 const CHROME_EPOCH_OFFSET_US: i64 = 11_644_473_600_000_000;
@@ -22,6 +39,10 @@ pub struct BrowseInfo {
     pub domain: Option<String>,
     /// what the page says, read from the window
     pub preview: Option<PagePreview>,
+    /// what kind of page it is, and what is worth saying about it
+    pub kind: Option<PageKind>,
+    /// a private window or a blocked site: nothing is read, and the card shows no page
+    pub blocked: bool,
 }
 
 /// "Rust docs - Google Chrome - Michael" -> "Rust docs"
@@ -43,6 +64,13 @@ pub fn clean_title(title: &str) -> String {
         }
     }
     let mut t = title[..cut].trim().to_string();
+    // Edge and Chrome put the profile's name before their own: "Zeppelin - Wikipedia - Personal"
+    if let Some(i) = t.rfind(" - ") {
+        let profile = t[i + 3..].trim().to_lowercase();
+        if matches!(profile.as_str(), "personal" | "work" | "school" | "default" | "guest") || profile.starts_with("profile ") {
+            t.truncate(i);
+        }
+    }
     // Edge: "Page and 3 more pages - Profile" (the tab count and profile trail the title)
     if let Some(i) = t.rfind(" and ") {
         let mut words = t[i + 5..].split_whitespace();
@@ -118,8 +146,9 @@ fn snapshot(src: &Path) -> Option<PathBuf> {
     Some(dst)
 }
 
-/// The site of the newest visit whose title matches the page in front of you.
-fn query(db: &Path, page_title: &str) -> Option<String> {
+/// The newest visit today whose title matches the page in front of you: its address, and the trail
+/// (the page you came from, and whether this address was visited before).
+fn query(db: &Path, page_title: &str) -> Option<(String, Trail)> {
     if page_title.is_empty() {
         return None;
     }
@@ -128,15 +157,34 @@ fn query(db: &Path, page_title: &str) -> Option<String> {
         rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY | rusqlite::OpenFlags::SQLITE_OPEN_NO_MUTEX,
     )
     .ok()?;
-    let mut stmt = conn
+    let (url, url_id, at): (String, i64, i64) = conn
         .prepare(
-            "SELECT u.url FROM visits v JOIN urls u ON u.id = v.url \
+            "SELECT u.url, u.id, v.visit_time FROM visits v JOIN urls u ON u.id = v.url \
              WHERE v.visit_time >= ?1 AND u.title = ?2 AND (v.transition & 255) NOT IN (3, 4) \
              ORDER BY v.visit_time DESC LIMIT 1",
         )
+        .ok()?
+        .query_row(rusqlite::params![midnight_chrome_us(), page_title], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))
         .ok()?;
-    let url: String = stmt.query_row(rusqlite::params![midnight_chrome_us(), page_title], |r| r.get(0)).ok()?;
-    domain_of(&url)
+    let mut trail = Trail::default();
+    // the page before this one, within half an hour, on the same site
+    let thirty_min_us = 30 * 60 * 1_000_000_i64;
+    if let Ok(mut st) = conn.prepare(
+        "SELECT u.url, u.title FROM visits v JOIN urls u ON u.id = v.url \
+         WHERE v.visit_time < ?1 AND v.visit_time >= ?2 AND u.id != ?3 AND (v.transition & 255) NOT IN (3, 4) \
+         ORDER BY v.visit_time DESC LIMIT 1",
+    ) {
+        if let Ok((pu, pt)) = st.query_row(rusqlite::params![at, at - thirty_min_us, url_id], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?))) {
+            if domain_of(&pu) == domain_of(&url) {
+                trail.prev_url = Some(pu);
+                trail.prev_title = Some(pt).filter(|t| !t.is_empty());
+            }
+        }
+    }
+    trail.seen_before = conn
+        .query_row("SELECT COUNT(*) FROM visits WHERE url = ?1 AND visit_time < ?2", rusqlite::params![url_id, at], |r| r.get::<_, i64>(0))
+        .map_or(false, |n| n > 0);
+    Some((url, trail))
 }
 
 /// Card button -> click the page's button of that name (see `pagetext::click_button`).
@@ -155,6 +203,14 @@ pub async fn click_page_button(window: tauri::WebviewWindow, label: String, x: f
     .unwrap_or(false)
 }
 
+fn foreground() -> isize {
+    unsafe { windows::Win32::UI::WindowsAndMessaging::GetForegroundWindow().0 as isize }
+}
+
+fn blocked_info() -> BrowseInfo {
+    BrowseInfo { domain: None, preview: None, kind: None, blocked: true }
+}
+
 pub fn spawn(state: Arc<IslandState>) {
     std::thread::spawn(move || {
         // background work: never compete with the UI for CPU
@@ -164,61 +220,180 @@ pub fn spawn(state: Arc<IslandState>) {
                 windows::Win32::System::Threading::THREAD_PRIORITY_BELOW_NORMAL,
             );
         }
+        let reader = crate::uia::Reader::new();
         let mut last_key = String::new();
-        let mut last_at = std::time::Instant::now() - Duration::from_secs(REFRESH_S);
+        let mut last_full = std::time::Instant::now() - Duration::from_secs(FULL_READ_COOLDOWN_S);
+        let mut full_at: Option<std::time::Instant> = None;
+        let mut changed_at = std::time::Instant::now();
+        let mut last_scroll = std::time::Instant::now();
+        let mut last_scroll_poll = std::time::Instant::now();
+        let mut last_address = std::time::Instant::now() - Duration::from_secs(10);
+        let mut hub_before = false;
+        let mut last_hist = std::time::Instant::now() - Duration::from_secs(REFRESH_S);
         let mut last_mtime: Option<SystemTime> = None;
         let mut db: Option<PathBuf> = None;
         let mut last_fp: Option<u64> = None;
-        let mut last_preview: Option<PagePreview> = None;
+        let mut preview: Option<PagePreview> = None;
+        let mut url: Option<String> = None;
+        let mut trail = Trail::default();
+        let mut page: Option<crate::uia::Page> = None;
+        let mut ocr: Vec<String> = Vec::new();
+        let mut info = BrowseInfo::default();
         loop {
             std::thread::sleep(Duration::from_millis(1000));
-            if !state.hub_open.load(Ordering::Relaxed) {
-                continue;
-            }
+            let hub = state.hub_open.load(Ordering::Relaxed);
             let Some((exe, title)) = state.activity.active_browser() else {
                 *state.activity.browsing.lock().unwrap() = None;
+                last_key.clear();
+                if let Some(r) = &reader {
+                    r.detach();
+                }
                 continue;
             };
-            let key = format!("{exe}|{title}");
-            let page_changed = key != last_key;
-            if !page_changed && last_at.elapsed() < Duration::from_secs(REFRESH_S) {
+            // a private window: nothing about it is read, kept or shown
+            if state.activity.browse_private() {
+                *state.activity.browsing.lock().unwrap() = Some(blocked_info());
+                last_key.clear();
                 continue;
             }
-            last_key = key;
-            last_at = std::time::Instant::now();
-            if page_changed {
-                last_fp = None;
-                last_preview = None;
-            }
-
-            // the site, from the browser history (Chromium family only)
-            let mut domain = None;
-            if let Some(src) = history_path(&exe) {
-                let mtime = std::fs::metadata(&src).and_then(|m| m.modified()).ok();
-                // the copy is the expensive part: redo it only when the file changed
-                if mtime != last_mtime || db.is_none() {
-                    db = snapshot(&src);
-                    last_mtime = mtime;
+            let key = format!("{exe}|{title}");
+            let page_changed = key != last_key;
+            let target = crate::scan::visible_windows().into_iter().find(|w| {
+                !w.minimized && w.exe.eq_ignore_ascii_case(&exe) && (title.is_empty() || w.title.contains(&title))
+            });
+            let in_front = target.as_ref().map_or(false, |w| w.hwnd.0 as isize == foreground());
+            // nothing to do when nobody is looking: the hub is closed and the browser is not in front
+            if !hub && !in_front && !page_changed {
+                // not needed for a while: let the browser drop its accessibility tree again
+                if last_scroll.elapsed() > Duration::from_secs(20) {
+                    if let Some(r) = &reader {
+                        r.detach();
+                    }
                 }
-                domain = db.as_deref().and_then(|d| query(d, &title));
+                continue;
+            }
+            let (settings_reading, blocklist) = {
+                let s = state.settings.lock().unwrap();
+                (s.page_preview, s.page_blocklist.clone())
+            };
+            if page_changed {
+                last_key = key;
+                last_fp = None;
+                preview = None;
+                url = None;
+                trail = Trail::default();
+                page = None;
+                ocr.clear();
+                info = BrowseInfo::default();
+                changed_at = std::time::Instant::now();
+                full_at = None;
+                last_address = std::time::Instant::now() - Duration::from_secs(10);
+                last_hist = std::time::Instant::now() - Duration::from_secs(REFRESH_S);
             }
 
-            // what the page says, read from the window
-            if state.settings.lock().unwrap().page_preview {
-                let target = crate::scan::visible_windows().into_iter().find(|w| {
-                    !w.minimized && w.exe.eq_ignore_ascii_case(&exe) && (title.is_empty() || w.title.contains(&title))
-                });
-                if let Some(w) = target {
-                    if let Some((preview, fp)) = pagetext::read_window(w.hwnd, &title, last_fp) {
-                        last_fp = Some(fp);
-                        // unchanged screen: keep the last reading
-                        if preview.is_some() || page_changed {
-                            last_preview = preview;
+            // history: the full address and the trail (only with the hub open: it copies a file)
+            let mut domain = info.domain.clone();
+            if hub && last_hist.elapsed() >= Duration::from_secs(REFRESH_S) {
+                last_hist = std::time::Instant::now();
+                if let Some(src) = history_path(&exe) {
+                    let mtime = std::fs::metadata(&src).and_then(|m| m.modified()).ok();
+                    // the copy is the expensive part: redo it only when the file changed
+                    if mtime != last_mtime || db.is_none() {
+                        db = snapshot(&src);
+                        last_mtime = mtime;
+                    }
+                    if let Some((u, t)) = db.as_deref().and_then(|d| query(d, &title)) {
+                        domain = domain_of(&u);
+                        url.get_or_insert(u);
+                        trail = t;
+                    }
+                }
+            }
+
+            // reading the page: the structure through UI Automation (never while a game runs). The address comes
+            // first and cheap, because the block list decides before anything of the page is read.
+            let reading = settings_reading && !state.has_game.load(Ordering::Relaxed) && (hub || in_front);
+            let mut fresh = page_changed;
+            if let (true, Some(w), Some(r)) = (reading, &target, &reader) {
+                r.attach();
+                last_scroll = std::time::Instant::now();
+                if last_address.elapsed() >= Duration::from_secs(10) {
+                    last_address = std::time::Instant::now();
+                    if let Some(u) = r.url(w.hwnd) {
+                        url = Some(u);
+                    }
+                }
+            }
+            if domain.is_none() {
+                domain = url.as_deref().and_then(domain_of);
+            }
+            // blocked sites are never read: what was taken so far is thrown away
+            if pagekind::is_blocked(url.as_deref(), &title, &blocklist) {
+                preview = None;
+                page = None;
+                ocr.clear();
+                *state.activity.browsing.lock().unwrap() = Some(blocked_info());
+                hub_before = hub;
+                continue;
+            }
+            if let (true, Some(w), Some(r)) = (reading, &target, &reader) {
+                // the whole structure, once per page: when it has settled, and again when the hub opens on an old reading
+                let settled = changed_at.elapsed().as_secs_f64() >= SETTLE_S;
+                let first = page.is_none() && settled;
+                let stale = hub && !hub_before && full_at.map_or(false, |t| t.elapsed() >= Duration::from_secs(STALE_S));
+                if (first || stale) && last_full.elapsed() >= Duration::from_secs(FULL_READ_COOLDOWN_S) {
+                    last_full = std::time::Instant::now();
+                    if let Some(p) = r.read(w.hwnd) {
+                        if p.url.is_some() {
+                            url = p.url.clone();
+                        }
+                        preview = pagetext::preview_from_page(&p, w.hwnd).or(preview);
+                        page = Some(p);
+                        full_at = Some(std::time::Instant::now());
+                        fresh = true;
+                    } else {
+                        // the browser is only now switching its tree on: look again in a moment
+                        last_full = std::time::Instant::now() - Duration::from_secs(FULL_READ_COOLDOWN_S - 2);
+                    }
+                } else if let Some(p) = page.as_mut() {
+                    // how far down you are: one cheap call, every couple of seconds
+                    if full_at.map_or(false, |t| t.elapsed() > Duration::from_millis(500)) && last_scroll_poll.elapsed() >= Duration::from_secs(SCROLL_EVERY_S) {
+                        last_scroll_poll = std::time::Instant::now();
+                        if let Some(now) = r.scroll(w.hwnd) {
+                            if p.scroll_now.map_or(true, |old| (old - now).abs() >= 0.005) {
+                                p.scroll_now = Some(now);
+                                fresh = true;
+                            }
                         }
                     }
                 }
             }
-            *state.activity.browsing.lock().unwrap() = Some(BrowseInfo { domain, preview: last_preview.clone() });
+            hub_before = hub;
+
+            // OCR, only with the hub open and when there was no tree to read
+            if hub && settings_reading && page.as_ref().map_or(true, |p| p.nodes.len() < 8) {
+                if let Some(w) = &target {
+                    if let Some((p, lines, fp)) = pagetext::read_window_lines(w.hwnd, &title, last_fp) {
+                        last_fp = Some(fp);
+                        if p.is_some() || page_changed {
+                            preview = p.or(preview);
+                        }
+                        if !lines.is_empty() {
+                            ocr = lines;
+                            fresh = true;
+                        }
+                    }
+                }
+            }
+
+            if fresh {
+                let ev = Evidence { url: url.as_deref(), title: &title, page: page.as_ref(), ocr: &ocr, trail: &trail };
+                info.kind = pagekind::read(&ev);
+            }
+            info.domain = domain;
+            info.preview = preview.clone();
+            info.blocked = false;
+            *state.activity.browsing.lock().unwrap() = Some(info.clone());
         }
     });
 }
@@ -226,6 +401,12 @@ pub fn spawn(state: Arc<IslandState>) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn titles_lose_the_profile_name_too() {
+        assert_eq!(clean_title("Zeppelin - Wikipedia - Personal - Microsoft\u{200b} Edge"), "Zeppelin - Wikipedia");
+        assert_eq!(clean_title("Zeppelin - Wikipedia - Microsoft\u{200b} Edge"), "Zeppelin - Wikipedia");
+    }
 
     #[test]
     fn titles_lose_the_browser_suffix() {

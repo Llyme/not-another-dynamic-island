@@ -13,12 +13,14 @@ tauri-build = { version = "2", features = [] }
 
 [dependencies]
 webview2-com = "0.39"
-windows-core = "0.62"
+windows-core = "0.58"
+windows-core-062 = { package = "windows-core", version = "0.62" }
 tauri = { version = "2", features = ["tray-icon", "protocol-asset"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "time", "sync", "process"] }
 windows = { version = "0.58", features = [
+    "implement",
     "Media_Control",
     "Storage_Streams", "Media_Ocr", "Graphics_Imaging",
     "Foundation",
@@ -29,7 +31,7 @@ windows = { version = "0.58", features = [
     "Win32_System_SystemInformation",
     "Win32_System_ProcessStatus",
     "Win32_Graphics_Gdi", "Win32_Graphics_Dwm", "Win32_Storage_Xps", "Win32_UI_HiDpi",
-    "Win32_UI_Shell",
+    "Win32_UI_Shell", "Win32_UI_Accessibility", "Win32_System_Variant", "Win32_System_Ole",
     "Win32_System_Com", "Win32_System_Performance", "Win32_Storage_FileSystem", "Win32_Media", "Win32_Media_Audio", "Win32_System_Diagnostics_Etw", "Win32_System_Time", "Win32_UI_Controls_Dialogs",
     "UI_Notifications", "UI_Notifications_Management", "ApplicationModel", "Foundation_Collections",
 ] }

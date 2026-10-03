@@ -260,13 +260,22 @@ pub fn view_size(view: PillView, width: u64) -> (f64, f64) {
   }
 
   // ------------------------------------------------------------ the browser (a page with buttons, and downloads)
+  const STEPS = [
+    ["Download the installer", "Grab the installer below. It is about 3 MB and needs no account.", "Download installer"],
+    ["Run it", "Run NADI_1.0.0_x64-setup.exe. Windows 10 or 11 is enough, and the WebView2 runtime comes with Windows 11."],
+    ["Call the island", "Rest your cursor on the top edge of a monitor. A glow builds up and the island lands. It hides again on its own."],
+    ["Open the hub", "Click the island to expand it. Right-click to pin it in place, drag it sideways to move it."],
+    ["Open Settings", "Use the tray icon next to the clock. Everything is in a row of icon tabs: theme, width, glow, sound, time."],
+    ["Optional: the source", "Prefer to build it yourself? It is a Rust backend with a plain JavaScript frontend.", "Download source"],
+  ];
   function createBrowser() {
     make(
       "browser",
-      "NADI downloads",
-      `<div class="brw"><div class="url"><span>&#128274; nadi.dev/download</span></div><div class="page"><h3>${esc(W.page.title)}</h3><p>${esc(W.page.lead)}</p><div class="row wrap">${W.page.buttons.map((b) => `<button class="dbtn go" data-b="${esc(b)}">${esc(b)}</button>`).join("")}</div><div class="shelf"></div></div></div>`,
+      "How to install NADI",
+      `<div class="brw"><div class="url"><span>&#128274; nadi.dev/guide/install</span></div><div class="page"><h3>${esc(W.page.title)}</h3><p>${esc(W.page.lead)}</p>${STEPS.map(([name, text, btn], i) => `<h5 class="pstep">Step ${i + 1} &middot; ${esc(name)}</h5><p>${esc(text)}</p>${btn ? `<div class="row wrap"><button class="dbtn go" data-b="${esc(btn)}">${esc(btn)}</button></div>` : ""}`).join("")}<h5>Want the demo reel?</h5><div class="row wrap"><button class="dbtn go" data-b="Download demo reel">Download demo reel</button></div><p class="hint">Scroll this page: the island follows which step you are on.</p><div class="shelf"></div></div></div>`,
       (el) => {
         const shelf = $(".shelf", el);
+        const pageEl = $(".page", el);
         const render = () => {
           const items = W.dl.items.slice(-3);
           shelf.innerHTML = items
@@ -289,6 +298,18 @@ pub fn view_size(view: PillView, width: u64) -> (f64, f64) {
           W.startDownload(label);
           render();
           return true;
+        };
+        // where you are in the guide: how far down, and the last step that has reached the upper part of the window
+        NADI.browserReading = () => {
+          if (!W.win.browser || !W.win.browser.open) return null;
+          const range = Math.max(1, pageEl.scrollHeight - pageEl.clientHeight);
+          const line = pageEl.scrollTop + pageEl.clientHeight * 0.4;
+          const heads = [...pageEl.querySelectorAll(".pstep")];
+          let step = -1;
+          heads.forEach((h, i) => {
+            if (h.getBoundingClientRect().top - pageEl.getBoundingClientRect().top + pageEl.scrollTop <= line) step = i;
+          });
+          return { progress: Math.min(1, pageEl.scrollTop / range), step, steps: STEPS.map(([name], i) => ({ n: i + 1, name })) };
         };
       },
     );

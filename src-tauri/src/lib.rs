@@ -14,7 +14,9 @@ mod downloads;
 mod fps;
 mod gamestats;
 mod llm;
+mod pagekind;
 mod pagetext;
+mod uia;
 mod project;
 mod scan;
 mod notify_listener;
@@ -413,7 +415,7 @@ fn place_window(hwnd: isize, last: &mut (i32, i32, i32, i32), x: f64, y: f64, w:
 /// bar and autofill. Editing keys (copy, paste, select all) still work in the text fields.
 fn lock_down_webview(window: &WebviewWindow) {
     use webview2_com::Microsoft::Web::WebView2::Win32::ICoreWebView2Settings3;
-    use windows_core::Interface;
+    use windows_core_062::Interface;
     let _ = window.with_webview(|wv| unsafe {
         let Ok(core) = wv.controller().CoreWebView2() else { return };
         let Ok(settings) = core.Settings() else { return };

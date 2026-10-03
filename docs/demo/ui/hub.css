@@ -2698,3 +2698,32 @@ svg.li {
 .now-card.flat-card .now-peek {
   display: none;
 }
+
+/* ---- the browsing card, for a page of a kind the island understands: what is worth knowing, as rows ---- */
+.pk-fields {
+  display: grid;
+  gap: 3px;
+  font-size: 11.5px;
+}
+
+.pk-row {
+  display: grid;
+  grid-template-columns: 78px minmax(0, 1fr);
+  gap: 10px;
+  align-items: baseline;
+}
+
+.pk-k {
+  color: var(--fg-dim);
+  font-size: 10.5px;
+}
+
+.pk-v {
+  overflow-wrap: anywhere;
+}
+
+/* worked out loosely (from the title, a guess at the scroll), not read from the page */
+.pk-v.rough::before {
+  content: "\2248\00a0";
+  color: var(--fg-dim);
+}

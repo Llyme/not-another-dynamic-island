@@ -15,6 +15,15 @@ It is Windows-only for now. The goal is to stay light: it should never make the 
 - **Games and work.** Detects running games, and what you are working on, even when the window is not
   focused. The coding card shows the git changes of the project (branch, files, added and deleted lines);
   the browsing card shows what is in the page and gives you buttons to click it from the island.
+- **Page reader.** The island knows what kind of page you are on (walkthrough, wiki article, news
+  article, video, recipe, Q&A thread, API reference, product page, search results, web app such as a pull
+  request) and says what matters for that kind: the step you are on and the next one, the section you are in,
+  the minutes left, the answers on a question. The work pill names the page and how far down you are. It
+  works in tiers, cheapest first: the address and window title, then the page's structure through UI
+  Automation (the accessibility tree screen readers use, no extension, one full read per page and a cheap
+  scroll poll after that), then OCR if there is no tree. Private and incognito windows and banking, mail, health
+  and password-manager sites are never read, and you can add your own sites in Settings. Nothing is stored or
+  sent. Turn it off with Settings > Page Text.
 - **Downloads.** Active downloads from browsers, Steam and qBittorrent, in one card. Finished ones open
   their folder or can be put away with a click.
 - **Notifications.** Captures the notifications of all apps.
@@ -75,5 +84,5 @@ everything: the edge dwell and glow, the slide in and out, the spring resize bet
 click-through. The window is a little larger than the island, and the margin is click-through, so the
 glow can shine outside the island without blocking the windows underneath.
 
-Background work (game and work detection, downloads, OCR of the page text) runs on low-priority threads
+Background work (game and work detection, downloads, reading the page) runs on low-priority threads
 and only does what is needed while something is shown.

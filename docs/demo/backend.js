@@ -89,6 +89,7 @@
     bg_dim: 50,
     glow_intensity: 70,
     page_preview: true,
+    page_blocklist: "",
   };
   const SETTINGS_KEY = "nadi-demo-settings-v1";
   let settings = (() => {

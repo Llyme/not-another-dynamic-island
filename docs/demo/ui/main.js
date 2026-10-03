@@ -687,7 +687,17 @@ const LI_PATHS = {
   file: "M4 2.5h5l3 3v8H4zM9 2.5v3h3",
   check: "M3.5 8.5 6.5 11.5 12.5 4.5",
   pillshape: "M4.5 5.5h7a2.5 2.5 0 0 1 0 5h-7a2.5 2.5 0 0 1 0-5z",
+  steps: "M3 4h2M7 4h6M3 8h2M7 8h6M3 12h2M7 12h6",
+  book: "M3 3.5h5v9H3zM8 3.5h5v9H8z",
+  news: "M3 3h8v10H3zM11 6h2v7h-2M5 5.5h4M5 8h4M5 10.5h2",
+  pot: "M3.5 7h9v4.5a1.5 1.5 0 0 1-1.5 1.5H5a1.5 1.5 0 0 1-1.5-1.5zM2.5 7h11M6 4.5c0-1 1-1 1-2M9 4.5c0-1 1-1 1-2",
+  ask: "M8 13.2v.1M6.2 6.2a1.9 1.9 0 1 1 2.7 1.7c-.6.3-.9.7-.9 1.4",
+  tag: "M2.5 8.5V3.5h5l6 6-5 5zM5.5 6h.01",
+  play: "M4.5 3.5v9l8-4.5z",
+  branch: "M4.5 3v10M11.5 5.5v1c0 2-3 2-7 4",
 };
+// which glyph stands for a kind of page (see pagekind.rs)
+const KIND_GLYPH = { walkthrough: "steps", wiki: "book", news: "news", video: "play", recipe: "pot", qna: "ask", api: "code", product: "tag", search: "search", webapp: "branch" };
 
 function li(name) {
   return `<svg class="li" viewBox="0 0 16 16" aria-hidden="true"><path d="${LI_PATHS[name] || LI_PATHS.dot}"/></svg>`;
@@ -1480,10 +1490,13 @@ const workTime = document.getElementById("work-time");
 listen("work-tick", (event) => {
   const w = event.payload;
   if (!w.has_session) return;
-  workIcon.innerHTML = li(WORK_GLYPH[w.category] || "dot");
-  workLabel.textContent = w.label || "";
-  workApp.textContent = w.app_name || "";
-  workTime.textContent = formatDuration(w.started_at_secs);
+  // browsing a page the island understands: it names the page (the step, the headline, the time left),
+  // and the right edge says how far down you are
+  const page = !!w.page_main;
+  workIcon.innerHTML = li(page ? KIND_GLYPH[w.page_kind] || "globe" : WORK_GLYPH[w.category] || "dot");
+  workLabel.textContent = (page ? w.page_main : w.label) || "";
+  workApp.textContent = (page ? w.page_sub : w.app_name) || "";
+  workTime.textContent = page && w.page_progress != null ? `${Math.round(w.page_progress * 100)}%` : formatDuration(w.started_at_secs);
 });
 
 // -- notification banner: driven by notification-tick, and (for now) a
@@ -1713,7 +1726,8 @@ const hubEl = document.getElementById("hub");
     "set-download-detection": "Show active downloads",
     "set-llm-detection": "Show the Claude Code sessions that are running",
     "set-llm-brief": "Drop the island down when a Claude Code session needs you or finishes",
-    "set-page-preview": "Read the text of the page in front of you",
+    "set-page-preview": "Read the page in front of you: what kind it is, where you are in it (never a private window, never banking, mail or health sites)",
+    "set-page-blocklist": "Sites that are never read, besides banking, mail and health: domains or words, separated by commas",
     "set-start-with-windows": "Start with Windows",
     "set-show-at-cursor": "Appear under the cursor",
     "set-cursor-follow": "Follow the cursor along the top edge",
@@ -1743,7 +1757,9 @@ const hubEl = document.getElementById("hub");
     if (row) row.title = tip;
   }
   document.querySelector(".field-icon").innerHTML = li("link");
+  document.querySelector("#set-page-blocklist").closest(".field").querySelector(".field-icon").innerHTML = li("eyeoff");
   document.getElementById("set-calendar-clear").innerHTML = li("x");
+  document.getElementById("set-page-blocklist-clear").innerHTML = li("x");
   for (const b of document.querySelectorAll(".hub-btn-x")) b.innerHTML = li("x");
   const gameIcon = document.getElementById("game-icon");
   if (gameIcon) gameIcon.innerHTML = li("gamepad");
@@ -1758,6 +1774,7 @@ const setDownloadDetection = document.getElementById("set-download-detection");
 const setLlmDetection = document.getElementById("set-llm-detection");
 const setLlmBrief = document.getElementById("set-llm-brief");
 const setPagePreview = document.getElementById("set-page-preview");
+const setPageBlocklist = document.getElementById("set-page-blocklist");
 const setStartWithWindows = document.getElementById("set-start-with-windows");
 const setIdleHideDelay = document.getElementById("set-idle-hide-delay");
 const setIdleHideDelayLabel = document.getElementById("set-idle-hide-delay-label");
@@ -1837,6 +1854,8 @@ async function loadSettingsIntoForm() {
   setLlmDetection.checked = currentSettings.llm_detection ?? true;
   setLlmBrief.checked = currentSettings.llm_brief ?? true;
   setPagePreview.checked = currentSettings.page_preview;
+  setPageBlocklist.value = currentSettings.page_blocklist || "";
+  setPageBlocklist.closest(".field").classList.toggle("filled", setPageBlocklist.value !== "");
   setStartWithWindows.checked = currentSettings.start_with_windows;
   setIdleHideDelay.value = currentSettings.idle_hide_delay_s;
   setIdleHideDelayLabel.textContent = `${currentSettings.idle_hide_delay_s}s`;
@@ -1913,6 +1932,7 @@ function saveSettingsFromForm() {
     llm_detection: setLlmDetection.checked,
     llm_brief: setLlmBrief.checked,
     page_preview: setPagePreview.checked,
+    page_blocklist: setPageBlocklist.value.trim(),
     start_with_windows: setStartWithWindows.checked,
     idle_hide_delay_s: Number(setIdleHideDelay.value),
     show_at_cursor: setShowAtCursor.checked,
@@ -2022,6 +2042,15 @@ setCalendarLead.addEventListener("input", () => {
 });
 setCalendarLead.addEventListener("change", saveSettingsFromForm);
 setCalendarUrl.addEventListener("change", saveSettingsFromForm);
+// the sites that are never read: a field like the calendar link
+setPageBlocklist.addEventListener("change", saveSettingsFromForm);
+setPageBlocklist.addEventListener("input", () => setPageBlocklist.closest(".field").classList.toggle("filled", setPageBlocklist.value !== ""));
+document.getElementById("set-page-blocklist-clear").addEventListener("click", () => {
+  setPageBlocklist.value = "";
+  setPageBlocklist.closest(".field").classList.remove("filled");
+  saveSettingsFromForm();
+  setPageBlocklist.focus();
+});
 // the clear button shows only while the field holds something
 function syncCalendarField() {
   setCalendarUrl.closest(".field").classList.toggle("filled", setCalendarUrl.value !== "");
@@ -2933,19 +2962,39 @@ function pageButton(b) {
   return btn;
 }
 
-// Browsing: the page in front of you and what is in it, read from the page.
+// Browsing: the page in front of you and what is in it, read from the page. When the island knows what kind
+// of page it is (a walkthrough, an article, a video...) the card lists what is worth knowing about that kind.
 function browsingCard(w) {
   const b = w.browse;
+  const k = b.kind;
   const pv = b.preview;
   const card = el("div", "now-card spot");
   const row = el("div", "now-row");
-  row.append(iconEl(w.icon, "globe"));
-  row.append(textCol(w.page || w.app_name || "Browsing", b.domain || going(w.going_secs)));
+  if (k) {
+    const tile = el("div", "now-icon tile");
+    tile.innerHTML = li(KIND_GLYPH[k.id] || "globe");
+    row.append(tile);
+  } else {
+    row.append(iconEl(w.icon, "globe"));
+  }
+  row.append(textCol(w.page || w.app_name || "Browsing", k ? (b.domain ? `${k.label} \u00b7 ${b.domain}` : k.label) : b.domain || going(w.going_secs)));
   card.append(row);
 
   const body = el("div", "work-body");
+  if (k && k.fields.length) {
+    const list = el("div", "pk-fields");
+    for (const f of k.fields) {
+      const r = el("div", "pk-row");
+      const v = el("span", f.rough ? "pk-v rough" : "pk-v", f.value);
+      r.append(el("span", "pk-k", f.key), v);
+      list.append(r);
+    }
+    body.append(list);
+  }
   if (pv) {
-    if (pv.lead) body.append(el("div", "work-desc", pv.lead));
+    // (the kind's own summary line is the better lead)
+    const hasSummary = k && k.fields.some((f) => f.key === "Summary" || f.key === "Gist");
+    if (pv.lead && !hasSummary) body.append(el("div", "work-desc", pv.lead));
     if (pv.buttons.length) {
       const btns = el("div", "page-btns");
       for (const b of pv.buttons) btns.append(pageButton(b));
@@ -2953,7 +3002,8 @@ function browsingCard(w) {
     }
   }
   if (body.childElementCount) card.append(body);
-  return focusable(collapsible(peek(card, b.domain || going(w.going_secs)), "web"), { exePath: w.exe_path });
+  const peekText = k && k.progress != null ? `${Math.round(k.progress * 100)}%` : b.domain || going(w.going_secs);
+  return focusable(collapsible(peek(card, peekText), "web"), { exePath: w.exe_path });
 }
 
 function chip(text, cls) {

@@ -81,3 +81,5 @@
 .tryit .chip { display: inline-flex; align-items: center; gap: 7px; padding: 8px 14px; border-radius: 999px; border: 1px solid var(--line); background: var(--panel); color: var(--fg); font: 600 13px var(--font); cursor: pointer; transition: transform 0.35s var(--spring), border-color 0.2s; } .tryit .chip:hover { transform: translateY(-2px); border-color: rgba(var(--accent-rgb), 0.5); } .tryit .chip .li { width: 15px; height: 15px; color: var(--accent); }
 .demo-cap { text-align: center; color: var(--dim); font-size: 14px; max-width: 78ch; margin: 14px auto 0; } .demo-cap b { color: var(--fg); font-weight: 600; }
 .demo-note { text-align: center; color: var(--mute); font-size: 12.5px; margin-top: 8px; }
+
+.brw .page { flex: 1; min-height: 0; } .brw .page h5 { margin: 14px 0 4px; font-size: 13.5px; }

@@ -145,15 +145,49 @@ fn fingerprint(shot: &Shot) -> u64 {
 /// (summary, fingerprint of what was read). `None` when the window can't be read;
 /// the fingerprint lets the caller skip the OCR when nothing on screen changed.
 pub fn read_window(hwnd: HWND, page_title: &str, last_fingerprint: Option<u64>) -> Option<(Option<PagePreview>, u64)> {
+    read_window_lines(hwnd, page_title, last_fingerprint).map(|(p, _, fp)| (p, fp))
+}
+
+/// Like `read_window`, and also the page's recognised lines of text (the browser's own chrome left out),
+/// which the page-kind classifier takes as evidence. Empty when the screen is unchanged.
+pub fn read_window_lines(hwnd: HWND, page_title: &str, last_fingerprint: Option<u64>) -> Option<(Option<PagePreview>, Vec<String>, u64)> {
     let shot = capture(hwnd)?;
     let fp = fingerprint(&shot);
     if last_fingerprint == Some(fp) {
-        return Some((None, fp));
+        return Some((None, Vec::new(), fp));
     }
     let lines = recognise(&shot)?;
     // the browser's own tab strip + address bar are the top of the window
     let content_top = 105.0 * shot.dpi_scale;
-    Some((extract(&lines, shot.w as f32, content_top, page_title), fp))
+    let texts: Vec<String> = lines.iter().filter(|l| l.y >= content_top).map(|l| l.text.clone()).collect();
+    Some((extract(&lines, shot.w as f32, content_top, page_title), texts, fp))
+}
+
+/// The summary and the safe buttons from a UI Automation reading: the opening paragraph, and the
+/// page's own buttons that are on screen. The positions are relative to the window, like OCR's.
+pub fn preview_from_page(page: &crate::uia::Page, hwnd: HWND) -> Option<PagePreview> {
+    use crate::uia::NodeKind;
+    let mut win = RECT::default();
+    unsafe { GetWindowRect(hwnd, &mut win).ok()? };
+    let lead = crate::pagekind::lead(&page.nodes);
+    let mut found: Vec<PageButton> = Vec::new();
+    for n in &page.nodes {
+        if !matches!(n.kind, NodeKind::Button | NodeKind::Link) || n.right <= n.left {
+            continue;
+        }
+        let key = button_key(&n.name);
+        let on_screen = n.top >= page.view.0 && n.bottom <= page.view.1;
+        if !on_screen || (n.right - n.left) > 320.0 || !SAFE_BUTTONS.contains(&key.as_str()) || found.iter().any(|b| button_key(&b.label) == key) {
+            continue;
+        }
+        let mut label = key.clone();
+        if let Some(c) = label.get_mut(0..1) {
+            c.make_ascii_uppercase();
+        }
+        found.push(PageButton { label, x: (n.left + n.right) / 2.0 - win.left as f32, y: (n.top + n.bottom) / 2.0 - win.top as f32 });
+    }
+    found.truncate(5);
+    (lead.is_some() || !found.is_empty()).then_some(PagePreview { lead, buttons: found })
 }
 
 // ---- which lines are the page? ----------------------------------------------

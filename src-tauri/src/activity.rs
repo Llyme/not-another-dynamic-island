@@ -148,6 +148,8 @@ struct Inner {
     /// the browser in front last time browsing was observed, and its page title
     browse_exe: Option<String>,
     browse_title: String,
+    /// the browser in front is a private / incognito window
+    browse_private: bool,
 }
 
 pub struct ActivityState {
@@ -190,6 +192,11 @@ impl ActivityState {
         fresh.then(|| g.browse_exe.clone().map(|e| (e, g.browse_title.clone()))).flatten()
     }
 
+    /// the browser window in front is private: nothing about it is read or shown
+    pub fn browse_private(&self) -> bool {
+        self.inner.lock().unwrap().browse_private
+    }
+
     pub fn set_games(&self, games: Vec<(String, String, Instant, u32)>) {
         self.inner.lock().unwrap().games = games
             .into_iter()
@@ -227,6 +234,7 @@ impl ActivityState {
         if category == "browsing" {
             g.browse_exe = exe_path.map(str::to_string);
             g.browse_title = crate::browse::clean_title(title);
+            g.browse_private = crate::pagekind::is_private_title(title);
         }
         if elapsed > 0.0 {
             let bucket = g.stats.days.entry(today()).or_default();
@@ -391,7 +399,7 @@ pub fn get_activity(window: WebviewWindow) -> ActivitySnapshot {
                 app_name: r.app_name.clone(),
                 icon: r.exe_path.as_deref().and_then(|p| exeinfo::lookup(p).icon),
                 going_secs: r.started_at.elapsed().as_secs_f64(),
-                page: (category == "browsing").then(|| g.browse_title.clone()).filter(|t| !t.is_empty()),
+                page: (category == "browsing" && !g.browse_private && !state.activity.browsing.lock().unwrap().as_ref().map_or(false, |b| b.blocked)).then(|| g.browse_title.clone()).filter(|t| !t.is_empty()),
                 browse: if category == "browsing" { state.activity.browsing.lock().unwrap().clone() } else { None },
             });
         }
