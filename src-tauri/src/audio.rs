@@ -32,10 +32,15 @@ pub struct AudioTick {
     pub level: f32,
     /// 0..1 per-band energy, each normalized against its own recent peak:
     /// bass <230 Hz, low-mid <800 Hz, mid <3 kHz, high <12 kHz
+    /// (kept for compatibility; derived from `bands` below)
     pub bass: f32,
     pub lowmid: f32,
     pub mid: f32,
     pub high: f32,
+    /// 16 log-spaced bands from ~60 Hz to ~12 kHz, each 0..1 normalized
+    /// against its own recent peak. Index 0 = lowest. Drives the 24
+    /// gradient lights in the island visualizer.
+    pub bands: [f32; VIZ_BANDS],
     /// a beat landed since the previous tick (a real onset, or a tempo-predicted
     /// one when the track has a steady pulse but this hit was too soft to catch)
     pub beat: bool,
@@ -104,6 +109,9 @@ fn fft(re: &mut [f32], im: &mut [f32]) {
 
 const FLUX_HIST: usize = 192; // ~4 s of onset strength for the tempo estimate
 
+/// Fixed visualizer resolution: the frontend draws exactly this many lights.
+pub const VIZ_BANDS: usize = 16;
+
 struct Analyzer {
     rate: f32,
     hann: Vec<f32>,
@@ -115,9 +123,9 @@ struct Analyzer {
     voice: f32,
     level: f32,
     frame_no: u32,
-    // per-band normalization
-    band_peak: [f32; 4],
-    band_env: [f32; 4],
+    // per-band normalization (24 log-spaced visualizer bands)
+    band_peak: [f32; VIZ_BANDS],
+    band_env: [f32; VIZ_BANDS],
     // onsets + tempo
     prev_log: Vec<f32>,
     flux_prev: f32,
@@ -162,8 +170,8 @@ impl Analyzer {
             voice: 0.0,
             level: 0.0,
             frame_no: 0,
-            band_peak: [1e-3; 4],
-            band_env: [0.0; 4],
+            band_peak: [1e-3; VIZ_BANDS],
+            band_env: [0.0; VIZ_BANDS],
             prev_log: vec![0.0; FFT_N / 2],
             flux_prev: 0.0,
             prev_log_bass: [0.0; 16],
@@ -247,23 +255,42 @@ impl Analyzer {
         let mag = |k: usize| (re[k] * re[k] + im[k] * im[k]).sqrt();
         let power = |k: usize| re[k] * re[k] + im[k] * im[k];
 
-        let edges = [
+        // 24 log-spaced visualizer bands, ~60 Hz .. ~12 kHz. Log spacing
+        // matches pitch perception, so each light gets a fair share of the
+        // music (linear spacing would starve the bass lights).
+        let mut edges = [1usize; VIZ_BANDS + 1];
+        let f_min = 60.0f32;
+        let f_max = 12000.0f32;
+        for i in 0..=VIZ_BANDS {
+            let f = f_min * (f_max / f_min).powf(i as f32 / VIZ_BANDS as f32);
+            edges[i] = self.bin(f).clamp(1, FFT_N / 2 - 1);
+            if i > 0 && edges[i] <= edges[i - 1] {
+                edges[i] = (edges[i - 1] + 1).min(FFT_N / 2 - 1);
+            }
+        }
+        let mut band_pow = [0.0f32; VIZ_BANDS];
+        for b in 0..VIZ_BANDS {
+            band_pow[b] = (edges[b]..edges[b + 1]).map(power).sum();
+        }
+        // legacy 4-band split (for `low` history + compat fields): energy
+        // below the same cutoffs as before, summed from the FFT directly.
+        let cut = [
             1,
             self.bin(230.0),
             self.bin(800.0),
             self.bin(3000.0),
             self.bin(12000.0),
         ];
-        let mut band_pow = [0.0f32; 4];
+        let mut legacy_pow = [0.0f32; 4];
         for b in 0..4 {
-            band_pow[b] = (edges[b]..edges[b + 1]).map(power).sum();
+            legacy_pow[b] = (cut[b]..cut[b + 1]).map(power).sum();
         }
-        let low = band_pow[0];
-        let total = band_pow.iter().sum::<f32>() + 1e-9;
+        let low = legacy_pow[0];
+        let total = legacy_pow.iter().sum::<f32>() + 1e-9;
 
         // per-band envelopes, each stretched against its own decaying peak so
         // every band uses its full range whatever the track's mix
-        for b in 0..4 {
+        for b in 0..VIZ_BANDS {
             let nb = (edges[b + 1] - edges[b]).max(1) as f32;
             let e = (band_pow[b] / nb).sqrt();
             self.band_peak[b] = (self.band_peak[b] * 0.9994).max(e).max(1e-3);
@@ -422,12 +449,28 @@ impl Analyzer {
         } else {
             "music"
         };
+        // legacy 4-band compat: average the log bands whose centre falls in
+        // each old range (<230 / <800 / <3k / rest)
+        let bin_hz = self.rate / FFT_N as f32;
+        let avg_range = |lo: f32, hi: f32| -> f32 {
+            let mut sum = 0.0f32;
+            let mut n = 0u32;
+            for b in 0..VIZ_BANDS {
+                let c = (edges[b] as f32 + edges[b + 1] as f32) * 0.5 * bin_hz;
+                if c >= lo && c < hi {
+                    sum += self.band_env[b];
+                    n += 1;
+                }
+            }
+            if n == 0 { 0.0 } else { sum / n as f32 }
+        };
         Some(AudioTick {
             level: self.level,
-            bass: self.band_env[0],
-            lowmid: self.band_env[1],
-            mid: self.band_env[2],
-            high: self.band_env[3],
+            bass: avg_range(0.0, 230.0),
+            lowmid: avg_range(230.0, 800.0),
+            mid: avg_range(800.0, 3000.0),
+            high: avg_range(3000.0, 12000.0),
+            bands: self.band_env,
             beat: std::mem::take(&mut self.beat_pending),
             kick: std::mem::take(&mut self.kick_pending),
             hit: std::mem::take(&mut self.hit_pending),
