@@ -1590,10 +1590,13 @@ function paintViz(now, dt) {
 
 	// 16 lights expanded, 8 elsewhere: the small views condense adjacent
 	// band pairs so all 16 bands still show through 8 lights.
-	// Genre switches glide: each light eases toward its choreography target
-	// instead of jumping, so a vibe change reads as a move, not a cut.
+	// Genre switches glide ease-in-out: each light rides a critically
+	// damped spring toward its choreography target -- it accelerates out
+	// of the old dance and settles softly into the new one, instead of
+	// jumping or easing only one way.
 	const activeN = expanded ? VIZ_BANDS : 8;
-	const glide = 1 - Math.exp(-dt * 4);
+	const STIFF = 20;
+	const DAMP = 9;
 	for (let i = 0; i < activeN; i++) {
 		const env = expanded
 			? audio.bands[i] || 0
@@ -1605,10 +1608,12 @@ function paintViz(now, dt) {
 		const tny = Math.min(0.98, Math.max(0.02, ty / Math.max(1, h)));
 		let cur = viz.lightCur[i];
 		if (!cur) {
-			cur = viz.lightCur[i] = { x: tnx, y: tny };
+			cur = viz.lightCur[i] = { x: tnx, y: tny, vx: 0, vy: 0 };
 		} else {
-			cur.x += (tnx - cur.x) * glide;
-			cur.y += (tny - cur.y) * glide;
+			cur.vx += ((tnx - cur.x) * STIFF - cur.vx * DAMP) * dt;
+			cur.vy += ((tny - cur.y) * STIFF - cur.vy * DAMP) * dt;
+			cur.x = Math.min(1.05, Math.max(-0.05, cur.x + cur.vx * dt));
+			cur.y = Math.min(1.05, Math.max(-0.05, cur.y + cur.vy * dt));
 		}
 		const px = cur.x * w;
 		const py = cur.y * h;

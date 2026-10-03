@@ -118,13 +118,13 @@ struct Analyzer {
     // rolling history for the speech/music call
     energy: Vec<f32>,
     low: Vec<f32>,
-    slow_peak: f32,
     speech_ema: f32,
     voice: f32,
     level: f32,
     frame_no: u32,
-    // per-band normalization (24 log-spaced visualizer bands)
-    band_peak: [f32; VIZ_BANDS],
+    // per-band envelopes (16 log-spaced visualizer bands, fixed dB
+    // mapping -- no adaptive peak tracking, so brightness never gets
+    // stuck dim after a loud passage)
     band_env: [f32; VIZ_BANDS],
     // onsets + tempo
     prev_log: Vec<f32>,
@@ -165,12 +165,10 @@ impl Analyzer {
             hann,
             energy: Vec::new(),
             low: Vec::new(),
-            slow_peak: 0.4,
             speech_ema: 0.0,
             voice: 0.0,
             level: 0.0,
             frame_no: 0,
-            band_peak: [1e-3; VIZ_BANDS],
             band_env: [0.0; VIZ_BANDS],
             prev_log: vec![0.0; FFT_N / 2],
             flux_prev: 0.0,
@@ -288,29 +286,27 @@ impl Analyzer {
         let low = legacy_pow[0];
         let total = legacy_pow.iter().sum::<f32>() + 1e-9;
 
-        // per-band envelopes, each stretched against its own decaying peak so
-        // every band uses its full range whatever the track's mix
+        // per-band envelopes on a fixed dBFS mapping (-60..-12 -> 0..1,
+        // same scale as `level` below): what you see is how loud that
+        // band actually is -- no adaptation, nothing to get stuck.
+        // (The envelope follower itself stays: it only smooths flicker.)
         for b in 0..VIZ_BANDS {
             let nb = (edges[b + 1] - edges[b]).max(1) as f32;
             let e = (band_pow[b] / nb).sqrt();
-            self.band_peak[b] = (self.band_peak[b] * 0.9994).max(e).max(1e-3);
-            let target = (e / self.band_peak[b]).clamp(0.0, 1.0);
+            let target = ((20.0 * (e + 1e-9).log10() + 60.0) / 48.0).clamp(0.0, 1.0);
             let k = if target > self.band_env[b] { 0.7 } else { 0.22 };
             self.band_env[b] += (target - self.band_env[b]) * k;
         }
 
-        // loudness: block RMS in dBFS mapped -60..-12 -> 0..1, then stretched
-        // against a slowly decaying recent peak so quiet-but-active audio
-        // still moves the eyes
+        // loudness: block RMS in dBFS mapped -60..-12 -> 0..1, fixed scale
+        // (no peak normalization -- quiet audio reads quiet, loud reads loud)
         let rms = (block.iter().map(|s| s * s).sum::<f32>() / FFT_N as f32).sqrt();
         let db = 20.0 * (rms + 1e-9).log10();
         let abs_level = ((db + 60.0) / 48.0).clamp(0.0, 1.0);
         // ~1 s average of the real (un-normalized) loudness
         self.db_ema += (db.max(-80.0) - self.db_ema) * 0.025;
-        self.slow_peak = (self.slow_peak * 0.9993).max(abs_level).max(0.35);
-        let target = (abs_level / self.slow_peak).clamp(0.0, 1.0);
-        let k = if target > self.level { 0.6 } else { 0.18 };
-        self.level += (target - self.level) * k;
+        let k = if abs_level > self.level { 0.6 } else { 0.18 };
+        self.level += (abs_level - self.level) * k;
 
         // stereo position: which side carries more of the energy (fast follow,
         // so a hit panned hard left reads as left right now)
