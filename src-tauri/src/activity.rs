@@ -9,7 +9,7 @@ use crate::downloads::{DownloadCard, DownloadItem};
 use crate::project::ProjectInfo;
 use crate::{exeinfo, IslandState};
 use serde::{Deserialize, Serialize};
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, HashMap, VecDeque};
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
@@ -132,6 +132,37 @@ struct GameInfo {
     pid: u32,
 }
 
+/// how many recently focused pages get their own hub card, across all browsers
+pub const BROWSE_MRU_CAP: usize = 3;
+/// a page not focused for this long drops out of the MRU list
+const BROWSE_MRU_TTL_S: u64 = 180;
+
+#[derive(Clone)]
+struct BrowseMru {
+    exe: String,
+    title: String,
+    app: String,
+    first_seen: Instant,
+    last_seen: Instant,
+}
+
+/// Most-recent-first push with dedup + cap. Pure so it is unit-testable.
+fn mru_push(mru: &mut VecDeque<BrowseMru>, exe: String, title: String, app: String, now: Instant) {
+    if let Some(pos) = mru.iter().position(|e| e.exe == exe && e.title == title) {
+        let mut e = mru.remove(pos).unwrap();
+        e.last_seen = now;
+        if !app.is_empty() {
+            e.app = app;
+        }
+        mru.push_front(e);
+        return;
+    }
+    mru.push_front(BrowseMru { exe, title, app, first_seen: now, last_seen: now });
+    while mru.len() > BROWSE_MRU_CAP {
+        mru.pop_back();
+    }
+}
+
 #[derive(Default)]
 struct Inner {
     /// running games, most recently focused first
@@ -145,19 +176,23 @@ struct Inner {
     /// what the editor showed last time coding was observed
     coding_file: Option<String>,
     coding_unsaved: bool,
-    /// the browser in front last time browsing was observed, and its page title
-    browse_exe: Option<String>,
-    browse_title: String,
+    /// recently focused pages, most recent first, across all browser windows
+    browse_mru: VecDeque<BrowseMru>,
     /// the browser in front is a private / incognito window
     browse_private: bool,
+}
+
+/// key for per-page info: `exe|title`
+pub(crate) fn browse_key(exe: &str, title: &str) -> String {
+    format!("{exe}|{title}")
 }
 
 pub struct ActivityState {
     inner: Mutex<Inner>,
     /// git/branch/changed-files of the open project, refreshed by `project::spawn`
     pub project: Mutex<Option<ProjectInfo>>,
-    /// today's browsing from the browser history, refreshed by `browse::spawn`
-    pub browsing: Mutex<Option<BrowseInfo>>,
+    /// per-page info keyed by `browse_key`, refreshed by `browse::spawn`
+    pub browsing: Mutex<HashMap<String, BrowseInfo>>,
     /// what is downloading right now (and finished ones not yet dismissed), kept by `downloads::spawn`
     pub downloads: Mutex<Vec<DownloadItem>>,
 }
@@ -168,7 +203,7 @@ impl Default for ActivityState {
             .and_then(|p| std::fs::read_to_string(p).ok())
             .and_then(|t| serde_json::from_str(&t).ok())
             .unwrap_or_default();
-        Self { inner: Mutex::new(Inner { stats, ..Default::default() }), project: Mutex::new(None), browsing: Mutex::new(None), downloads: Mutex::new(Vec::new()) }
+        Self { inner: Mutex::new(Inner { stats, ..Default::default() }), project: Mutex::new(None), browsing: Mutex::new(HashMap::new()), downloads: Mutex::new(Vec::new()) }
     }
 }
 
@@ -185,16 +220,56 @@ impl ActivityState {
         self.inner.lock().unwrap().active_project.clone()
     }
 
-    /// (browser exe, page title) while a browsing card is showing
+    /// (browser exe, page title) of the most recently focused page, while browsing is recent
     pub fn active_browser(&self) -> Option<(String, String)> {
         let g = self.inner.lock().unwrap();
         let fresh = g.recent.get("browsing").map_or(false, |r| r.last_seen.elapsed() <= Duration::from_secs(RECENT_ACTIVE_S));
-        fresh.then(|| g.browse_exe.clone().map(|e| (e, g.browse_title.clone()))).flatten()
+        if !fresh {
+            return None;
+        }
+        g.browse_mru.front().map(|e| (e.exe.clone(), e.title.clone()))
     }
 
     /// the browser window in front is private: nothing about it is read or shown
     pub fn browse_private(&self) -> bool {
         self.inner.lock().unwrap().browse_private
+    }
+
+    /// store a finished page read under its key, dropping info for evicted pages
+    pub fn upsert_browsing(&self, key: String, info: BrowseInfo) {
+        let keys: Vec<String> = {
+            let g = self.inner.lock().unwrap();
+            g.browse_mru.iter().map(|e| browse_key(&e.exe, &e.title)).collect()
+        };
+        let mut b = self.browsing.lock().unwrap();
+        b.insert(key, info);
+        b.retain(|k, _| keys.contains(k));
+    }
+
+    /// forget one page (new tab, blocked, private): the other MRU cards stay
+    pub fn remove_browsing(&self, key: &str) {
+        self.browsing.lock().unwrap().remove(key);
+    }
+
+    /// drop MRU pages `keep` rejects (closed tab or window), then forget their info.
+    /// Entries with no data (a browser that exposes no tab strip) are kept by the
+    /// caller returning true, so the TTL stays the fallback there.
+    pub fn prune_browse<F: FnMut(&str, &str) -> bool>(&self, mut keep: F) {
+        let keys: Vec<String> = {
+            let mut g = self.inner.lock().unwrap();
+            g.browse_mru.retain(|e| keep(&e.exe, &e.title));
+            g.browse_mru.iter().map(|e| browse_key(&e.exe, &e.title)).collect()
+        };
+        self.browsing.lock().unwrap().retain(|k, _| keys.contains(k));
+    }
+
+    /// the most recent page's info, for the work pill
+    pub fn latest_browsing(&self) -> Option<BrowseInfo> {
+        let key: Option<String> = {
+            let g = self.inner.lock().unwrap();
+            g.browse_mru.front().map(|e| browse_key(&e.exe, &e.title))
+        };
+        self.browsing.lock().unwrap().get(key?.as_str()).cloned()
     }
 
     pub fn set_games(&self, games: Vec<(String, String, Instant, u32)>) {
@@ -232,9 +307,19 @@ impl ActivityState {
                 .unwrap_or_else(|| "your editor".into());
         }
         if category == "browsing" {
-            g.browse_exe = exe_path.map(str::to_string);
-            g.browse_title = crate::browse::clean_title(title);
-            g.browse_private = crate::pagekind::is_private_title(title);
+            let cleaned = crate::browse::clean_title(title);
+            let private = crate::pagekind::is_private_title(title);
+            g.browse_private = private;
+            // new tabs, empty pages and private windows never enter the MRU list
+            if !private && !crate::browse::is_new_tab_or_empty(None, &cleaned) {
+                mru_push(
+                    &mut g.browse_mru,
+                    exe_path.unwrap_or("").to_string(),
+                    cleaned,
+                    app_name.to_string(),
+                    now,
+                );
+            }
         }
         if elapsed > 0.0 {
             let bucket = g.stats.days.entry(today()).or_default();
@@ -392,6 +477,41 @@ pub fn get_activity(window: WebviewWindow) -> ActivitySnapshot {
                 unsaved: g.coding_unsaved,
                 project_info: state.activity.project.lock().unwrap().clone(),
             });
+        } else if category == "browsing" {
+            // one card per recently focused page, most recent first, across all browsers
+            let entries: Vec<(String, String, String, f64)> = g
+                .browse_mru
+                .iter()
+                .filter(|e| e.last_seen.elapsed() <= Duration::from_secs(BROWSE_MRU_TTL_S))
+                .map(|e| (e.exe.clone(), e.title.clone(), e.app.clone(), e.first_seen.elapsed().as_secs_f64()))
+                .collect();
+            let infos = state.activity.browsing.lock().unwrap();
+            for (exe, title, app, going) in entries.into_iter().take(BROWSE_MRU_CAP) {
+                if title.is_empty() {
+                    continue;
+                }
+                let info = infos.get(&browse_key(&exe, &title)).cloned().unwrap_or_default();
+                if info.blocked || info.is_empty() {
+                    continue;
+                }
+                let app_name = if app.is_empty() {
+                    exe.rsplit(['\\', '/']).next().unwrap_or("Browser").strip_suffix(".exe").unwrap_or("Browser").to_string()
+                } else {
+                    app
+                };
+                snap.work.push(WorkCard {
+                    exe_path: (!exe.is_empty()).then_some(exe.clone()),
+                    category: category.clone(),
+                    app_name,
+                    icon: (!exe.is_empty())
+                        .then(|| exeinfo::lookup(&exe).icon)
+                        .flatten()
+                        .or_else(|| r.exe_path.as_deref().and_then(|p| exeinfo::lookup(p).icon)),
+                    going_secs: going,
+                    page: Some(title),
+                    browse: Some(info),
+                });
+            }
         } else {
             snap.work.push(WorkCard {
                 exe_path: r.exe_path.clone(),
@@ -399,8 +519,8 @@ pub fn get_activity(window: WebviewWindow) -> ActivitySnapshot {
                 app_name: r.app_name.clone(),
                 icon: r.exe_path.as_deref().and_then(|p| exeinfo::lookup(p).icon),
                 going_secs: r.started_at.elapsed().as_secs_f64(),
-                page: (category == "browsing" && !g.browse_private && !state.activity.browsing.lock().unwrap().as_ref().map_or(false, |b| b.blocked)).then(|| g.browse_title.clone()).filter(|t| !t.is_empty()),
-                browse: if category == "browsing" { state.activity.browsing.lock().unwrap().clone() } else { None },
+                page: None,
+                browse: None,
             });
         }
     }
@@ -421,6 +541,45 @@ mod tests {
         // chat / settings tabs are not files
         assert_eq!(parse_editor_file("Brief-show island queue … - dynamic-island - Visual Studio Code").0, None);
         assert_eq!(parse_editor_file("Settings - dynamic-island - Visual Studio Code").0, None);
+    }
+
+    #[test]
+    fn mru_keeps_three_most_recent_across_browsers() {
+        let mut mru = VecDeque::new();
+        let now = Instant::now();
+        mru_push(&mut mru, "chrome.exe".into(), "A".into(), "Chrome".into(), now);
+        mru_push(&mut mru, "msedge.exe".into(), "B".into(), "Edge".into(), now);
+        mru_push(&mut mru, "chrome.exe".into(), "C".into(), "Chrome".into(), now);
+        mru_push(&mut mru, "brave.exe".into(), "D".into(), "Brave".into(), now);
+        let titles: Vec<&str> = mru.iter().map(|e| e.title.as_str()).collect();
+        assert_eq!(titles, vec!["D", "C", "B"]);
+    }
+
+    #[test]
+    fn mru_refocus_moves_to_front() {
+        let mut mru = VecDeque::new();
+        let now = Instant::now();
+        mru_push(&mut mru, "chrome.exe".into(), "A".into(), "Chrome".into(), now);
+        mru_push(&mut mru, "msedge.exe".into(), "B".into(), "Edge".into(), now);
+        mru_push(&mut mru, "chrome.exe".into(), "A".into(), "Chrome".into(), now);
+        let titles: Vec<&str> = mru.iter().map(|e| e.title.as_str()).collect();
+        assert_eq!(titles, vec!["A", "B"]);
+        assert_eq!(mru.len(), 2);
+    }
+
+    #[test]
+    fn prune_drops_closed_tabs_but_keeps_open_ones() {
+        let a = ActivityState::default();
+        a.observe("browsing", 0.0, "Page A - Google Chrome", "Chrome", Some("C:\\x\\chrome.exe"));
+        a.observe("browsing", 0.0, "Page B - Google Chrome", "Chrome", Some("C:\\x\\chrome.exe"));
+        a.upsert_browsing(browse_key("C:\\x\\chrome.exe", "Page A"), BrowseInfo::default());
+        a.upsert_browsing(browse_key("C:\\x\\chrome.exe", "Page B"), BrowseInfo::default());
+        a.prune_browse(|_, title| title == "Page B");
+        assert_eq!(a.browsing.lock().unwrap().len(), 1);
+        assert_eq!(a.active_browser().map(|t| t.1).as_deref(), Some("Page B"));
+        a.prune_browse(|_, _| false);
+        assert_eq!(a.active_browser(), None);
+        assert!(a.browsing.lock().unwrap().is_empty());
     }
 
     #[test]

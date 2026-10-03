@@ -161,6 +161,29 @@ impl Reader {
         }
     }
 
+    /// Titles of the window's open tabs, from the tab strip (`TabItem` elements).
+    /// Chromium exposes every tab here, active or not, so closed tabs are told
+    /// apart from background ones. `None` when the tree gives nothing (then the
+    /// caller keeps the old entries instead of dropping them).
+    pub fn open_tabs(&self, hwnd: HWND) -> Option<Vec<String>> {
+        unsafe {
+            let root = self.auto.ElementFromHandle(hwnd).ok()?;
+            let cond = self.auto.CreatePropertyCondition(UIA_ControlTypePropertyId, &VARIANT::from(UIA_TabItemControlTypeId.0)).ok()?;
+            let list = root.FindAll(TreeScope_Descendants, &cond).ok()?;
+            let n = list.Length().ok()?;
+            let mut out = Vec::new();
+            for i in 0..n.min(200) {
+                let Ok(e) = list.GetElement(i) else { continue };
+                let name = e.CurrentName().map(s).unwrap_or_default();
+                let name = name.trim();
+                if !name.is_empty() {
+                    out.push(name.to_string());
+                }
+            }
+            Some(out)
+        }
+    }
+
     /// Read the page in `hwnd`. `None` when the window has no document in its tree (yet).
     pub fn read(&self, hwnd: HWND) -> Option<Page> {
         unsafe {

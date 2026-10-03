@@ -32,6 +32,15 @@ const SCROLL_EVERY_S: u64 = 2;
 const REFRESH_S: u64 = 12;
 /// gap between the Windows FILETIME-style epoch Chromium uses (1601) and Unix
 const CHROME_EPOCH_OFFSET_US: i64 = 11_644_473_600_000_000;
+/// how often open tabs are re-enumerated to drop closed ones from the MRU list
+const PRUNE_EVERY_S: u64 = 5;
+
+/// same browser list as `work::BROWSER_EXES`, by exe file name
+fn is_browser_exe(exe: &str) -> bool {
+    let file = exe.rsplit(['\\', '/']).next().unwrap_or(exe).to_lowercase();
+    let base = file.strip_suffix(".exe").unwrap_or(&file);
+    matches!(base, "chrome" | "msedge" | "firefox" | "brave" | "opera" | "vivaldi" | "arc")
+}
 
 #[derive(Serialize, Clone, Default)]
 pub struct BrowseInfo {
@@ -45,7 +54,14 @@ pub struct BrowseInfo {
     pub blocked: bool,
 }
 
-fn is_new_tab_or_empty(url: Option<&str>, title: &str) -> bool {
+impl BrowseInfo {
+    /// nothing was read (yet): no card worth showing
+    pub fn is_empty(&self) -> bool {
+        !self.blocked && self.domain.is_none() && self.preview.is_none() && self.kind.is_none()
+    }
+}
+
+pub(crate) fn is_new_tab_or_empty(url: Option<&str>, title: &str) -> bool {
     const EMPTY_TITLES: &[&str] = &["new tab", "new tab page", "start page", "home", "about:blank", ""];
     let t = title.to_lowercase();
     if EMPTY_TITLES.contains(&t.as_str()) {
@@ -228,10 +244,6 @@ fn foreground() -> isize {
     unsafe { windows::Win32::UI::WindowsAndMessaging::GetForegroundWindow().0 as isize }
 }
 
-fn blocked_info() -> BrowseInfo {
-    BrowseInfo { domain: None, preview: None, kind: None, blocked: true }
-}
-
 pub fn spawn(state: Arc<IslandState>) {
     std::thread::spawn(move || {
         // background work: never compete with the UI for CPU
@@ -260,30 +272,65 @@ pub fn spawn(state: Arc<IslandState>) {
         let mut page: Option<crate::uia::Page> = None;
         let mut ocr: Vec<String> = Vec::new();
         let mut info = BrowseInfo::default();
+        let mut last_prune = std::time::Instant::now() - Duration::from_secs(PRUNE_EVERY_S);
         loop {
             std::thread::sleep(Duration::from_millis(1000));
             let hub = state.hub_open.load(Ordering::Relaxed);
+            // closed tabs and windows drop out of the MRU list: the tab strip
+            // names every open tab, so a page no window names anymore is gone
+            // (background tabs stay named and are kept)
+            if last_prune.elapsed() >= Duration::from_secs(PRUNE_EVERY_S) {
+                last_prune = std::time::Instant::now();
+                if let Some(r) = &reader {
+                    r.attach();
+                    let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
+                    let mut tabs: std::collections::HashMap<String, Vec<String>> = std::collections::HashMap::new();
+                    for w in crate::scan::visible_windows().iter().filter(|w| is_browser_exe(&w.exe)) {
+                        let k = w.exe.to_lowercase();
+                        seen.insert(k.clone());
+                        // a failed read is no data, not zero tabs: only replace on success
+                        if let Some(names) = r.open_tabs(w.hwnd) {
+                            let entry = tabs.entry(k).or_default();
+                            for n in names {
+                                let c = clean_title(&n);
+                                if !c.is_empty() && !entry.contains(&c) {
+                                    entry.push(c);
+                                }
+                            }
+                        }
+                    }
+                    state.activity.prune_browse(|exe, title| {
+                        let k = exe.to_lowercase();
+                        if !seen.contains(&k) {
+                            return false; // no window of this browser left
+                        }
+                        match tabs.get(&k) {
+                            Some(list) if !list.is_empty() => list.iter().any(|t| t == title),
+                            _ => true, // no tab data (e.g. Firefox): TTL stays the fallback
+                        }
+                    });
+                }
+            }
             let Some((exe, title)) = state.activity.active_browser() else {
-                *state.activity.browsing.lock().unwrap() = None;
+                // nothing recent: MRU cards expire on their own, nothing to clear
                 last_key.clear();
                 if let Some(r) = &reader {
                     r.detach();
                 }
                 continue;
             };
-            // a private window: nothing about it is read, kept or shown
+            // a private window: nothing about it is read, kept or shown; other cards stay
             if state.activity.browse_private() {
-                *state.activity.browsing.lock().unwrap() = Some(blocked_info());
                 last_key.clear();
                 continue;
             }
-            // new tab or empty page: ignore completely
+            let key = crate::activity::browse_key(&exe, &title);
+            // new tab or empty page: forget this page only, other MRU cards stay
             if is_new_tab_or_empty(url.as_deref(), &title) {
-                *state.activity.browsing.lock().unwrap() = None;
+                state.activity.remove_browsing(&key);
                 last_key.clear();
                 continue;
             }
-            let key = format!("{exe}|{title}");
             let page_changed = key != last_key;
             let target = crate::scan::visible_windows().into_iter().find(|w| {
                 !w.minimized && w.exe.eq_ignore_ascii_case(&exe) && (title.is_empty() || w.title.contains(&title))
@@ -304,7 +351,7 @@ pub fn spawn(state: Arc<IslandState>) {
                 (s.page_preview, s.page_blocklist.clone())
             };
             if page_changed {
-                last_key = key;
+                last_key = key.clone();
                 last_fp = None;
                 preview = None;
                 url = None;
@@ -354,18 +401,18 @@ pub fn spawn(state: Arc<IslandState>) {
             if domain.is_none() {
                 domain = url.as_deref().and_then(domain_of);
             }
-            // new tab or empty page: ignore completely
+            // new tab or empty page: forget this page only, other MRU cards stay
             if is_new_tab_or_empty(url.as_deref(), &title) {
-                *state.activity.browsing.lock().unwrap() = None;
+                state.activity.remove_browsing(&key);
                 last_key.clear();
                 continue;
             }
-            // blocked sites are never read: what was taken so far is thrown away
+            // blocked sites are never read: this page is forgotten, the rest stays
             if pagekind::is_blocked(url.as_deref(), &title, &blocklist) {
                 preview = None;
                 page = None;
                 ocr.clear();
-                *state.activity.browsing.lock().unwrap() = Some(blocked_info());
+                state.activity.remove_browsing(&key);
                 hub_before = hub;
                 continue;
             }
@@ -381,7 +428,7 @@ pub fn spawn(state: Arc<IslandState>) {
                             url = p.url.clone();
                         }
                         if is_new_tab_or_empty(url.as_deref(), &title) {
-                            *state.activity.browsing.lock().unwrap() = None;
+                            state.activity.remove_browsing(&key);
                             last_key.clear();
                             continue;
                         }
@@ -431,7 +478,7 @@ pub fn spawn(state: Arc<IslandState>) {
             info.domain = domain;
             info.preview = preview.clone();
             info.blocked = false;
-            *state.activity.browsing.lock().unwrap() = Some(info.clone());
+            state.activity.upsert_browsing(key.clone(), info.clone());
         }
     });
 }
@@ -451,6 +498,13 @@ mod tests {
         assert_eq!(clean_title("Rust docs - Google Chrome"), "Rust docs");
         assert_eq!(clean_title("Inbox and 3 more pages - Personal - Microsoft\u{200b} Edge"), "Inbox");
         assert_eq!(clean_title("Plain"), "Plain");
+    }
+
+    #[test]
+    fn empty_info_has_nothing_to_show() {
+        assert!(BrowseInfo::default().is_empty());
+        assert!(!BrowseInfo { domain: Some("example.com".into()), ..Default::default() }.is_empty());
+        assert!(!BrowseInfo { blocked: true, ..Default::default() }.is_empty());
     }
 
     #[test]

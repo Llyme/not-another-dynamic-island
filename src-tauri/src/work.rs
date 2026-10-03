@@ -289,7 +289,7 @@ pub fn spawn(app: AppHandle, state: Arc<IslandState>) {
             // browsing a walkthrough, an article, a video...: the pill names the page, not the activity
             let (mut page_kind, mut page_main, mut page_sub, mut page_progress) = (None, None, None, None);
             if category == "browsing" {
-                if let Some(k) = state.activity.browsing.lock().unwrap().as_ref().and_then(|b| b.kind.as_ref()) {
+                if let Some(k) = state.activity.latest_browsing().and_then(|b| b.kind) {
                     page_kind = Some(k.id.to_string());
                     page_main = Some(k.main.clone());
                     page_sub = Some(k.sub.clone());

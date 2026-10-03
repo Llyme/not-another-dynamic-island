@@ -3003,7 +3003,12 @@ function browsingCard(w) {
   }
   if (body.childElementCount) card.append(body);
   const peekText = k && k.progress != null ? `${Math.round(k.progress * 100)}%` : b.domain || going(w.going_secs);
-  return focusable(collapsible(peek(card, peekText), "web"), { exePath: w.exe_path });
+  // one card per recently focused page: per-page key keeps expand state separate,
+  // titleHint focuses the right browser window (chrome vs edge, window vs window)
+  const pageKey = `web:${w.exe_path || ""}:${w.page || ""}`;
+  card._sig = `${pageKey}:${k ? `${k.id}:${k.main}:${k.sub}:${(k.fields || []).map((f) => `${f.key}=${f.value}`).join("|")}` : ""}:${b.domain || ""}:${peekText}`;
+  card._data = w;
+  return focusable(collapsible(peek(card, peekText), pageKey), { exePath: w.exe_path, titleHint: w.page });
 }
 
 function chip(text, cls) {
