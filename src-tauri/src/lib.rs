@@ -4,6 +4,7 @@ mod audio;
 mod background;
 mod calendar;
 mod exeinfo;
+mod floats;
 mod focus;
 mod game;
 mod gpu;
@@ -193,6 +194,8 @@ pub(crate) struct IslandState {
     pub(crate) activity: activity::ActivityState,
     /// the browser extension's connection and what it has said about the pages
     pub(crate) ext: ext::ExtState,
+    /// the cards dragged out of the island
+    pub(crate) floats: floats::FloatState,
     pub(crate) gpu: gpu::GpuState,
     pub(crate) game_meter: std::sync::Mutex<gamestats::GameMeter>,
     pub(crate) sys: std::sync::Mutex<sysinfo::System>,
@@ -209,6 +212,8 @@ pub(crate) struct IslandState {
     edge_dwell_ms: AtomicU64,
     /// top-edge hover neither summons nor keeps the island while a fullscreen app covers the monitor
     fullscreen_guard: AtomicBool,
+    /// Ctrl (not Alt) is the key that lifts the guard
+    guard_ctrl: AtomicBool,
     /// size (percent) a pinned, untouched island shrinks to; 100 = it never shrinks
     pin_shrink: AtomicU64,
     /// width (percent) of the collapsed island; the hub keeps its own width
@@ -229,6 +234,13 @@ pub(crate) struct IslandState {
 }
 
 impl IslandState {
+    /// The fullscreen guard is on (the setting) and its key is not held: Alt (or Ctrl, by the setting) lifts it for
+    /// as long as it is down, so a card or the island can be used over a fullscreen game when you want.
+    pub fn fullscreen_guard_on(&self) -> bool {
+        self.fullscreen_guard.load(Ordering::Relaxed)
+            && !if self.guard_ctrl.load(Ordering::Relaxed) { winutil::ctrl_down() } else { winutil::alt_down() }
+    }
+
     pub(crate) fn hub_is_open(&self) -> bool {
         self.hub_open.load(Ordering::Relaxed)
     }
@@ -253,6 +265,7 @@ impl Default for IslandState {
             calendar: calendar::CalendarState::default(),
             activity: activity::ActivityState::default(),
             ext: ext::ExtState::default(),
+            floats: floats::FloatState::default(),
             gpu: gpu::GpuState::default(),
             game_meter: std::sync::Mutex::new(gamestats::GameMeter::default()),
             sys: std::sync::Mutex::new(stats::new_system()),
@@ -262,6 +275,7 @@ impl Default for IslandState {
             peek_ms: AtomicU64::new(loaded.peek_duration_s.max(1) * 1000),
             edge_dwell_ms: AtomicU64::new(loaded.edge_dwell_ms),
             fullscreen_guard: AtomicBool::new(loaded.fullscreen_guard),
+            guard_ctrl: AtomicBool::new(loaded.guard_key == "ctrl"),
             pin_shrink: AtomicU64::new(loaded.pin_shrink.clamp(30, 100)),
             compact_width: AtomicU64::new(settings::compact_px(loaded.compact_width)),
             hub_width: AtomicU64::new(loaded.hub_width.clamp(340, 640)),
@@ -764,7 +778,7 @@ fn spawn_edge_poll(window: WebviewWindow) {
             // Fullscreen cover on the cursor's monitor. While hidden only the edge strip
             // matters (the summon zone); while shown the pill itself lives at the edge, so
             // a cursor resting on the pill must count as suppressed too.
-            let fs_covering = state.fullscreen_guard.load(Ordering::Relaxed)
+            let fs_covering = state.fullscreen_guard_on()
                 && (!hidden_now || cursor_near_edge)
                 && winutil::foreground_fullscreen_on(geo, hwnd);
             let edge_blocked = hidden_now && cursor_near_edge && fs_covering;
@@ -890,6 +904,14 @@ fn spawn_edge_poll(window: WebviewWindow) {
                     pill_monitor_x = geo.x;
                     pinned_dash_target = None;
                     dashed_to_center = false;
+                    // ...and wait at that monitor's center, out of sight above its top edge. Without this the
+                    // pill stayed over the monitor it was last shown on, so a banner or session pill that came
+                    // while the cursor was on another monitor first appeared there, then dashed across to the
+                    // cursor (or, cut short, was left off-center). Not while it is sliding away or while the
+                    // edge glow is charging (that has its own position).
+                    if hide_anim.is_none() && !charge_big && charge_t <= 0.0 && pos_y + win_h < geo.y as f64 + 1.0 {
+                        pos_x = clamp_x(geo.x as f64 + geo.width as f64 / 2.0 - half_w);
+                    }
                 }
                 if !shown && cursor_at_edge && !edge_blocked && (dwell_s <= 0.0 || charge_ready || hide_anim.is_some() || size_anim.is_some()) {
                     shown = true;
@@ -1095,6 +1117,9 @@ pub fn run() {
         .manage(Arc::new(IslandState::default()))
         .invoke_handler(tauri::generate_handler![
             browse::click_page_button,
+            browse::guide_go,
+            ext::page_guide,
+            ext::page_guide_image,
             downloads::download_item_click,
             drag_start,
             push_notification,
@@ -1106,6 +1131,17 @@ pub fn run() {
             dismiss_notification,
             click_notification,
             ext::ext_status,
+            ext::page_image,
+            floats::float_begin,
+            floats::float_ready,
+            floats::float_list,
+            floats::float_set,
+            floats::float_remove,
+            floats::float_region,
+            floats::float_island,
+            floats::float_monitors,
+            floats::float_typing,
+            floats::float_backdrop,
             focus::focus_source,
             toggle_pin,
             media::media_play_pause,
@@ -1178,8 +1214,9 @@ pub fn run() {
             calendar::spawn(app.handle().clone(), window.state::<Arc<IslandState>>().inner().clone());
             audio::spawn(app.handle().clone(), window.state::<Arc<IslandState>>().inner().clone());
             project::spawn(window.state::<Arc<IslandState>>().inner().clone());
-    browse::spawn(window.state::<Arc<IslandState>>().inner().clone());
+    browse::spawn(app.handle().clone(), window.state::<Arc<IslandState>>().inner().clone());
     ext::spawn(window.state::<Arc<IslandState>>().inner().clone());
+    floats::spawn(app.handle().clone(), window.state::<Arc<IslandState>>().inner().clone());
     downloads::spawn(window.state::<Arc<IslandState>>().inner().clone());
     // screenshot aid: `DI_OPEN_SETTINGS=1` opens the hub on its settings pane shortly after launch
     if std::env::var_os("DI_OPEN_SETTINGS").is_some() {

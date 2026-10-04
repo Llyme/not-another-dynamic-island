@@ -15,23 +15,36 @@ It is Windows-only for now. The goal is to stay light: it should never make the 
 - **Games and work.** Detects running games, and what you are working on, even when the window is not
   focused. The coding card shows the git changes of the project (branch, files, added and deleted lines);
   the browsing card shows what is in the page and gives you buttons to click it from the island.
+- **Guide reader.** A walkthrough, a FAQ or a wiki article (its infobox as facts, then its sections) is laid out to be read in its card, so it can sit over the game
+  while you play: headings, paragraphs, lists and tables, a chip for each day or section, search, text size
+  (one button: S, M, L, XL). The search, the text size and the contents show only while the mouse is over the card. The layout follows the card's width: narrow, the picture and the facts sit above the text; from
+  480 px a small portrait with the facts that matter; from 640 px a rail on the side while the text scrolls beside it. Previous, Next and the guide's contents take the browser tab itself to that section (only within the
+  site, only when you press), and the card follows the tab: what it shows is always what the page has. The pictures inside the text (a table's item icons, a figure) are shown too, each one as it scrolls near: the extension takes the browser's own copy when the site lets it, else fetches it without cookies, shrinks it, and sends it one at a time with a short pause between downloads; NADI never contacts the site. Plain-text FAQs are cut into headings and paragraphs, with the original text one press away.
 - **Page reader.** The island knows what kind of page you are on (walkthrough, wiki article, news
   article, video, recipe, Q&A thread, API reference, product page, search results, web app such as a pull
-  request) and says what matters for that kind: the step you are on and the next one, the section you are in,
-  the minutes left, the answers on a question. The work pill names the page and how far down you are. It
+  request) and says what matters for that kind: how many steps a guide has, the sections of an article, the
+  answers on a question, a post with its comments. The work pill names the page. Where you are on the page is
+  not followed. It
   needs the browser extension ([nadi-chrome](https://github.com/Llyme/nadi-chrome), Chrome, Edge, Brave, Opera,
-  Vivaldi): the page describes itself (its metadata, headings, video clock, scroll), exactly, and costs the
+  Vivaldi): the page describes itself (its metadata, headings, comments), exactly, and costs the
   browser next to nothing. Without the extension the Page Reader switch in Settings is locked, and a browser is
   not read at all (the card keeps to the window title). The extension connects over a WebSocket on 127.0.0.1
   (ports 47653 to 47657) and NADI only accepts a browser extension's origin. Private and incognito windows and
-  banking, mail, health and password-manager sites are never read, nor are sign-in pages, and you can add your
-  own sites in Settings. Nothing is stored or sent. Settings > General shows whether the extension is connected.
+  banking, mail, health and password-manager sites are never read, nor are sign-in pages. Nothing is stored or sent.
+  Without the extension the Page Reader switch in Settings > General is locked.
 - **Downloads.** Active downloads from browsers, Steam and qBittorrent, in one card. Finished ones open
   their folder or can be put away with a click.
 - **Notifications.** Captures the notifications of all apps.
 - **Calendar.** Upcoming events from an `.ics` feed, with a reminder.
 - **Claude usage.** Usage rings and a peek, using your existing Claude Code login.
 - **Hub.** The expanded panel. Every card starts collapsed and opens with a click on its header.
+- **Floating cards.** Drag a card out of the hub by its header and it becomes a card of its own on the screen:
+  it lifts, tilts with your hand and snaps to screen edges and to other floating cards. Resize it from its
+  corner (it snaps to the screen's edge, to other cards, to its own height and to the width it opens with; a double press on the corner puts it back to its first size), press its X (or let go of it over the island) to put it back. It stays over a game that runs in a
+  window or borderless, and it never takes the focus from it; the mouse only reaches a card while it is over
+  it, everywhere else it goes to the game. With the Fullscreen Guard on, cards also let every click through to a
+  fullscreen game, like the island does; hold the guard's key (Alt, or Ctrl: it is a setting, and the guard can be off) to use them (or the island) anyway. Floating cards are not kept: after a
+  restart every card is back in the island. All floating cards share one extra window, made the first time you drag one out.
 
 To call the island, rest the cursor on the top edge of a monitor: a glow builds up, and the island lands.
 Right-click the island to pin or unpin it. Settings are in the tray icon's menu.

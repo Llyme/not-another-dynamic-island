@@ -3,8 +3,21 @@
 // event instead of a QTimer polling QCursor.pos(). No framework, no bundler:
 // this is the whole idle-state UI, kept as cheap as the old QPainter path.
 
+import { initFloats } from "./floats.js";
+import { guideReader } from "./guide.js";
+
 const { invoke } = window.__TAURI__.core;
-const { listen } = window.__TAURI__.event;
+const { listen: listenAll } = window.__TAURI__.event;
+// The floating cards live in a second window that runs this same page (see floats.rs): it draws nothing but
+// those cards, so it only listens for its own events and skips the island's animations and polling.
+const FLOATS = new URLSearchParams(location.search).has("floats");
+const listen = FLOATS
+	? (name, cb) =>
+			name.startsWith("float-")
+				? listenAll(name, cb)
+				: Promise.resolve(() => {})
+	: listenAll;
+if (FLOATS) document.documentElement.classList.add("floats");
 
 // ---- the island is not a web page: nothing of the browser should work on it ----
 // (the webview's own accelerators, devtools, zoom and menus are switched off in Rust; this covers
@@ -1060,10 +1073,16 @@ const LI_PATHS = {
 	moon: "M12.5 9.8A5 5 0 0 1 6.2 3.5a5 5 0 1 0 6.3 6.3z",
 	chevron: "M4.5 6.5 8 10l3.5-3.5",
 	download: "M8 2.5v7.6M4.8 7.3 8 10.5l3.2-3.2M3 13h10",
+	up: "M8 13V3M3.5 7.5 8 3l4.5 4.5",
+	repost: "M3 7V6a2 2 0 0 1 2-2h7M10 2l2 2-2 2M13 9v1a2 2 0 0 1-2 2H4M6 14l-2-2 2-2",
+	heart: "M8 13.5S2.5 10 2.5 6.2A2.9 2.9 0 0 1 8 5a2.9 2.9 0 0 1 5.5 1.2C13.5 10 8 13.5 8 13.5z",
 	eye: "M1.8 8S4 4 8 4s6.2 4 6.2 4-2.2 4-6.2 4S1.8 8 1.8 8zM8 6.4a1.6 1.6 0 1 0 0 3.2 1.6 1.6 0 0 0 0-3.2z",
 	eyeoff: "M2 8s2.2-4 6-4c.9 0 1.7.2 2.4.5M14 8s-2.2 4-6 4c-.9 0-1.7-.2-2.4-.5M3 13 13 3",
 	power: "M8 2v5.6M4.7 4.5a5 5 0 1 0 6.6 0",
 	cursor: "M3.2 2.6 12.6 6.5 8.7 8.2 7 12.4z",
+	sq: "M3.8 3.8h8.4v8.4H3.8z",
+	focus:
+		"M8 2.5v2.4M8 11.1v2.4M2.5 8h2.4M11.1 8h2.4M8 6.2a1.8 1.8 0 1 0 0 3.6 1.8 1.8 0 0 0 0-3.6z",
 	follow: "M2.5 8h11M5 5.5 2.5 8 5 10.5M11 5.5 13.5 8 11 10.5",
 	wave: "M3 6.2v3.6M6 3.6v8.8M9 5.6v4.8M12 4.2v7.6",
 	timer: "M8 3.4a5 5 0 1 0 0 9.9 5 5 0 0 0 0-9.9zM8 5.8V8.4l1.7 1.1M6.6 1.6h2.8",
@@ -1823,7 +1842,7 @@ function frame(now) {
 	}
 	requestAnimationFrame(frame);
 }
-requestAnimationFrame(frame);
+if (!FLOATS) requestAnimationFrame(frame);
 
 listen("view-tick", (event) => {
 	currentView = event.payload;
@@ -2347,7 +2366,7 @@ async function pollPillGame() {
 		s ? `RAM \u00b7 ${s.ram_gb.toFixed(1)} GB` : "",
 	);
 }
-setInterval(pollPillGame, 1000);
+if (!FLOATS) setInterval(pollPillGame, 1000);
 
 listen("game-tick", (event) => {
 	const g = event.payload;
@@ -2399,10 +2418,7 @@ listen("work-tick", (event) => {
 		(page ? w.page_main : w.label) || "";
 	workApp.textContent =
 		(page ? w.page_sub : w.app_name) || "";
-	workTime.textContent =
-		page && w.page_progress != null
-			? `${Math.round(w.page_progress * 100)}%`
-			: formatDuration(w.started_at_secs);
+	workTime.textContent = formatDuration(w.started_at_secs);
 });
 
 // -- notification banner: driven by notification-tick, and (for now) a
@@ -2623,7 +2639,6 @@ const hubEl = document.getElementById("hub");
 		"set-work-detection": "briefcase",
 		"set-download-detection": "download",
 		"set-llm-detection": "sparkle",
-		"set-llm-brief": "phone",
 		"set-page-preview": "eye",
 		"set-start-with-windows": "power",
 		"set-show-at-cursor": "cursor",
@@ -2681,13 +2696,9 @@ const hubEl = document.getElementById("hub");
 		"set-work-detection": "Detect what you are working on",
 		"set-download-detection": "Show active downloads",
 		"set-llm-detection":
-			"Show the Claude Code sessions that are running",
-		"set-llm-brief":
-			"Drop the island down when a Claude Code session needs you or finishes",
+			"Show the Claude Code sessions that are running, and drop the island down when one needs you or finishes",
 		"set-page-preview":
-			"Read the page in front of you through the browser extension: what kind it is, where you are in it. Needs the extension (never a private window, never banking, mail or health sites)",
-		"set-page-blocklist":
-			"Sites that are never read, besides banking, mail and health: domains or words, separated by commas",
+			"Read the pages you have open through the browser extension: what kind each is, and what is worth knowing, with its main picture. Needs the extension (never a private window, never banking, mail or health sites)",
 		"set-start-with-windows": "Start with Windows",
 		"set-show-at-cursor": "Appear under the cursor",
 		"set-cursor-follow":
@@ -2707,7 +2718,7 @@ const hubEl = document.getElementById("hub");
 		"set-edge-dwell":
 			"How long the cursor rests at the edge before it appears",
 		"set-fullscreen-guard":
-			"Stay hidden while a fullscreen game or video is in front",
+			"Stay hidden (and let clicks through) while a fullscreen game or video is in front. The key you pick, held, lifts it for as long as it is down",
 		"set-idle-hide-delay": "How long before it hides again",
 		"set-peek-duration": "How long a status stays up",
 		"set-pin-shrink":
@@ -2734,15 +2745,8 @@ const hubEl = document.getElementById("hub");
 	}
 	document.querySelector(".field-icon").innerHTML =
 		li("link");
-	document
-		.querySelector("#set-page-blocklist")
-		.closest(".field")
-		.querySelector(".field-icon").innerHTML = li("eyeoff");
 	document.getElementById("set-calendar-clear").innerHTML =
 		li("x");
-	document.getElementById(
-		"set-page-blocklist-clear",
-	).innerHTML = li("x");
 	for (const b of document.querySelectorAll(".hub-btn-x"))
 		b.innerHTML = li("x");
 	const gameIcon = document.getElementById("game-icon");
@@ -2764,12 +2768,8 @@ const setDownloadDetection = document.getElementById(
 const setLlmDetection = document.getElementById(
 	"set-llm-detection",
 );
-const setLlmBrief = document.getElementById("set-llm-brief");
 const setPagePreview = document.getElementById(
 	"set-page-preview",
-);
-const setPageBlocklist = document.getElementById(
-	"set-page-blocklist",
 );
 const setStartWithWindows = document.getElementById(
 	"set-start-with-windows",
@@ -2903,9 +2903,22 @@ const setEdgeDwell = document.getElementById("set-edge-dwell");
 const setEdgeDwellLabel = document.getElementById(
 	"set-edge-dwell-label",
 );
+// the Fullscreen Guard: No, or on with Alt (or Ctrl) held to use the island anyway
 const setFullscreenGuard = document.getElementById(
 	"set-fullscreen-guard",
 );
+const guardValue = () =>
+	setFullscreenGuard.querySelector('[aria-pressed="true"]')
+		?.dataset.v || "alt";
+const showGuard = (v) => {
+	for (const b of setFullscreenGuard.querySelectorAll("button"))
+		b.setAttribute("aria-pressed", String(b.dataset.v === v));
+};
+for (const b of setFullscreenGuard.querySelectorAll("button"))
+	b.addEventListener("click", () => {
+		showGuard(b.dataset.v);
+		saveSettingsFromForm();
+	});
 const edgeDwellText = (ms) =>
 	Number(ms) === 0 ? "off" : `${ms} ms`;
 const setCalendarUrl = document.getElementById(
@@ -2940,16 +2953,7 @@ async function loadSettingsIntoForm() {
 		currentSettings.download_detection;
 	setLlmDetection.checked =
 		currentSettings.llm_detection ?? true;
-	setLlmBrief.checked = currentSettings.llm_brief ?? true;
 	syncPageToggle();
-	setPageBlocklist.value =
-		currentSettings.page_blocklist || "";
-	setPageBlocklist
-		.closest(".field")
-		.classList.toggle(
-			"filled",
-			setPageBlocklist.value !== "",
-		);
 	setStartWithWindows.checked =
 		currentSettings.start_with_windows;
 	setIdleHideDelay.value = currentSettings.idle_hide_delay_s;
@@ -2981,8 +2985,13 @@ async function loadSettingsIntoForm() {
 	setEdgeDwellLabel.textContent = edgeDwellText(
 		currentSettings.edge_dwell_ms,
 	);
-	setFullscreenGuard.checked =
-		currentSettings.fullscreen_guard ?? true;
+	showGuard(
+		currentSettings.fullscreen_guard === false
+			? "off"
+			: currentSettings.guard_key === "ctrl"
+				? "ctrl"
+				: "alt",
+	);
 	setPeekDuration.value = currentSettings.peek_duration_s;
 	setPeekDurationLabel.textContent = `${currentSettings.peek_duration_s}s`;
 	setCalendarUrl.value = currentSettings.calendar_ics_url;
@@ -3054,12 +3063,16 @@ function saveSettingsFromForm() {
 		work_detection: setWorkDetection.checked,
 		download_detection: setDownloadDetection.checked,
 		llm_detection: setLlmDetection.checked,
-		llm_brief: setLlmBrief.checked,
+		// (one switch: the sessions, and their alerts)
+		llm_brief: setLlmDetection.checked,
 		// locked (and shown off) while no extension is connected: the saved choice stays
 		page_preview: setPagePreview.disabled
 			? currentSettings.page_preview
 			: setPagePreview.checked,
-		page_blocklist: setPageBlocklist.value.trim(),
+		// (one switch: reading the pages, and their pictures)
+		page_images: setPagePreview.disabled
+			? currentSettings.page_images
+			: setPagePreview.checked,
 		start_with_windows: setStartWithWindows.checked,
 		idle_hide_delay_s: Number(setIdleHideDelay.value),
 		show_at_cursor: setShowAtCursor.checked,
@@ -3071,7 +3084,11 @@ function saveSettingsFromForm() {
 		time_24h: setTime24h.checked,
 		peek_duration_s: Number(setPeekDuration.value),
 		edge_dwell_ms: Number(setEdgeDwell.value),
-		fullscreen_guard: setFullscreenGuard.checked,
+		fullscreen_guard: guardValue() !== "off",
+		guard_key:
+			guardValue() === "off"
+				? currentSettings.guard_key || "alt"
+				: guardValue(),
 		pin_shrink: Number(setPinShrink.value),
 		compact_width: Number(setCompactWidth.value),
 		hub_width: Number(setHubWidth.value),
@@ -3095,12 +3112,10 @@ for (const el of [
 	setWorkDetection,
 	setDownloadDetection,
 	setLlmDetection,
-	setLlmBrief,
 	setPagePreview,
 	setStartWithWindows,
 	setShowAtCursor,
 	setCursorFollow,
-	setFullscreenGuard,
 	setReactToAudio,
 	setShowEyes,
 	setTimeAnnounce,
@@ -3156,23 +3171,19 @@ function syncPageToggle() {
 	setPagePreview.disabled = !extConnected;
 	setPagePreview.checked =
 		extConnected && !!currentSettings?.page_preview;
-	setPagePreview.closest(".hub-row")?.classList.toggle("locked", !extConnected);
+	const row = setPagePreview.closest(".hub-row");
+	row?.classList.toggle("locked", !extConnected);
 }
 async function refreshExtStatus() {
-	const el = document.getElementById("ext-status");
 	try {
 		const list = await invoke("ext_status");
 		extConnected = list.length > 0;
-		el.textContent = extConnected
-			? `Connected \u00b7 ${list.map((b) => BROWSER_NAME[b] || b).join(", ")}`
-			: "Not connected";
-		el.classList.toggle("on", extConnected);
 		syncPageToggle();
 	} catch (_) {}
 }
 // the extension may connect or leave while the settings are open
 setInterval(() => {
-	if (document.getElementById("ext-status")?.offsetParent) refreshExtStatus();
+	if (setPagePreview.offsetParent) refreshExtStatus();
 }, 4000);
 refreshExtStatus();
 
@@ -3248,29 +3259,6 @@ setCalendarLead.addEventListener(
 	saveSettingsFromForm,
 );
 setCalendarUrl.addEventListener("change", saveSettingsFromForm);
-// the sites that are never read: a field like the calendar link
-setPageBlocklist.addEventListener(
-	"change",
-	saveSettingsFromForm,
-);
-setPageBlocklist.addEventListener("input", () =>
-	setPageBlocklist
-		.closest(".field")
-		.classList.toggle(
-			"filled",
-			setPageBlocklist.value !== "",
-		),
-);
-document
-	.getElementById("set-page-blocklist-clear")
-	.addEventListener("click", () => {
-		setPageBlocklist.value = "";
-		setPageBlocklist
-			.closest(".field")
-			.classList.remove("filled");
-		saveSettingsFromForm();
-		setPageBlocklist.focus();
-	});
 // the clear button shows only while the field holds something
 function syncCalendarField() {
 	setCalendarUrl
@@ -3954,7 +3942,7 @@ async function pollSysStats() {
 		`RAM · ${Math.round(s.ram_pct)}%\n${s.ram_used_gb.toFixed(1)} / ${s.ram_total_gb.toFixed(1)} GB`,
 	);
 }
-setInterval(pollSysStats, 1000);
+if (!FLOATS) setInterval(pollSysStats, 1000);
 
 // GPU: Windows perf counters (Rust-side); null until the counter has a
 // baseline or if the machine has no GPU counters -- ring stays hidden then
@@ -3966,7 +3954,7 @@ async function pollGpu() {
 	ring.el.classList.remove("hidden");
 	setRing("gpu", pct, `GPU · ${Math.round(pct)}%`);
 }
-setInterval(pollGpu, 1000);
+if (!FLOATS) setInterval(pollGpu, 1000);
 
 async function loadUsage() {
 	applyUsage(await invoke("get_usage"));
@@ -4086,8 +4074,7 @@ function wireHubMediaCard(card, index) {
 			e.stopPropagation(),
 		);
 	}
-	// clicking the card itself (not its buttons / seek bar) jumps to whoever is playing
-	card.root.classList.add("clickable");
+	// the art is the button that jumps to whoever is playing
 	collapsible(card.root, `media:${index}`);
 	card.root.addEventListener("mousedown", (e) =>
 		e.stopPropagation(),
@@ -4097,22 +4084,7 @@ function wireHubMediaCard(card, index) {
 			titleHint: card.titleText,
 			sourceId: card.source,
 		});
-	card.root.addEventListener("click", (e) => {
-		if (
-			e.target.closest("button, .now-seek") ||
-			(e.target.closest(".now-row") &&
-				!card.root.classList.contains("flat-card"))
-		)
-			return; // the header toggles the card
-		focus();
-	});
-	card.root.addEventListener("dblclick", (e) => {
-		if (
-			!card.root.classList.contains("flat-card") &&
-			card.root._inHeader(e)
-		)
-			focus();
-	});
+	focusButton(card.root, focus);
 	card.play.addEventListener("click", () =>
 		invoke("media_play_pause", { source: card.source }),
 	);
@@ -4286,6 +4258,7 @@ const going = (secs) => ({
 function collapsible(card, key) {
 	// the signature that decides whether the list must be rebuilt ignores the open/closed state
 	if (card._sig === undefined) card._sig = card.outerHTML;
+	card._key = key;
 	card.classList.add("collapsible");
 	if (openCards.has(key)) card.classList.add("open");
 	const btn = el("button", "card-toggle");
@@ -4330,6 +4303,13 @@ function collapsible(card, key) {
 	};
 	card._syncBody();
 	card.addEventListener("click", (e) => {
+		// a press on the icon went to the app (see focusButton): it does not also open the card
+		if (card._iconPress) {
+			card._iconPress = false;
+			e.stopImmediatePropagation();
+			return;
+		}
+		if (e.target.closest(".gd")) return;
 		if (
 			card.classList.contains("flat-card") ||
 			!card._inHeader(e)
@@ -4343,7 +4323,65 @@ function collapsible(card, key) {
 		scheduleHubHeight();
 	});
 	row.append(btn);
+	if (!FLOATS) dragOut(card, row, key);
 	return card;
+}
+
+// Cards that float on the screen by themselves (floating cards, see floats.rs): the island leaves them out of
+// its list. A card is dragged out by its header; the other window takes it over from there.
+let floatKeys = new Set();
+function dragOut(card, row, key) {
+	row.addEventListener("pointerdown", (e) => {
+		if (
+			e.button !== 0 ||
+			e.target.closest(
+				"button:not(.card-toggle), input, .now-seek, .rate-menu",
+			)
+		)
+			return;
+		const sx = e.clientX;
+		const sy = e.clientY;
+		const onIcon = !!e.target.closest(".now-focus");
+		card._iconPress = onIcon;
+		row.setPointerCapture(e.pointerId);
+		const done = () => {
+			row.removeEventListener("pointermove", move);
+			row.removeEventListener("pointerup", up);
+			row.removeEventListener("pointercancel", done);
+		};
+		// let go without having moved: on the icon, that is a press of the focus button
+		const up = () => {
+			done();
+			if (onIcon && card._focus) card._focus();
+		};
+		const move = async (ev) => {
+			if (Math.hypot(ev.clientX - sx, ev.clientY - sy) < 6) return;
+			done();
+			const r = card.getBoundingClientRect();
+			floatKeys.add(key);
+			card.classList.add("leaving");
+			const ok = await invoke("float_begin", {
+				key,
+				x: r.left,
+				y: r.top,
+				w: r.width,
+				h: r.height,
+				grabX: sx - r.left,
+				grabY: sy - r.top,
+			});
+			if (ok) {
+				card.remove();
+				lastActivitySignature = "";
+				scheduleHubHeight();
+			} else {
+				floatKeys.delete(key);
+				card.classList.remove("leaving");
+			}
+		};
+		row.addEventListener("pointermove", move);
+		row.addEventListener("pointerup", up);
+		row.addEventListener("pointercancel", done);
+	});
 }
 
 // What a collapsed card still says at the right of its header (the sub-line is hidden then);
@@ -4361,31 +4399,27 @@ function focusable(
 	args,
 	go = () => invoke("focus_source", args),
 ) {
-	card.classList.add("clickable");
 	card.addEventListener("mousedown", (e) =>
 		e.stopPropagation(),
 	);
-	// the header opens/closes the card (see collapsible); the rest of the card, or a
-	// double-click on the header, goes to the app
-	card.addEventListener("click", (e) => {
-		if (
-			card.classList.contains("flat-card") ||
-			!(card._inHeader
-				? card._inHeader(e)
-				: e.target.closest(".now-row"))
-		)
-			go();
-	});
-	card.addEventListener("dblclick", (e) => {
-		if (
-			!card.classList.contains("flat-card") &&
-			(card._inHeader
-				? card._inHeader(e)
-				: e.target.closest(".now-row"))
-		)
-			go();
-	});
+	// the header opens/closes the card (see collapsible); going to the app is the icon's job
+	focusButton(card, go);
 	return card;
+}
+
+// The card's icon is the button that goes to the app the card is about: on hover it shows a focus mark. The
+// press itself is taken by the header's pointer handlers (they hold the pointer for dragging, so the icon would
+// never see a click): they call `card._focus` for a press that did not move.
+function focusButton(card, go) {
+	const icon = card.querySelector(".now-row .now-icon") || card.querySelector(".now-icon");
+	if (!icon || icon.parentElement.classList.contains("now-focus")) return;
+	const wrap = el("span", "now-focus");
+	wrap.title = "Go to it";
+	icon.replaceWith(wrap);
+	const mark = el("span", "now-focus-i");
+	mark.innerHTML = li("focus");
+	wrap.append(icon, mark);
+	card._focus = go;
 }
 
 // What each running game uses (CPU, memory, GPU, video memory), by pid; filled by refreshActivity
@@ -4622,6 +4656,106 @@ function pageButton(b) {
 	return btn;
 }
 
+// The bytes of a page's picture come once per picture (the card only holds its id); the hub keeps the last few.
+const pageImages = new Map();
+async function showPageImage(img, id) {
+	let src = pageImages.get(id);
+	if (src === undefined) {
+		try {
+			src = (await invoke("page_image", { id })) || null;
+		} catch (_) {
+			src = null;
+		}
+		pageImages.set(id, src);
+		if (pageImages.size > 12)
+			pageImages.delete(pageImages.keys().next().value);
+	}
+	// (the card may have moved on to another picture while this was fetched)
+	if (img.dataset.id !== String(id)) return;
+	if (src) {
+		img.src = src;
+		img.classList.add("ready");
+	} else {
+		img.classList.remove("ready");
+	}
+	scheduleHubHeight();
+}
+
+// ---- a post and its comments, read-only (see pagekind::Thread) ----
+function threadHead(t) {
+	const frag = document.createDocumentFragment();
+	const by = el("div", "th-by");
+	if (t.who) by.append(el("span", "th-who", t.who));
+	if (t.handle) by.append(el("span", "th-dim", t.handle));
+	if (t.ago) by.append(el("span", "th-dim", "\u00b7"), el("span", "th-dim", t.ago));
+	if (t.chip) by.append(el("span", "th-chip", t.chip));
+	if (by.childElementCount) frag.append(by);
+	if (t.lead) frag.append(el("div", "th-lead", t.lead));
+	return frag;
+}
+
+function threadTail(t) {
+	const frag = document.createDocumentFragment();
+	if (t.stats.length) {
+		const row = el("div", "th-stats");
+		for (const s of t.stats) {
+			const n = el("span", "th-stat");
+			n.innerHTML = li(s.icon);
+			n.append(el("b", null, s.value));
+			row.append(n);
+		}
+		frag.append(row);
+	}
+	if (t.comments.length) {
+		const head = el("div", "th-head");
+		head.append(el("span", "th-h", "Comments"));
+		if (t.sort) head.append(el("span", "th-dim", t.sort));
+		frag.append(head);
+		const list = el("div", "th-list");
+		for (const c of t.comments) {
+			const n = el("div", "th-c");
+			n.dataset.d = String(c.depth);
+			n.style.setProperty("--d", String(c.depth));
+			const m = el("div", "th-m");
+			m.append(el("span", "th-a", c.who));
+			if (c.op) m.append(el("span", "th-op", "OP"));
+			if (c.score) {
+				const sc = el("span", "th-sc");
+				sc.innerHTML = li(c.heart ? "heart" : "up");
+				sc.append(document.createTextNode(c.score));
+				m.append(sc);
+			}
+			if (c.ago) m.append(el("span", null, c.ago));
+			n.append(m, el("div", "th-tx", c.text));
+			list.append(n);
+		}
+		frag.append(list);
+		if (t.total && t.total > t.comments.length)
+			frag.append(el("div", "th-fold", `${t.comments.length} of ${t.total} comments loaded on the page`));
+	}
+	return frag;
+}
+
+// what makes the thread a different card: its words and numbers (not the time that passes)
+function threadSig(t) {
+	return [
+		t.who,
+		t.lead,
+		t.stats.map((s) => s.value).join(","),
+		t.comments.map((c) => `${c.depth}${c.who}${c.text.length}${c.score}`).join(";"),
+	].join("|");
+}
+
+// the kind's own summary line is a better lead than the page's first paragraph
+function hasSummaryOf(b) {
+	return (
+		!!b.kind &&
+		b.kind.fields.some(
+			(f) => f.key === "Summary" || f.key === "Gist",
+		)
+	);
+}
+
 // Browsing: the page in front of you and what is in it, read from the page. When the island knows what kind
 // of page it is (a walkthrough, an article, a video...) the card lists what is worth knowing about that kind.
 function browsingCard(w) {
@@ -4637,20 +4771,64 @@ function browsingCard(w) {
 	} else {
 		row.append(iconEl(w.icon, "globe"));
 	}
+	// the two lines that change as you read: the sub-line, and what the collapsed card says at its right
+	const subOf = (w) => {
+		const b = w.browse;
+		const k = b.kind;
+		return k
+			? b.domain
+				? `${k.label} \u00b7 ${b.domain}`
+				: k.label
+			: b.domain || going(w.going_secs);
+	};
+	const peekOf = (w) => {
+		const b = w.browse;
+		const k = b.kind;
+		if (k && k.peek) return k.peek;
+		return b.domain || going(w.going_secs);
+	};
 	row.append(
-		textCol(
-			w.page || w.app_name || "Browsing",
-			k
-				? b.domain
-					? `${k.label} \u00b7 ${b.domain}`
-					: k.label
-				: b.domain || going(w.going_secs),
-		),
+		textCol(w.page || w.app_name || "Browsing", subOf(w)),
 	);
 	card.append(row);
 
 	const body = el("div", "work-body");
-	if (k && k.fields.length) {
+	const th = k && k.thread;
+	const guide = k && k.guide;
+	// one card per recently focused page: per-page key keeps expand state separate,
+	// titleHint focuses the right browser window (chrome vs edge, window vs window)
+	const pageKey = `web:${w.exe_path || ""}:${w.page || ""}`;
+	if (th) body.append(threadHead(th));
+	let pic = null;
+	if (b.image != null) {
+		// the page's main picture: fetched once per picture (the id changes only when the picture does)
+		pic = el("img", "pk-img");
+		pic.alt = "";
+		pic.draggable = false;
+		pic.dataset.id = String(b.image);
+		showPageImage(pic, b.image);
+		// (a guide places it itself: see guide.js)
+		if (!guide) body.append(pic);
+	}
+	if (th) body.append(threadTail(th));
+	// a guide: laid out to be read, with the sections around it (see guide.js)
+	if (guide)
+		body.append(
+			guideReader({
+				el,
+				li,
+				invoke,
+				key: guide.key,
+				exe: w.exe_path,
+				page: w.page,
+				pageKey,
+				image: pic,
+				onSize: scheduleHubHeight,
+				onMoved: () => refreshActivity(),
+				onTyping: FLOATS ? (on) => invoke("float_typing", { on }) : null,
+			}),
+		);
+	if (k && k.fields.length && !th && !guide) {
 		const list = el("div", "pk-fields");
 		for (const f of k.fields) {
 			const r = el("div", "pk-row");
@@ -4664,14 +4842,9 @@ function browsingCard(w) {
 		}
 		body.append(list);
 	}
-	if (pv) {
+	if (pv && !guide) {
 		// (the kind's own summary line is the better lead)
-		const hasSummary =
-			k &&
-			k.fields.some(
-				(f) => f.key === "Summary" || f.key === "Gist",
-			);
-		if (pv.lead && !hasSummary)
+		if (pv.lead && !hasSummaryOf(b) && !th)
 			body.append(el("div", "work-desc", pv.lead));
 		if (pv.buttons.length) {
 			const btns = el("div", "page-btns");
@@ -4681,15 +4854,44 @@ function browsingCard(w) {
 		}
 	}
 	if (body.childElementCount) card.append(body);
-	const peekText =
-		k && k.progress != null
-			? `${Math.round(k.progress * 100)}%`
-			: b.domain || going(w.going_secs);
-	// one card per recently focused page: per-page key keeps expand state separate,
-	// titleHint focuses the right browser window (chrome vs edge, window vs window)
-	const pageKey = `web:${w.exe_path || ""}:${w.page || ""}`;
-	card._sig = `${pageKey}:${k ? `${k.id}:${k.main}:${k.sub}:${(k.fields || []).map((f) => `${f.key}=${f.value}`).join("|")}` : ""}:${b.domain || ""}:${peekText}`;
+	// wide enough, the picture moves to the side (see .wide in hub.css)
+	if (b.image != null)
+		new ResizeObserver(() =>
+			card.classList.toggle("wide", card.clientWidth >= 520),
+		).observe(card);
+	const peekText = peekOf(w);
+	// Rebuilt only when the card's shape changes (another kind, other fields, other buttons); the values that
+	// move while you read (scroll, the video's clock) are written in place, so an open card does not replay
+	// its entrance animation every time you scroll.
+	card._sig = `${pageKey}:${b.image != null ? "img" : ""}:${guide ? guide.key : ""}:${th ? threadSig(th) : ""}:${k ? `${k.id}:${k.fields.map((f) => f.key).join("|")}` : ""}:${pv && pv.lead && !hasSummaryOf(b) ? "lead" : ""}:${pv ? pv.buttons.map((x) => x.label).join("|") : ""}`;
 	card._data = w;
+	card._update = (w) => {
+		const b = w.browse;
+		const k = b.kind;
+		const sub = card.querySelector(".now-sub");
+		const nextSub = line("now-sub", subOf(w));
+		if (sub && sub.textContent !== nextSub.textContent) sub.replaceWith(nextSub);
+		const pk = card.querySelector(".now-peek");
+		const nextPeek = line("now-peek", peekOf(w));
+		if (pk && pk.textContent !== nextPeek.textContent) pk.replaceWith(nextPeek);
+		if (k) {
+			const vals = card.querySelectorAll(".pk-v");
+			k.fields.forEach((f, i) => {
+				const v = vals[i];
+				if (!v) return;
+				if (v.textContent !== f.value) v.textContent = f.value;
+				v.classList.toggle("rough", !!f.rough);
+			});
+		}
+		const pic = card.querySelector(".pk-img");
+		if (pic && b.image != null && pic.dataset.id !== String(b.image)) {
+			pic.dataset.id = String(b.image);
+			showPageImage(pic, b.image);
+		}
+		const lead = card.querySelector(".work-desc");
+		if (lead && b.preview && lead.textContent !== b.preview.lead)
+			lead.textContent = b.preview.lead;
+	};
 	return focusable(
 		collapsible(peek(card, peekText), pageKey),
 		{ exePath: w.exe_path, titleHint: w.page },
@@ -5219,12 +5421,8 @@ function downloadCard(d) {
 }
 
 let lastActivitySignature = "";
-async function refreshActivity() {
-	if (
-		currentView !== "hub" ||
-		paneInfo.classList.contains("hidden")
-	)
-		return;
+// All the cards of the moment, built: what the hub lists and what the floating cards are made from.
+async function fetchCards() {
 	const a = await invoke("get_activity");
 	// what the running games use (empty list: nothing to measure, the counters are let go)
 	for (const s of await invoke("get_game_stats", {
@@ -5257,6 +5455,23 @@ async function refreshActivity() {
 	cards.push(...llm.filter((c) => !leading.includes(c)));
 	if (a.coding) cards.push(codingCard(a.coding));
 	for (const w of a.work) cards.push(workCard(w));
+	return { a, cards };
+}
+
+async function refreshActivity() {
+	if (FLOATS) return refreshFloats();
+	if (
+		currentView !== "hub" ||
+		paneInfo.classList.contains("hidden")
+	)
+		return;
+	const built = await fetchCards();
+	const a = built.a;
+	// the cards that float on the screen are not listed here
+	floatKeys = new Set(
+		(await invoke("float_list")).map((i) => i.key),
+	);
+	const cards = built.cards.filter((c) => !floatKeys.has(c._key));
 	const signature = cards
 		.map((c) => c._sig ?? c.outerHTML)
 		.join("");
@@ -5274,6 +5489,9 @@ async function refreshActivity() {
 	hubHasActivity = cards.length > 0;
 	updateInfoEmpty();
 }
+const refreshFloats = FLOATS
+	? initFloats({ fetchCards, el, li, invoke, listen })
+	: null;
 setInterval(refreshActivity, 1000);
 
 // -- tooltips: a single glass bubble instead of the native Win32 one. Any

@@ -35,6 +35,8 @@ pub struct BrowseInfo {
     pub preview: Option<PagePreview>,
     /// what kind of page it is, and what is worth saying about it
     pub kind: Option<PageKind>,
+    /// the page's main picture: an id for `page_image`, so the card is not sent the bytes every time
+    pub image: Option<u64>,
     /// a private window or a blocked site: nothing is read, and the card shows no page
     pub blocked: bool,
 }
@@ -42,7 +44,7 @@ pub struct BrowseInfo {
 impl BrowseInfo {
     /// nothing was read (yet): no card worth showing
     pub fn is_empty(&self) -> bool {
-        !self.blocked && self.domain.is_none() && self.preview.is_none() && self.kind.is_none()
+        !self.blocked && self.domain.is_none() && self.preview.is_none() && self.kind.is_none() && self.image.is_none()
     }
 }
 
@@ -158,7 +160,19 @@ pub async fn click_page_button(window: tauri::WebviewWindow, label: String) -> b
     .unwrap_or(false)
 }
 
-pub fn spawn(state: Arc<IslandState>) {
+/// Card button -> the tab goes to another section of the guide (the browser extension takes it there, within the
+/// same site). The card is found by its window and its title. The page is read again once it has loaded, and the
+/// card follows the tab: what it shows is always what the page has.
+#[tauri::command]
+pub async fn guide_go(window: tauri::WebviewWindow, exe_path: String, page: String, url: String) -> bool {
+    use tauri::Manager;
+    let state = window.state::<Arc<IslandState>>().inner().clone();
+    tauri::async_runtime::spawn_blocking(move || state.ext.covers(&exe_path) && state.ext.navigate(&exe_path, &page, &url))
+        .await
+        .unwrap_or(false)
+}
+
+pub fn spawn(app: tauri::AppHandle, state: Arc<IslandState>) {
     std::thread::spawn(move || {
         // background work: never compete with the UI for CPU
         unsafe {
@@ -167,23 +181,35 @@ pub fn spawn(state: Arc<IslandState>) {
                 windows::Win32::System::Threading::THREAD_PRIORITY_BELOW_NORMAL,
             );
         }
-        let mut last_key = String::new();
-        let mut ext_version = 0u64;
+        // the version of each card's page that was last worked out
+        let mut versions: std::collections::HashMap<String, u64> = std::collections::HashMap::new();
         let mut last_prune = std::time::Instant::now() - Duration::from_secs(PRUNE_EVERY_S);
         // pages missing from the tab lists, and since when: grace before dropping
         let mut absent: std::collections::HashMap<String, std::time::Instant> = std::collections::HashMap::new();
         loop {
             std::thread::sleep(Duration::from_millis(1000));
+            // a tab that was sent to another section of its guide has arrived: its card moves on with it
+            for (browser, old, new) in state.ext.take_moves() {
+                for exe in state.activity.rename_browse(&browser, &old, &new) {
+                    // (the key a card has in the island: see `browsingCard` in main.js)
+                    crate::floats::rekey(&app, &state, &format!("web:{exe}:{old}"), &format!("web:{exe}:{new}"));
+                }
+            }
             // closed tabs and windows drop out of the MRU list: the extension lists every open tab, so a page
             // no window names anymore is gone (background tabs stay listed and are kept). Missing pages get a
             // grace period first, so mid-load titles do not flicker the card.
             if last_prune.elapsed() >= Duration::from_secs(PRUNE_EVERY_S) {
                 last_prune = std::time::Instant::now();
                 let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
+                let mut seeded: std::collections::HashSet<String> = std::collections::HashSet::new();
                 let mut tabs: std::collections::HashMap<String, Vec<String>> = std::collections::HashMap::new();
                 for w in crate::scan::visible_windows().iter().filter(|w| is_browser_exe(&w.exe)) {
                     let k = w.exe.to_lowercase();
                     seen.insert(k.clone());
+                    // the tabs that are open but were never in front have cards too (when reading is on)
+                    if seeded.insert(k.clone()) && state.settings.lock().unwrap().page_preview && !state.activity.browse_private() {
+                        state.activity.seed_browse(&w.exe, &state.ext.open_pages(&w.exe));
+                    }
                     if let Some(titles) = state.ext.tab_titles(&w.exe) {
                         let entry = tabs.entry(k).or_default();
                         for c in titles {
@@ -224,60 +250,64 @@ pub fn spawn(state: Arc<IslandState>) {
                     }
                 }
             }
-            let Some((exe, title)) = state.activity.active_browser() else {
-                last_key.clear();
+            if state.activity.browse_keys().is_empty() {
+                versions.clear();
                 continue;
-            };
-            // a private window: nothing about it is read, kept or shown; other cards stay
+            }
+            // a private window in front: nothing is read meanwhile, and the other cards stay as they are
             if state.activity.browse_private() {
-                last_key.clear();
                 continue;
             }
-            // no extension, no reading: the card keeps to the window title
-            if !state.ext.covers(&exe) {
-                last_key.clear();
-                continue;
-            }
-            let (reading, blocklist) = {
-                let s = state.settings.lock().unwrap();
-                (s.page_preview, s.page_blocklist.clone())
-            };
+            let reading = state.settings.lock().unwrap().page_preview;
             if !reading {
                 continue;
             }
-            let key = crate::activity::browse_key(&exe, &title);
-            let page_changed = key != last_key;
-            last_key = key.clone();
-            // a page the extension did not describe (a sign-in page, a blocked site) is not shown at all
-            let Some(snap) = state.ext.snapshot(&exe, &title) else {
-                if page_changed {
+            // the extension reads every tab, but only the pages that have a card (the last few visited) are worked out
+            let keys = state.activity.browse_keys();
+            versions.retain(|k, _| keys.iter().any(|(e, t)| &crate::activity::browse_key(e, t) == k));
+            for (exe, title) in keys {
+                // no extension, no reading: the card keeps to the window title
+                if !state.ext.covers(&exe) {
+                    continue;
+                }
+                let key = crate::activity::browse_key(&exe, &title);
+                let first = !versions.contains_key(&key);
+                // a page the extension did not describe (a sign-in page, a blocked site) is not shown at all
+                let Some(snap) = state.ext.snapshot(&exe, &title) else {
+                    if first {
+                        versions.insert(key.clone(), 0);
+                        state.activity.remove_browsing(&key);
+                    }
+                    continue;
+                };
+                if versions.get(&key) == Some(&snap.version) {
+                    continue;
+                }
+                versions.insert(key.clone(), snap.version);
+                if pagekind::is_blocked(Some(&snap.url), &title) || is_new_tab_or_empty(Some(&snap.url), &title) {
                     state.activity.remove_browsing(&key);
+                    continue;
                 }
-                continue;
-            };
-            if pagekind::is_blocked(Some(&snap.url), &title, &blocklist) || is_new_tab_or_empty(Some(&snap.url), &title) {
-                state.activity.remove_browsing(&key);
-                continue;
-            }
-            if !page_changed && snap.version == ext_version {
-                continue;
-            }
-            ext_version = snap.version;
-            let ev = Evidence { url: Some(&snap.url), title: &title, page: Some(&snap.page), ext: Some(&snap.data) };
-            let info = BrowseInfo {
-                kind: pagekind::read(&ev),
-                domain: domain_of(&snap.url),
-                preview: pagetext::preview_from_ext(&snap.page),
-                blocked: false,
-            };
-            if std::env::var_os("NADI_DEBUG_PAGES").is_some() {
-                match &info.kind {
-                    Some(k) => eprintln!("page[ext] {} {:.2} main={:?} sub={:?} progress={:?} fields={:?}", k.id, k.confidence, k.main, k.sub, k.progress, k.fields.iter().map(|f| format!("{}={}", f.key, f.value)).collect::<Vec<_>>()),
-                    None => eprintln!("page[ext] no kind for {:?}", title),
+                let ev = Evidence { url: Some(&snap.url), title: &title, page: Some(&snap.page), ext: Some(&snap.data) };
+                let info = BrowseInfo {
+                    kind: pagekind::read(&ev),
+                    domain: domain_of(&snap.url),
+                    preview: pagetext::preview_from_ext(&snap.page),
+                    image: snap.image.as_ref().map(|i| i.id),
+                    blocked: false,
+                };
+                if std::env::var_os("NADI_DEBUG_PAGES").is_some() {
+                    match &info.kind {
+                        Some(k) => eprintln!("page[ext] {} {:.2} main={:?} sub={:?} fields={:?}", k.id, k.confidence, k.main, k.sub, k.fields.iter().map(|f| format!("{}={}", f.key, f.value)).collect::<Vec<_>>()),
+                        None => eprintln!("page[ext] no kind for {:?}", title),
+                    }
+                    if let Some(i) = &snap.image {
+                        eprintln!("page[ext] image #{} {} bytes", i.id, i.data.len());
+                    }
                 }
-            }
-            if !info.is_empty() {
-                state.activity.upsert_browsing(key, info);
+                if !info.is_empty() {
+                    state.activity.upsert_browsing(key, info);
+                }
             }
         }
     });

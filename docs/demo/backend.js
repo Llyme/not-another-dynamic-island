@@ -89,6 +89,7 @@
     bg_dim: 50,
     glow_intensity: 70,
     page_preview: true,
+    page_images: true,
     page_blocklist: "",
     fullscreen_guard: true,
   };
@@ -323,6 +324,9 @@
   C.get_settings = () => ({ ...settings });
   // the demo's browser describes its page itself, like the NADI Page Reader extension does
   C.ext_status = () => ["msedge"];
+  // cards cannot be dragged out of the demo island (there is no second window to float in)
+  C.float_list = () => [];
+  C.float_begin = () => false;
   C.save_settings = ({ settings: s }) => {
     const accent = settings.accent_color;
     settings = { ...s };

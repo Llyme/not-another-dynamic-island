@@ -580,6 +580,35 @@
   cursor: default;
 }
 
+/* a few choices in a row (the Fullscreen Guard) */
+.opt-group {
+  display: inline-flex;
+  padding: 2px;
+  border-radius: 9px;
+  background: rgba(255, 255, 255, 0.06);
+}
+
+.opt-group button {
+  font: inherit;
+  font-size: 11.5px;
+  color: var(--fg-dim);
+  background: transparent;
+  border: 0;
+  border-radius: 7px;
+  padding: 3px 11px;
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s;
+}
+
+.opt-group button:hover {
+  color: var(--fg);
+}
+
+.opt-group button[aria-pressed="true"] {
+  background: rgba(255, 255, 255, 0.12);
+  color: var(--fg);
+}
+
 .hub-row-value {
   display: flex;
   align-items: center;
@@ -1069,9 +1098,44 @@
   display: none;
 }
 
-/* hub cards that jump to their source app */
-.now-card.clickable {
+/* a card's icon is the button that jumps to its source app: a focus mark shows over it on hover */
+.now-focus {
+  position: relative;
+  flex: none;
+  display: grid;
+  border-radius: 12px;
   cursor: pointer;
+  transition: border-radius 0.4s var(--spring);
+}
+
+.now-card.collapsible:not(.open) .now-focus {
+  border-radius: 9px;
+}
+
+.now-focus-i {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  border-radius: inherit;
+  background: rgba(12, 12, 14, 0.62);
+  color: #fff;
+  opacity: 0;
+  transition: opacity 0.15s ease;
+  pointer-events: none;
+}
+
+.now-focus-i .li {
+  width: 17px;
+  height: 17px;
+  stroke: currentColor;
+  fill: none;
+  stroke-width: 1.6;
+  stroke-linecap: round;
+}
+
+.now-focus:hover .now-focus-i {
+  opacity: 1;
 }
 
 /* ---- dismissible notification cards ---- */
@@ -2704,6 +2768,212 @@ svg.li {
 }
 
 /* ---- the browsing card, for a page of a kind the island understands: what is worth knowing, as rows ---- */
+.pk-img {
+  display: none;
+  width: 100%;
+  height: auto;
+  max-height: 300px; /* (a portrait picture can be very tall) */
+  object-fit: contain;
+  border-radius: 10px;
+  margin-bottom: 8px;
+  background: rgba(255, 255, 255, 0.05);
+  user-select: none;
+  -webkit-user-drag: none;
+}
+
+.pk-img.ready {
+  display: block;
+}
+
+/* a card wide enough: the picture goes to the side, and the rest of the card reads beside it */
+.now-card.wide .work-body:has(> .pk-img.ready) {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(140px, 38%);
+  column-gap: 14px;
+  align-items: start;
+}
+
+.now-card.wide .work-body:has(> .pk-img.ready) > * {
+  grid-column: 1;
+}
+
+.now-card.wide .work-body:has(> .pk-img.ready) > .pk-img {
+  grid-column: 2;
+  grid-row: 1 / span 40;
+  max-height: 380px;
+  margin-bottom: 0;
+}
+
+/* ---- a post and its comments, read-only ---- */
+.th-by {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 8px;
+  font-size: 11.5px;
+  color: var(--fg-dim);
+  margin-bottom: 8px;
+}
+
+.th-who {
+  color: var(--fg);
+  font-weight: 600;
+}
+
+.th-dim {
+  color: var(--fg-dim);
+}
+
+.th-chip {
+  font-size: 10.5px;
+  padding: 1px 7px;
+  border-radius: 99px;
+  background: rgba(255, 255, 255, 0.07);
+}
+
+.th-lead {
+  font-size: 13.5px;
+  line-height: 1.45;
+  margin-bottom: 8px;
+  display: -webkit-box;
+  -webkit-line-clamp: 5;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  overflow-wrap: anywhere;
+}
+
+.th-stats {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 16px;
+  font-size: 12px;
+  color: var(--fg-dim);
+  font-variant-numeric: tabular-nums;
+  margin-bottom: 10px;
+}
+
+.th-stat {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.th-stat svg {
+  width: 14px;
+  height: 14px;
+  opacity: 0.6;
+}
+
+.th-stat b {
+  color: var(--fg);
+  font-weight: 600;
+}
+
+.th-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 10px;
+  padding-top: 9px;
+  border-top: 1px solid rgba(255, 255, 255, 0.07);
+  font-size: 11.5px;
+}
+
+.th-h {
+  font-size: 11px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  opacity: 0.6;
+  font-weight: 600;
+}
+
+.th-list {
+  max-height: 330px;
+  overflow-y: auto;
+  display: grid;
+  gap: 2px;
+  padding: 4px 2px 22px 0;
+  scrollbar-width: thin;
+  scrollbar-color: rgba(255, 255, 255, 0.15) transparent;
+  -webkit-mask-image: linear-gradient(to bottom, #000 calc(100% - 26px), transparent);
+  mask-image: linear-gradient(to bottom, #000 calc(100% - 26px), transparent);
+}
+
+.th-c {
+  display: grid;
+  gap: 2px;
+  padding: 7px 8px 7px 10px;
+  margin-left: calc(var(--d, 0) * 14px);
+  border-left: 2px solid rgba(255, 255, 255, 0.11);
+  min-width: 0;
+}
+
+.th-c[data-d="0"] {
+  border-left-color: transparent;
+}
+
+.th-c[data-d="1"] {
+  border-left-color: rgba(90, 200, 140, 0.35);
+}
+
+.th-c[data-d="2"] {
+  border-left-color: rgba(229, 169, 61, 0.35);
+}
+
+.th-c[data-d="3"] {
+  border-left-color: rgba(120, 160, 230, 0.35);
+}
+
+.th-m {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 3px 8px;
+  font-size: 11.5px;
+  opacity: 0.75;
+}
+
+.th-a {
+  font-weight: 600;
+}
+
+.th-op {
+  color: var(--accent);
+  border: 1px solid rgba(90, 200, 140, 0.45);
+  border-radius: 99px;
+  padding: 0 6px;
+  font-size: 10px;
+  letter-spacing: 0.04em;
+}
+
+.th-sc {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  font-variant-numeric: tabular-nums;
+}
+
+.th-sc svg {
+  width: 10px;
+  height: 10px;
+}
+
+.th-tx {
+  font-size: 12.5px;
+  line-height: 1.42;
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  overflow-wrap: anywhere;
+}
+
+.th-fold {
+  text-align: center;
+  font-size: 11.5px;
+  opacity: 0.5;
+}
+
 .pk-fields {
   display: grid;
   gap: 3px;
@@ -2738,4 +3008,837 @@ svg.li {
 
 .hub-row.locked {
   opacity: 0.5;
+}
+
+/* ---- floating cards: the second window, which shows nothing but the cards dragged out of the island ---- */
+html.floats,
+html.floats body {
+  background: transparent;
+}
+
+html.floats body > *:not(#float-layer):not(#tip):not(script) {
+  display: none !important;
+}
+
+#float-layer {
+  display: none;
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+}
+
+html.floats #float-layer {
+  display: block;
+}
+
+.fl {
+  position: absolute;
+  pointer-events: auto;
+  --card: rgba(22, 22, 26, 0.97);
+  /* (lighter greys than the island's: a card here can sit over anything) */
+  --fg-dim: #c4c4cc;
+  --fg-mute: #9e9ea8;
+  /* what the cards inherit in the hub (from #hub) and here have no parent to take it from */
+  --spot-a: 0;
+  color: var(--fg);
+  font-family: "Segoe UI Variable Text", "Segoe UI", sans-serif;
+  cursor: default;
+}
+
+.fl[hidden] {
+  display: none;
+}
+
+.fl .now-card {
+  box-sizing: border-box; /* (a resized card is as tall as its box, so the corner handle sits in the corner) */
+  margin: 0;
+  border: 1px solid transparent;
+  border-radius: 16px;
+}
+
+.fl.sized .now-card {
+  height: 100%;
+  overflow: auto;
+  scrollbar-width: none;
+}
+
+.fl.sized .now-card::-webkit-scrollbar {
+  display: none;
+}
+
+.fl .now-row {
+  cursor: grab;
+}
+
+.fl.lifted .now-row {
+  cursor: grabbing;
+}
+
+.fl .card-toggle {
+  display: none;
+}
+
+.fl-x {
+  flex: none;
+  display: grid;
+  place-items: center;
+  /* like the chevron: out of sight until the mouse is over the card, and then it takes no room (the row's
+     gap is cancelled), so the header fills the space */
+  opacity: 0;
+  width: 0;
+  height: 26px;
+  margin-left: -12px;
+  overflow: hidden;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  background: transparent;
+  color: var(--fg-dim);
+  cursor: pointer;
+  transition: opacity 0.2s ease, width 0.3s var(--spring), margin 0.3s var(--spring), background 0.2s ease, color 0.2s ease, transform 0.3s var(--spring);
+}
+
+.now-card:hover .fl-x {
+  opacity: 1;
+  width: 26px;
+  margin-left: 0;
+  margin-right: -6px;
+}
+
+.fl-x .li {
+  width: 13px;
+  height: 13px;
+}
+
+.fl-mode {
+  flex: none;
+  display: grid;
+  place-items: center;
+  opacity: 0;
+  width: 0;
+  height: 26px;
+  margin-left: -12px;
+  overflow: hidden;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  background: transparent;
+  color: var(--fg-dim);
+  cursor: pointer;
+  transition: opacity 0.2s ease, width 0.3s var(--spring), margin 0.3s var(--spring), background 0.2s ease, color 0.2s ease;
+}
+
+.now-card:hover .fl-mode {
+  opacity: 1;
+  width: 26px;
+  margin-left: 0;
+  margin-right: -6px;
+}
+
+.fl-mode:hover {
+  background: rgba(255, 255, 255, 0.1);
+  color: var(--fg);
+}
+
+.fl-mode .li {
+  width: 13px;
+  height: 13px;
+  stroke: currentColor;
+  stroke-width: 1.5;
+  stroke-linejoin: round;
+  fill: currentColor;
+}
+
+.fl-mode[data-m="1"] .li {
+  fill-opacity: 0.35;
+}
+
+.fl-mode[data-m="2"] .li {
+  fill: none;
+  stroke-dasharray: 2.2 2.2;
+}
+
+/* the close button and this one both sit at the right of the header, in that order */
+.fl-x:hover {
+  background: rgba(226, 85, 108, 0.22);
+  color: #f08a99;
+  transform: scale(1.08);
+}
+
+.fl.lifted {
+  transform: scale(1.03) rotate(var(--tilt, 0deg));
+  transition: transform 0.18s var(--spring);
+  z-index: 100000 !important;
+}
+
+.fl.opening {
+  transition: width 0.2s var(--spring), transform 0.18s var(--spring);
+}
+
+.fl.landed {
+  animation: fl-land 0.38s var(--spring);
+}
+
+@keyframes fl-land {
+  0% {
+    transform: scale(1.03);
+  }
+  55% {
+    transform: scale(0.985);
+  }
+  100% {
+    transform: scale(1);
+  }
+}
+
+.fl.glide {
+  transition: left 0.22s cubic-bezier(0.2, 0.9, 0.3, 1), top 0.22s cubic-bezier(0.2, 0.9, 0.3, 1);
+}
+
+.fl-rz {
+  position: absolute;
+  right: 3px;
+  bottom: 3px;
+  width: 18px;
+  height: 18px;
+  cursor: nwse-resize;
+  touch-action: none;
+  z-index: 2;
+}
+
+.fl-rz::after {
+  transition: opacity 0.2s ease;
+  content: "";
+  position: absolute;
+  right: 4px;
+  bottom: 4px;
+  width: 8px;
+  height: 8px;
+  border-right: 2px solid var(--fg-mute);
+  border-bottom: 2px solid var(--fg-mute);
+  border-radius: 0 0 3px 0;
+  opacity: 0; /* only while the mouse is over the card, like the close button */
+}
+
+.fl:hover .fl-rz::after,
+.fl.lifted .fl-rz::after {
+  opacity: 0.6;
+}
+
+/* the three kinds of card: normal, translucent, transparent (its text goes dark or light by what is behind it) */
+.fl[data-mode="1"],
+.fl[data-mode="2"] {
+  --fg-dim: #dcdce3;
+  --fg-mute: #bcbcc6;
+}
+
+.fl[data-mode="1"] {
+  --card: rgba(22, 22, 26, 0.5);
+}
+
+.fl[data-mode="2"] .now-card {
+  background: none;
+  border-color: transparent;
+  text-shadow: 0 0 5px rgba(0, 0, 0, 0.65), 0 0 2px rgba(0, 0, 0, 0.5);
+  /* (the same two functions at rest as turned, so the change from light to dark text eases instead of jumping) */
+  filter: invert(0) hue-rotate(0deg);
+  transition: filter 0.6s ease, transform 0.4s var(--spring);
+}
+
+/* (dark text is the light one turned over, pictures kept as they are; the text's shadow turns into a light glow) */
+.fl[data-mode="2"][data-tone="dark"] .now-card {
+  filter: invert(1) hue-rotate(180deg);
+}
+
+.fl[data-mode="2"] .now-card img,
+.fl[data-mode="2"] .now-card canvas {
+  filter: invert(0) hue-rotate(0deg);
+  transition: filter 0.6s ease;
+}
+
+.fl[data-mode="2"][data-tone="dark"] .now-card img,
+.fl[data-mode="2"][data-tone="dark"] .now-card canvas {
+  filter: invert(1) hue-rotate(180deg);
+}
+
+/* a card whose source has gone from the island keeps what it last said, a little dimmer at its icon */
+.fl.stale .now-focus {
+  opacity: 0.55;
+}
+
+/* in the island: a card on its way out */
+.now-card.leaving {
+  opacity: 0.35;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .fl.lifted,
+  .fl.opening {
+    transition: none;
+  }
+  .fl.landed {
+    animation: none;
+  }
+}
+
+/* ---- a guide, laid out to be read (see guide.js) ---- */
+.gd {
+  --read: 13.5px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 0;
+}
+
+.gd-load,
+.gd-note,
+.gd-cut {
+  text-align: center;
+  font-size: 11.5px;
+  color: var(--fg-mute);
+  padding: 6px 0;
+}
+
+/* the tools (search, text size, contents) and the previous and next buttons are out of sight until the mouse is over
+   the card; their room stays, so the card keeps its size either way. While the search is in use, or has something
+   in it, its row stays */
+.gd-tools {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  opacity: 0;
+  transition: opacity 0.2s ease;
+}
+
+.gd-foot {
+  opacity: 0;
+  transition: opacity 0.2s ease;
+}
+
+.now-card:hover .gd-tools,
+.now-card:hover .gd-foot,
+.gd-tools:focus-within,
+.gd-tools.has-q {
+  opacity: 1;
+}
+
+.gd-search {
+  position: relative;
+  flex: 1;
+  min-width: 0;
+}
+
+.gd-search .li {
+  position: absolute;
+  left: 9px;
+  top: 50%;
+  width: 13px;
+  height: 13px;
+  transform: translateY(-50%);
+  stroke: currentColor;
+  fill: none;
+  stroke-width: 1.5;
+  stroke-linecap: round;
+  color: var(--fg-mute);
+  pointer-events: none;
+}
+
+.gd-search input {
+  width: 100%;
+  box-sizing: border-box;
+  font: inherit;
+  font-size: 12px;
+  color: var(--fg);
+  background: rgba(255, 255, 255, 0.06);
+  border: 1px solid transparent;
+  border-radius: 10px;
+  padding: 6px 52px 6px 28px;
+  outline: none;
+}
+
+.gd-search input:focus {
+  border-color: color-mix(in srgb, var(--accent) 45%, transparent);
+}
+
+.gd-search input::placeholder {
+  color: var(--fg-mute);
+}
+
+.gd-n {
+  position: absolute;
+  right: 9px;
+  top: 50%;
+  transform: translateY(-50%);
+  font-size: 10.5px;
+  color: var(--fg-mute);
+  font-variant-numeric: tabular-nums;
+  pointer-events: none;
+}
+
+.gd-ibtn {
+  flex: none;
+  display: grid;
+  place-items: center;
+  min-width: 26px;
+  height: 26px;
+  padding: 0 7px;
+  font: inherit;
+  font-size: 11.5px;
+  color: var(--fg-dim);
+  background: rgba(255, 255, 255, 0.06);
+  border: 0;
+  border-radius: 8px;
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s;
+}
+
+.gd-ibtn.wide {
+  font-size: 11px;
+}
+
+.gd-ibtn .li {
+  width: 14px;
+  height: 14px;
+  stroke: currentColor;
+  fill: none;
+  stroke-width: 1.5;
+  stroke-linecap: round;
+}
+
+.gd-ibtn:hover {
+  color: var(--fg);
+  background: rgba(255, 255, 255, 0.11);
+}
+
+.gd-ibtn.on {
+  color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 16%, transparent);
+}
+
+.gd-toc {
+  max-height: 170px;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  padding: 4px;
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.04);
+  /* no scrollbar, and the edges fade out like the hub's own scrolling body */
+  scrollbar-width: none;
+  -webkit-mask-image: linear-gradient(to bottom, transparent 0, #000 8px, #000 calc(100% - 12px), transparent 100%);
+  mask-image: linear-gradient(to bottom, transparent 0, #000 8px, #000 calc(100% - 12px), transparent 100%);
+}
+
+.gd-toc::-webkit-scrollbar,
+.gd-reader::-webkit-scrollbar {
+  display: none;
+}
+
+.gd-toc-i {
+  flex: none; /* (it has overflow hidden, so it would shrink to nothing in the list) */
+  text-align: left;
+  font: inherit;
+  font-size: 12px;
+  color: var(--fg-dim);
+  background: transparent;
+  border: 0;
+  border-radius: 7px;
+  padding: 4px 8px 4px calc(8px + var(--d, 0) * 14px);
+  cursor: pointer;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.gd-toc-i:hover {
+  color: var(--fg);
+  background: rgba(255, 255, 255, 0.07);
+}
+
+.gd-toc-i.cur {
+  color: var(--accent);
+}
+
+.gd-days {
+  display: flex;
+  gap: 6px;
+  overflow-x: auto;
+  padding-bottom: 2px;
+  scrollbar-width: none;
+}
+
+.gd-days::-webkit-scrollbar {
+  display: none;
+}
+
+.gd-chip {
+  flex: none;
+  font: inherit;
+  font-size: 11px;
+  color: var(--fg-dim);
+  background: rgba(255, 255, 255, 0.06);
+  border: 1px solid transparent;
+  border-radius: 999px;
+  padding: 2px 9px;
+  cursor: pointer;
+  font-variant-numeric: tabular-nums;
+  transition: color 0.15s;
+}
+
+.gd-chip:hover {
+  color: var(--fg);
+}
+
+.gd-reader {
+  position: relative;
+  max-height: 430px;
+  overflow-y: auto;
+  padding: 8px 2px 14px 0; /* (room for the fade at both ends) */
+  font-size: var(--read);
+  line-height: 1.58;
+  color: #dedee4;
+  /* no scrollbar, and the edges fade out like the hub's own scrolling body */
+  scrollbar-width: none;
+  -webkit-mask-image: linear-gradient(to bottom, transparent 0, #000 10px, #000 calc(100% - 16px), transparent 100%);
+  mask-image: linear-gradient(to bottom, transparent 0, #000 10px, #000 calc(100% - 16px), transparent 100%);
+  user-select: text;
+}
+
+.gd-h {
+  font-weight: 650;
+}
+
+.gd-t {
+  margin: 0 0 6px;
+  font-size: 15px;
+  color: var(--fg);
+}
+
+.gd-day {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 14px 0 6px;
+  padding: 6px 0;
+  font-size: 12px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--accent);
+}
+
+.gd-t + .gd-day,
+.gd-reader > .gd-day:first-child {
+  margin-top: 0;
+}
+
+.gd-sub {
+  margin: 12px 0 4px;
+  font-size: var(--read);
+  color: var(--fg);
+}
+
+/* a picture inside the text: it has its place (and size) before it comes; one that cannot be had stays a quiet box */
+.gd-pic {
+  display: inline-block;
+  vertical-align: middle;
+  max-width: 100%;
+  height: auto;
+  min-width: 14px;
+  min-height: 14px;
+  border-radius: 6px;
+  object-fit: contain;
+  background: rgba(255, 255, 255, 0.05);
+  opacity: 0.4;
+  transition: opacity 0.25s ease;
+  user-select: none;
+  -webkit-user-drag: none;
+}
+
+.gd-pic.ready {
+  opacity: 1;
+  background: none;
+}
+
+.gd-pic.failed {
+  opacity: 0.15;
+}
+
+.gd-p.pics {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+}
+
+/* in a table, an icon sits over its caption ("x80") */
+.gd-tbl td .gd-pic,
+.gd-tbl th .gd-pic {
+  display: block;
+  margin: 0 auto 2px;
+}
+
+.gd-p {
+  margin: 0 0 8px;
+  white-space: pre-line;
+  overflow-wrap: anywhere;
+}
+
+.gd-l {
+  margin: 0 0 8px;
+  padding-left: 18px;
+}
+
+.gd-l li {
+  margin: 0 0 3px;
+  overflow-wrap: anywhere;
+}
+
+.gd b {
+  color: var(--fg);
+  font-weight: 600;
+}
+
+.gd mark {
+  background: rgba(229, 169, 61, 0.35);
+  color: var(--fg);
+  border-radius: 3px;
+  padding: 0 1px;
+}
+
+.gd mark.cur {
+  background: #e5a93d;
+  color: #121212;
+}
+
+.gd-pre {
+  margin: 0 0 8px;
+  font: 11.5px/1.35 Consolas, "Cascadia Mono", monospace;
+  color: var(--fg-dim);
+  white-space: pre;
+  overflow-x: auto;
+}
+
+.gd-tbl {
+  width: 100%;
+  margin: 0 0 8px;
+  border-collapse: collapse;
+  font-size: 0.92em;
+}
+
+.gd-tbl th,
+.gd-tbl td {
+  text-align: left;
+  padding: 3px 8px 3px 0;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.07);
+  vertical-align: top;
+}
+
+.gd-tbl th {
+  color: var(--fg-dim);
+  font-weight: 600;
+}
+
+/* facts (a wiki's infobox): one pair to a row */
+.gd-facts {
+  display: grid;
+  min-width: 0;
+}
+
+.gd-fact {
+  display: grid;
+  grid-template-columns: minmax(70px, 38%) minmax(0, 1fr);
+  gap: 10px;
+  padding: 5px 0;
+  border-top: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.gd-fact:first-child {
+  border-top: 0;
+}
+
+.gd-fact span {
+  font-size: 10px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--fg-mute);
+  padding-top: 2px;
+}
+
+.gd-fact b {
+  font-size: 12px;
+  white-space: pre-line;
+  overflow-wrap: anywhere;
+}
+
+.gd-more {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+}
+
+.gd-more:empty {
+  display: none;
+}
+
+.gd-morebtn {
+  justify-self: start;
+  font: inherit;
+  font-size: 11.5px;
+  color: var(--fg-dim);
+  background: transparent;
+  border: 0;
+  padding: 3px 0;
+  cursor: pointer;
+}
+
+.gd-morebtn:hover {
+  color: var(--fg);
+}
+
+/* the picture of a guide or article, in its layouts (the width of the card picks one, see guide.js) */
+.gd .pk-img {
+  margin-bottom: 0;
+  object-fit: contain;
+}
+
+.gd-l-stack .pk-img {
+  max-height: 220px;
+}
+
+.gd-l-stack .gd-reader,
+.gd-l-strip .gd-reader {
+  max-height: 340px;
+}
+
+.gd > .gd-strip {
+  display: grid;
+  grid-template-columns: 92px minmax(0, 1fr);
+  gap: 12px;
+  align-items: start;
+}
+
+.gd > .gd-strip:not(:has(.pk-img.ready)) {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.gd-strip .pk-img {
+  width: 92px;
+  height: 128px;
+  max-height: none;
+  object-fit: cover;
+  object-position: top;
+}
+
+.gd-railbody {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 38%;
+  gap: 14px;
+  height: 470px;
+  min-height: 0;
+}
+
+.gd-main {
+  display: grid;
+  grid-template-rows: minmax(0, 1fr);
+  min-height: 0;
+}
+
+.gd-rail {
+  display: grid;
+  align-content: start;
+  gap: 10px;
+  min-height: 0;
+  overflow-y: auto;
+  scrollbar-width: none;
+}
+
+.gd-rail::-webkit-scrollbar {
+  display: none;
+}
+
+.gd-rail .pk-img {
+  max-height: 260px;
+}
+
+.gd-railbody .gd-reader {
+  max-height: none;
+  height: 100%;
+}
+
+.gd-foot {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+}
+
+.gd-nav {
+  display: grid;
+  gap: 1px;
+  min-width: 0;
+  text-align: left;
+  font: inherit;
+  color: var(--fg-dim);
+  background: rgba(255, 255, 255, 0.06);
+  border: 0;
+  border-radius: 11px;
+  padding: 7px 11px;
+  cursor: pointer;
+  transition: background 0.15s;
+}
+
+.gd-nav.next {
+  text-align: right;
+}
+
+.gd-nav small {
+  font-size: 10px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--fg-mute);
+}
+
+.gd-nav span {
+  font-size: 12px;
+  color: var(--fg);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.gd-nav:hover:not(:disabled) {
+  background: rgba(255, 255, 255, 0.11);
+}
+
+.gd-nav:disabled {
+  opacity: 0.35;
+  cursor: default;
+}
+
+/* a floating card that was resized: the reader takes the room there is */
+.fl.sized .now-card:has(.gd) {
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.fl.sized .now-card:has(.gd) .work-body {
+  flex: 1;
+  min-height: 0;
+}
+
+.fl.sized .gd {
+  flex: 1;
+  min-height: 0;
+}
+
+.fl.sized .gd-railbody {
+  height: auto;
+  flex: 1;
+  min-height: 0;
+}
+
+.fl.sized .gd-reader {
+  flex: 1;
+  min-height: 0;
+  max-height: none;
 }

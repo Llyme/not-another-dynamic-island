@@ -260,7 +260,7 @@
     buttons: ["Download installer", "Download source", "Download demo reel"],
   });
   const FILES = {
-    "Download installer": ["NADI_1.0.0_x64-setup.exe", 62_000_000, 5_400_000],
+    "Download installer": ["NADI_1.1.0_x64-setup.exe", 62_000_000, 5_400_000],
     "Download source": ["nadi-source.zip", 18_500_000, 2_100_000],
     "Download demo reel": ["nadi-demo-reel.mp4", 1_240_000_000, 9_800_000],
   };
@@ -294,6 +294,12 @@
     dl.items = dl.items.filter((i) => i.id !== id);
   };
   C.click_page_button = ({ label }) => !!NADI.pressPageButton?.(label);
+  // the guide page's picture: a drawing of the island (the real app shows the page's own photo)
+  C.page_image = () =>
+    "data:image/svg+xml;utf8," +
+    encodeURIComponent(
+      '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 480 200"><defs><linearGradient id="g" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#2b3a67"/><stop offset="1" stop-color="#7a4fa3"/></linearGradient></defs><rect width="480" height="200" fill="url(#g)"/><rect x="150" y="30" width="180" height="52" rx="26" fill="#000"/><circle cx="215" cy="56" r="9" fill="#fff"/><circle cx="265" cy="56" r="9" fill="#fff"/><circle cx="217" cy="58" r="4" fill="#000"/><circle cx="267" cy="58" r="4" fill="#000"/><rect x="70" y="118" width="340" height="14" rx="7" fill="#fff" opacity=".25"/><rect x="110" y="146" width="260" height="14" rx="7" fill="#fff" opacity=".15"/></svg>',
+    );
 
   // ---------------------------------------------------------------- Claude usage (the hub's two rings and the peek)
   const usage = (W.usage = { five: 38, seven: 61 });
@@ -596,7 +602,6 @@
       page_kind: k ? k.id : null,
       page_main: k ? k.main : null,
       page_sub: k ? k.sub : null,
-      page_progress: k ? k.progress : null,
     });
   }
   setInterval(workPoll, 1000);
@@ -605,7 +610,7 @@
   };
 
   // What the island makes of the page in the browser window (pagekind.rs): a walkthrough, found by its numbered
-  // steps, that knows which step you are on and how far down you are. The browser app reports its own scroll.
+  // steps. Where you are on the page is not followed.
   const blockedPage = () => {
     const list = String(S().page_blocklist || "").toLowerCase().split(/[,;\n]/).map((x) => x.trim()).filter(Boolean);
     return list.some((x) => page.domain.includes(x) || page.title.toLowerCase().includes(x));
@@ -614,21 +619,11 @@
     const r = NADI.browserReading && NADI.browserReading();
     if (!r || !r.steps.length) return null;
     const total = r.steps.length;
-    const at = r.step;
-    const fields = [];
-    let main = page.title;
-    let sub = `${total} steps ahead`;
-    if (at >= 0) {
-      const st = r.steps[at];
-      fields.push({ key: "Doing now", value: st.name, rough: false }, { key: "Step", value: `${st.n} of ${total}`, rough: false });
-      if (r.steps[at + 1]) fields.push({ key: "Next", value: r.steps[at + 1].name, rough: false });
-      main = st.name;
-      sub = `Step ${st.n} of ${total}`;
-    } else {
-      fields.push({ key: "Doing now", value: "Introduction", rough: false }, { key: "Steps", value: `${total} ahead`, rough: false }, { key: "Next", value: r.steps[0].name, rough: false });
-    }
-    fields.push({ key: "Progress", value: `${Math.round(r.progress * 100)}% down the page`, rough: false });
-    return { id: "walkthrough", label: "Walkthrough", confidence: 0.97, fields, main, sub, progress: r.progress };
+    const fields = [
+      { key: "Steps", value: `${total}`, rough: false },
+      { key: "Starts with", value: r.steps[0].name, rough: false },
+    ];
+    return { id: "walkthrough", label: "Walkthrough", confidence: 0.97, fields, main: page.title, sub: `${total} steps` };
   }
   W.pageKind = () => (S().page_preview && !blockedPage() ? pageKind() : null);
 
@@ -672,6 +667,7 @@
                   domain: page.domain,
                   preview: S().page_preview ? { lead: page.lead, buttons: page.buttons.map((label, i) => ({ label, x: 40, y: 120 + i * 30 })) } : null,
                   kind: W.pageKind(),
+                  image: S().page_images && S().page_preview ? 1 : null,
                   blocked: false,
                 }
             : null,

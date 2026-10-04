@@ -72,11 +72,12 @@ pub struct Settings {
     pub glow_intensity: u64,
     /// browsing card: fetch the page in front of you (public https pages only) to show its gist
     pub page_preview: bool,
-    /// sites (domains or words, comma separated) that are never read, on top of the built-in ones
-    /// (banking, mail, health, password managers)
-    pub page_blocklist: String,
+    /// the page's main picture (a post's photo, an article's hero) on the browsing card, via the extension
+    pub page_images: bool,
     /// hovering the top edge does nothing while a fullscreen / borderless-fullscreen app is in front
     pub fullscreen_guard: bool,
+    /// the key that lifts the guard while it is held: "alt" or "ctrl"
+    pub guard_key: String,
 }
 
 impl Default for Settings {
@@ -112,8 +113,9 @@ impl Default for Settings {
             bg_dim: 50,
             glow_intensity: 70,
             page_preview: true,
-            page_blocklist: String::new(),
+            page_images: true,
             fullscreen_guard: true,
+            guard_key: "alt".to_string(),
         }
     }
 }
@@ -244,6 +246,7 @@ pub fn save_settings(window: WebviewWindow, settings: Settings) {
 
     state.edge_dwell_ms.store(settings.edge_dwell_ms.min(2000), Ordering::Relaxed);
     state.fullscreen_guard.store(settings.fullscreen_guard, Ordering::Relaxed);
+    state.guard_ctrl.store(settings.guard_key == "ctrl", Ordering::Relaxed);
     state.pin_shrink.store(settings.pin_shrink.clamp(30, 100), Ordering::Relaxed);
     state.compact_width.store(compact_px(settings.compact_width), Ordering::Relaxed);
     state.hub_width.store(settings.hub_width.clamp(340, 640), Ordering::Relaxed);

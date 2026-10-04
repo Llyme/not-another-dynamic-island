@@ -113,24 +113,9 @@
                 <input type="checkbox" id="set-llm-detection" />
               </label>
               <label class="hub-row">
-                <span>LLM Alerts</span>
-                <input type="checkbox" id="set-llm-brief" />
-              </label>
-              <label class="hub-row">
                 <span>Page Reader</span>
                 <input type="checkbox" id="set-page-preview" />
               </label>
-              <div class="hub-row" id="ext-row">
-                <span>Extension</span>
-                <span class="hub-row-value"><span class="bg-name" id="ext-status">Not connected</span></span>
-              </div>
-              <div class="hub-row hub-row-stack">
-                <label class="field">
-                  <span class="field-icon" aria-hidden="true"></span>
-                  <input type="text" id="set-page-blocklist" placeholder="Never read these sites (comma separated)" spellcheck="false" autocomplete="off" />
-                  <button class="field-clear" id="set-page-blocklist-clear" type="button" tabindex="-1" aria-label="Clear"></button>
-                </label>
-              </div>
               <label class="hub-row">
                 <span>Autostart</span>
                 <input type="checkbox" id="set-start-with-windows" />
@@ -155,10 +140,14 @@
                   <span id="set-edge-dwell-label"></span>
                 </span>
               </label>
-              <label class="hub-row">
+              <div class="hub-row hub-row-stack">
                 <span>Fullscreen Guard</span>
-                <input type="checkbox" id="set-fullscreen-guard" />
-              </label>
+                <span class="opt-group" id="set-fullscreen-guard" role="group" aria-label="Fullscreen Guard">
+                  <button type="button" data-v="off" aria-pressed="false">No</button>
+                  <button type="button" data-v="alt" aria-pressed="true">Alt</button>
+                  <button type="button" data-v="ctrl" aria-pressed="false">Ctrl</button>
+                </span>
+              </div>
               <label class="hub-row">
                 <span>Hide Delay</span>
                 <span class="hub-row-value">
@@ -353,6 +342,7 @@
         </div>
       </div>
     </div>
+    <div id="float-layer"></div>
     <script type="module" src="main.js"></script>
   </body>
 </html>

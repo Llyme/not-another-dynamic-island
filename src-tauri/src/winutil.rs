@@ -84,6 +84,18 @@ pub struct MonitorGeometry {
     pub height: i32,
 }
 
+/// Whether Alt is held, globally: it lifts the fullscreen guard while it is down.
+pub fn alt_down() -> bool {
+    use windows::Win32::UI::Input::KeyboardAndMouse::VK_MENU;
+    unsafe { GetAsyncKeyState(VK_MENU.0 as i32) as u16 & 0x8000 != 0 }
+}
+
+/// Whether Ctrl is held, globally (the other key that can lift the fullscreen guard).
+pub fn ctrl_down() -> bool {
+    use windows::Win32::UI::Input::KeyboardAndMouse::VK_CONTROL;
+    unsafe { GetAsyncKeyState(VK_CONTROL.0 as i32) as u16 & 0x8000 != 0 }
+}
+
 /// Whether the left mouse button is currently held, globally -- used to
 /// detect a native `start_dragging()` move-loop ending, since that loop can
 /// swallow the DOM `mouseup` the webview would otherwise get.
@@ -162,5 +174,130 @@ pub fn monitor_geometry_at(x: i32, y: i32) -> Option<MonitorGeometry> {
         })
     } else {
         None
+    }
+}
+
+/// The usable area of every monitor (not under the taskbar): left, top, right, bottom in physical px of the desktop.
+pub fn monitor_work_areas() -> Vec<(i32, i32, i32, i32)> {
+    use windows::Win32::Graphics::Gdi::EnumDisplayMonitors;
+    use windows::Win32::Foundation::{BOOL, LPARAM};
+    unsafe extern "system" fn each(
+        hmon: HMONITOR,
+        _dc: windows::Win32::Graphics::Gdi::HDC,
+        _rc: *mut RECT,
+        data: LPARAM,
+    ) -> BOOL {
+        let out = &mut *(data.0 as *mut Vec<(i32, i32, i32, i32)>);
+        let mut info = MONITORINFO {
+            cbSize: std::mem::size_of::<MONITORINFO>() as u32,
+            ..Default::default()
+        };
+        if GetMonitorInfoW(hmon, &mut info).as_bool() {
+            let r = info.rcWork;
+            out.push((r.left, r.top, r.right, r.bottom));
+        }
+        BOOL(1)
+    }
+    let mut out: Vec<(i32, i32, i32, i32)> = Vec::new();
+    unsafe {
+        let _ = EnumDisplayMonitors(None, None, Some(each), LPARAM(&mut out as *mut _ as isize));
+    }
+    out
+}
+
+/// How light the screen is inside a rectangle (physical px of the desktop): 0 (black) to 1 (white), the median of a
+/// sparse grid of points, so a few text pixels do not count. The windows that are layered (the floating cards' own
+/// layer is one) are not part of what a plain screen capture sees, so the cards do not see themselves. `None` when
+/// nothing could be read, or when all of it is pure black (a game that bypasses the desktop compositor gives that).
+pub fn screen_luma(l: i32, t: i32, r: i32, b: i32) -> Option<f32> {
+    use windows::Win32::Graphics::Gdi::{
+        CreateCompatibleBitmap, CreateCompatibleDC, DeleteDC, DeleteObject, GetDC, GetDIBits, ReleaseDC, SelectObject, SetStretchBltMode,
+        StretchBlt, BITMAPINFO, BITMAPINFOHEADER, BI_RGB, COLORONCOLOR, DIB_RGB_COLORS, HGDIOBJ, SRCCOPY,
+    };
+    const W: i32 = 32;
+    const H: i32 = 20;
+    let (w, h) = (r - l, b - t);
+    if w < 4 || h < 4 {
+        return None;
+    }
+    unsafe {
+        let screen = GetDC(None);
+        if screen.is_invalid() {
+            return None;
+        }
+        let mem = CreateCompatibleDC(screen);
+        let bmp = CreateCompatibleBitmap(screen, W, H);
+        let old = SelectObject(mem, HGDIOBJ(bmp.0));
+        SetStretchBltMode(mem, COLORONCOLOR);
+        let ok = StretchBlt(mem, 0, 0, W, H, screen, l, t, w, h, SRCCOPY).as_bool();
+        let mut luma: Vec<f32> = Vec::new();
+        if ok {
+            let mut info = BITMAPINFO::default();
+            info.bmiHeader = BITMAPINFOHEADER {
+                biSize: std::mem::size_of::<BITMAPINFOHEADER>() as u32,
+                biWidth: W,
+                biHeight: -H,
+                biPlanes: 1,
+                biBitCount: 32,
+                biCompression: BI_RGB.0,
+                ..Default::default()
+            };
+            let mut px = vec![0u8; (W * H * 4) as usize];
+            let got = GetDIBits(mem, bmp, 0, H as u32, Some(px.as_mut_ptr() as *mut _), &mut info, DIB_RGB_COLORS);
+            if got != 0 {
+                for p in px.chunks_exact(4) {
+                    // (blue, green, red, unused)
+                    luma.push((0.0722 * p[0] as f32 + 0.7152 * p[1] as f32 + 0.2126 * p[2] as f32) / 255.0);
+                }
+            }
+        }
+        SelectObject(mem, old);
+        let _ = DeleteObject(HGDIOBJ(bmp.0));
+        let _ = DeleteDC(mem);
+        ReleaseDC(None, screen);
+        if luma.is_empty() || luma.iter().all(|v| *v == 0.0) {
+            return None;
+        }
+        luma.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+        Some(luma[luma.len() / 2])
+    }
+}
+
+/// The window that has the keyboard (0 when none).
+pub fn foreground() -> isize {
+    unsafe { GetForegroundWindow().0 as isize }
+}
+
+/// Give the keyboard to a window.
+pub fn set_foreground(hwnd: isize) {
+    use windows::Win32::UI::WindowsAndMessaging::SetForegroundWindow;
+    unsafe {
+        let _ = SetForegroundWindow(HWND(hwnd as *mut _));
+    }
+}
+
+/// A window of `no_activate`'s kind may take the focus (`true`) or never does again (`false`).
+pub fn can_activate(hwnd: isize, on: bool) {
+    use windows::Win32::UI::WindowsAndMessaging::WS_EX_NOACTIVATE;
+    unsafe {
+        let h = HWND(hwnd as *mut _);
+        let ex = GetWindowLongPtrW(h, GWL_EXSTYLE);
+        let want = if on { ex & !(WS_EX_NOACTIVATE.0 as isize) } else { ex | WS_EX_NOACTIVATE.0 as isize };
+        if want != ex {
+            SetWindowLongPtrW(h, GWL_EXSTYLE, want);
+        }
+    }
+}
+
+/// Make a window one that never takes the focus when it is shown or clicked, and has no taskbar button.
+pub fn no_activate(hwnd: isize) {
+    use windows::Win32::UI::WindowsAndMessaging::{WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW};
+    unsafe {
+        let h = HWND(hwnd as *mut _);
+        let ex = GetWindowLongPtrW(h, GWL_EXSTYLE);
+        let want = ex | (WS_EX_NOACTIVATE.0 | WS_EX_TOOLWINDOW.0 | WS_EX_LAYERED.0) as isize;
+        if want != ex {
+            SetWindowLongPtrW(h, GWL_EXSTYLE, want);
+        }
     }
 }

@@ -31,9 +31,4 @@ pub struct Page {
     pub nodes: Vec<Node>,
     /// the visible part of the page on screen: (top, bottom)
     pub view: (f32, f32),
-    /// how far down the page you were when it was read (0..1) and how much of it fits on screen (0..1), when the
-    /// page says
-    pub scroll: Option<(f32, f32)>,
-    /// how far down the page you are now (0..1), from the latest scroll message
-    pub scroll_now: Option<f32>,
 }

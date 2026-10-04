@@ -12,7 +12,7 @@
 use crate::settings::Settings;
 use crate::page::{Node, NodeKind, Page};
 use crate::IslandState;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::net::{TcpListener, TcpStream};
 use std::sync::mpsc;
@@ -110,21 +110,92 @@ pub struct ExtVideo {
     pub rate: f32,
 }
 
+/// one comment of a post, as the page shows it
+#[derive(Deserialize, Default, Clone, Debug)]
+#[serde(default)]
+pub struct SocialComment {
+    pub a: String,
+    pub t: String,
+    pub s: Option<f64>,
+    pub d: u8,
+    pub op: bool,
+    pub at: Option<String>,
+}
+
+/// a post (Reddit, X, Hacker News) and the comments the page has loaded
+#[derive(Deserialize, Default, Clone, Debug)]
+#[serde(default)]
+pub struct Social {
+    pub site: String,
+    pub author: Option<String>,
+    pub handle: Option<String>,
+    pub community: Option<String>,
+    pub posted: Option<String>,
+    pub text: Option<String>,
+    pub up: Option<f64>,
+    pub comments: Option<f64>,
+    pub reposts: Option<f64>,
+    pub likes: Option<f64>,
+    pub views: Option<f64>,
+    pub sort: Option<String>,
+    pub list: Vec<SocialComment>,
+}
+
+/// A section of a guide (or an entry of its contents) the page names: where it is and what it is called.
+#[derive(Serialize, Deserialize, Default, Clone, Debug)]
+#[serde(default)]
+pub struct GuideLink {
+    pub t: String,
+    pub u: String,
+    /// how deep in the contents list
+    pub d: u8,
+}
+
+/// A guide as the extension read it: its body as blocks (`["h", level, text]`, `["p", text]`, `["ul", [items]]`,
+/// `["ol", [items]]`, `["pre", text]`, `["tbl", [[cells]]]`), and the sections around it.
+#[derive(Serialize, Deserialize, Default, Clone, Debug)]
+#[serde(default)]
+pub struct Guide {
+    /// changes when the guide's words do (worked out here): the island fetches the guide once per key
+    pub key: String,
+    pub blocks: Vec<serde_json::Value>,
+    /// a plain-text FAQ: the original text, untouched
+    pub raw: Option<String>,
+    pub text: bool,
+    pub cut: bool,
+    pub prev: Option<GuideLink>,
+    pub next: Option<GuideLink>,
+    pub toc: Vec<GuideLink>,
+    pub url: String,
+}
+
+impl Guide {
+    /// Only what looks like blocks is kept, and the key is worked out from the words.
+    fn seal(mut self) -> Option<Guide> {
+        use std::hash::{Hash, Hasher};
+        self.blocks.retain(|b| b.as_array().map_or(false, |a| a.len() >= 2 && a[0].is_string()));
+        if self.blocks.len() < 3 {
+            return None;
+        }
+        let mut h = std::collections::hash_map::DefaultHasher::new();
+        self.url.hash(&mut h);
+        for b in &self.blocks {
+            b.to_string().hash(&mut h);
+        }
+        self.key = format!("{:x}", h.finish());
+        Some(self)
+    }
+}
+
 /// everything the extension said about a page besides the nodes
 #[derive(Clone, Default, Debug)]
 pub struct ExtData {
+    pub guide: Option<Guide>,
     pub meta: ExtMeta,
     pub ld: Vec<LdItem>,
     pub video: Option<ExtVideo>,
     pub words: u32,
-}
-
-#[derive(Deserialize, Default)]
-#[serde(default)]
-struct ScrollMsg {
-    h: f32,
-    vh: f32,
-    pct: f32,
+    pub social: Option<Social>,
 }
 
 #[derive(Deserialize, Default)]
@@ -148,12 +219,17 @@ struct PageMsg {
     tab: i64,
     win: i64,
     active: bool,
-    scroll: ScrollMsg,
+    /// the height of the window
+    vh: f32,
     words: u32,
     meta: ExtMeta,
     ld: Vec<LdItem>,
     video: Option<ExtVideo>,
     nodes: Vec<NodeMsg>,
+    social: Option<Social>,
+    guide: Option<Guide>,
+    /// the page's main picture, shrunk by the extension: a `data:image/jpeg;base64,...` address
+    image: Option<String>,
 }
 
 #[derive(Deserialize, Default)]
@@ -168,13 +244,24 @@ struct TabInfo {
 /// What the extension described, as the rest of the app reads a page.
 #[derive(Clone, Debug)]
 pub struct ExtSnapshot {
+    /// the browser tab, for asking its page script something
+    pub tab: i64,
     pub url: String,
     pub title: String,
     /// the page as the classifier reads it (see `page`)
     pub page: Page,
     pub data: ExtData,
-    /// changes whenever anything about this page changes (a read, a scroll, the video)
+    /// the page's main picture, when the extension sent one
+    pub image: Option<PageImage>,
+    /// changes whenever anything about this page changes (a read, the video)
     pub version: u64,
+}
+
+/// A page's picture. The id changes only when the picture does, so the hub fetches the bytes once.
+#[derive(Clone, Debug)]
+pub struct PageImage {
+    pub id: u64,
+    pub data: Arc<str>,
 }
 
 fn to_page(m: &PageMsg) -> Page {
@@ -193,14 +280,12 @@ fn to_page(m: &PageMsg) -> Page {
             Some(Node { kind, name: n.t.clone(), left: n.x, top: n.y, right: n.x + n.w, bottom: n.y + n.h, block: n.k == "p" })
         })
         .collect();
-    let (h, vh) = (m.scroll.h, m.scroll.vh);
+    let vh = m.vh;
     // positions are relative to the top of the window: the "view" is the window's height
     Page {
         url: Some(m.url.clone()),
         nodes,
         view: (0.0, vh),
-        scroll: (h > vh * 1.05 && vh > 0.0).then(|| (m.scroll.pct.clamp(0.0, 1.0), (vh / h).clamp(0.0, 1.0))),
-        scroll_now: (h > vh * 1.05).then(|| m.scroll.pct.clamp(0.0, 1.0)),
     }
 }
 
@@ -222,8 +307,19 @@ struct Inner {
     pages: HashMap<(u64, i64), TabPage>,
     lists: HashMap<u64, Vec<TabInfo>>,
     waiters: HashMap<u64, mpsc::Sender<bool>>,
+    /// pictures asked for (see `guide_picture`): who is waiting for which
+    picture_waiters: HashMap<u64, mpsc::Sender<Option<String>>>,
+    /// the pictures that came, by (the guide's key, the picture's number, its size): a card that is drawn again does
+    /// not ask again. Emptied when it grows too big.
+    pictures: HashMap<(String, u32, u32), String>,
+    /// tabs the island sent to another page of a guide: (the address and the title it had, when). The first page the
+    /// tab then reports at another address is the same card, moved on (see `take_moves`).
+    nav: HashMap<(u64, i64), (String, String, Instant)>,
+    /// cards whose tab moved on: (browser, title before, title now)
+    moves: Vec<(String, String, String)>,
     next: u64,
     version: u64,
+    next_image: u64,
 }
 
 #[derive(Default)]
@@ -231,7 +327,7 @@ pub struct ExtState {
     inner: Mutex<Inner>,
 }
 
-fn browser_of(exe: &str) -> String {
+pub(crate) fn browser_of(exe: &str) -> String {
     let file = exe.rsplit(['\\', '/']).next().unwrap_or(exe).to_lowercase();
     file.strip_suffix(".exe").unwrap_or(&file).to_string()
 }
@@ -251,17 +347,76 @@ impl ExtState {
         v
     }
 
-    /// The page the extension described for the tab in front of that browser, found by its title.
+    /// The page the extension described for a tab of that browser, found by its title. The extension reads every
+    /// tab; when two have the same title the one in front wins, then the most recently described.
     pub fn snapshot(&self, exe: &str, title: &str) -> Option<ExtSnapshot> {
         let b = browser_of(exe);
         let want = title.trim().to_lowercase();
         let g = self.inner.lock().unwrap();
         g.pages
             .iter()
-            .filter(|((c, _), p)| p.active && g.conns.get(c).map_or(false, |c| c.browser == b))
+            .filter(|((c, _), _)| g.conns.get(c).map_or(false, |c| c.browser == b))
             .filter(|(_, p)| crate::browse::clean_title(&p.snap.title).trim().to_lowercase() == want)
+            .max_by_key(|(_, p)| (p.active, p.snap.version))
             .map(|(_, p)| p.snap.clone())
-            .max_by_key(|s| s.version)
+    }
+
+    /// Send the tab (found by its title) to another page of its guide, on the same site. The page is not read here:
+    /// it is read by the extension once it has loaded, like any other, and the card follows the tab (`take_moves`).
+    /// `true` when the browser took the order.
+    pub fn navigate(&self, exe: &str, title: &str, url: &str) -> bool {
+        let b = browser_of(exe);
+        let want = title.trim().to_lowercase();
+        let (tx, rx) = mpsc::channel();
+        let id = {
+            let mut g = self.inner.lock().unwrap();
+            let found = g
+                .pages
+                .iter()
+                .filter(|((c, _), _)| g.conns.get(c).map_or(false, |c| c.browser == b))
+                .filter(|(_, p)| crate::browse::clean_title(&p.snap.title).trim().to_lowercase() == want)
+                .max_by_key(|(_, p)| (p.active, p.snap.version))
+                .map(|((c, tab), p)| (*c, *tab, p.snap.url.clone(), crate::browse::clean_title(&p.snap.title)));
+            let Some((conn_id, tab, old_url, old_title)) = found else { return false };
+            let Some(conn) = g.conns.get(&conn_id) else { return false };
+            let sent = conn.tx.send(serde_json::json!({ "t": "go", "id": g.next + 1, "tab": tab, "url": url }).to_string()).is_ok();
+            if !sent {
+                return false;
+            }
+            g.next += 1;
+            let id = g.next;
+            g.waiters.insert(id, tx);
+            g.nav.insert((conn_id, tab), (old_url, old_title, Instant::now()));
+            id
+        };
+        let ok = rx.recv_timeout(Duration::from_millis(4000)).unwrap_or(false);
+        let mut g = self.inner.lock().unwrap();
+        g.waiters.remove(&id);
+        if !ok {
+            g.nav.retain(|_, (_, _, at)| at.elapsed() < Duration::from_secs(1));
+        }
+        ok
+    }
+
+    /// The cards whose tab went to another page since last asked: (browser, title before, title now).
+    pub fn take_moves(&self) -> Vec<(String, String, String)> {
+        std::mem::take(&mut self.inner.lock().unwrap().moves)
+    }
+
+    /// The titles (as the window names them) of the pages the extension has described for that browser: every tab
+    /// it could read, not only the ones that were visited. The tabs in front come first.
+    pub fn open_pages(&self, exe: &str) -> Vec<String> {
+        let b = browser_of(exe);
+        let g = self.inner.lock().unwrap();
+        let mut found: Vec<(bool, u64, String)> = g
+            .pages
+            .iter()
+            .filter(|((c, _), _)| g.conns.get(c).map_or(false, |c| c.browser == b))
+            .map(|(_, p)| (p.active, p.snap.version, crate::browse::clean_title(&p.snap.title)))
+            .filter(|(_, _, t)| !t.trim().is_empty())
+            .collect();
+        found.sort_by(|a, b| (b.0, b.1).cmp(&(a.0, a.1)));
+        found.into_iter().map(|(_, _, t)| t).collect()
     }
 
     /// The titles of the tabs the extension lists for that browser, lower case: what is open (not blocked ones).
@@ -300,6 +455,53 @@ impl ExtState {
         ok
     }
 
+    /// the guide of a card, by the key the card was given (see `Guide::seal`): always the page's own
+    pub fn guide(&self, key: &str) -> Option<Guide> {
+        let g = self.inner.lock().unwrap();
+        g.pages.values().find_map(|p| p.snap.data.guide.as_ref().filter(|x| x.key == key).cloned())
+    }
+
+    /// A picture inside a guide (a table's icon, a figure), by the number its marker has: the extension finds it in the
+    /// tab (from the browser's own copy when it can, else without cookies), shrinks it to `max` px and sends it as a
+    /// `data:` address. The app never contacts the site. Blocks until it comes (the extension does them one at a time).
+    pub fn guide_picture(&self, key: &str, no: u32, max: u32) -> Option<String> {
+        let max = max.clamp(32, 480);
+        let (tx, rx) = mpsc::channel();
+        let id = {
+            let mut g = self.inner.lock().unwrap();
+            if let Some(d) = g.pictures.get(&(key.to_string(), no, max)) {
+                return Some(d.clone());
+            }
+            let found = g.pages.iter().find(|(_, p)| p.snap.data.guide.as_ref().map_or(false, |x| x.key == key)).map(|((c, tab), _)| (*c, *tab));
+            let (conn_id, tab) = found?;
+            let conn = g.conns.get(&conn_id)?;
+            let sent = conn.tx.send(serde_json::json!({ "t": "img", "id": g.next + 1, "tab": tab, "n": no, "max": max }).to_string()).is_ok();
+            if !sent {
+                return None;
+            }
+            g.next += 1;
+            let id = g.next;
+            g.picture_waiters.insert(id, tx);
+            id
+        };
+        let got = rx.recv_timeout(Duration::from_secs(40)).ok().flatten();
+        let mut g = self.inner.lock().unwrap();
+        g.picture_waiters.remove(&id);
+        if let Some(d) = &got {
+            if g.pictures.len() >= 300 {
+                g.pictures.clear();
+            }
+            g.pictures.insert((key.to_string(), no, max), d.clone());
+        }
+        got
+    }
+
+    /// the bytes of a picture the extension sent, as a `data:` address
+    pub fn image(&self, id: u64) -> Option<String> {
+        let g = self.inner.lock().unwrap();
+        g.pages.values().find_map(|p| p.snap.image.as_ref().filter(|i| i.id == id).map(|i| i.data.to_string()))
+    }
+
     /// settings changed: every connected extension gets the new block list
     pub fn push_config(&self, s: &Settings) {
         let msg = config_json(s);
@@ -316,10 +518,32 @@ pub fn config_json(s: &Settings) -> String {
         "hosts": crate::pagekind::BLOCK_HOSTS,
         "hostWords": crate::pagekind::BLOCK_HOST_WORDS,
         "titleWords": crate::pagekind::BLOCK_TITLE_WORDS,
-        "custom": s.page_blocklist.split(|c| c == ',' || c == ';' || c == '\n').map(|x| x.trim().to_lowercase()).filter(|x| !x.is_empty()).collect::<Vec<_>>(),
         "safe": crate::pagetext::SAFE_BUTTONS,
+        "images": s.page_images,
     })
     .to_string()
+}
+
+/// the picture of a page, by the id the browsing card was given (see `PageImage`)
+#[tauri::command]
+pub fn page_image(window: tauri::WebviewWindow, id: u64) -> Option<String> {
+    use tauri::Manager;
+    window.state::<Arc<IslandState>>().ext.image(id)
+}
+
+/// A picture inside a guide, by the guide's key and the number in its text (see `ExtState::guide_picture`).
+#[tauri::command]
+pub async fn page_guide_image(window: tauri::WebviewWindow, key: String, no: u32, max: u32) -> Option<String> {
+    use tauri::Manager;
+    let state = window.state::<Arc<IslandState>>().inner().clone();
+    tauri::async_runtime::spawn_blocking(move || state.ext.guide_picture(&key, no, max)).await.ok().flatten()
+}
+
+/// the guide of a browsing card, by its key (the card only holds the key; the words come once per guide)
+#[tauri::command]
+pub fn page_guide(window: tauri::WebviewWindow, key: String) -> Option<Guide> {
+    use tauri::Manager;
+    window.state::<Arc<IslandState>>().ext.guide(&key)
 }
 
 /// the browsers whose extension is connected right now, for the settings ("edge", "chrome"...)
@@ -432,7 +656,7 @@ fn handle(state: &Arc<IslandState>, id: &mut u64, tx: &mpsc::Sender<String>, tex
             let _ = tx.send(serde_json::json!({ "t": "pong" }).to_string());
         }
         "page" => {
-            let Ok(m) = serde_json::from_value::<PageMsg>(v) else { return true };
+            let Ok(mut m) = serde_json::from_value::<PageMsg>(v) else { return true };
             let mut g = ext.inner.lock().unwrap();
             g.version += 1;
             let version = g.version;
@@ -441,11 +665,24 @@ fn handle(state: &Arc<IslandState>, id: &mut u64, tx: &mpsc::Sender<String>, tex
                 g.pages.remove(&(*id, m.tab));
                 return true;
             }
+            // the same picture again keeps its id
+            let image = match m.image.take().filter(|d| d.starts_with("data:image/")) {
+                Some(d) => match g.pages.get(&(*id, m.tab)).and_then(|p| p.snap.image.clone()).filter(|i| *i.data == *d) {
+                    Some(same) => Some(same),
+                    None => {
+                        g.next_image += 1;
+                        Some(PageImage { id: g.next_image, data: d.into() })
+                    }
+                },
+                None => None,
+            };
             let snap = ExtSnapshot {
+                tab: m.tab,
                 url: m.url.clone(),
                 title: m.title.clone(),
                 page: to_page(&m),
-                data: ExtData { meta: m.meta, ld: m.ld, video: m.video, words: m.words },
+                data: ExtData { meta: m.meta, ld: m.ld, video: m.video, words: m.words, social: m.social, guide: m.guide.take().and_then(Guide::seal) },
+                image,
                 version,
             };
             // a tab that came to the front is the one active in its window
@@ -456,19 +693,33 @@ fn handle(state: &Arc<IslandState>, id: &mut u64, tx: &mpsc::Sender<String>, tex
                     }
                 }
             }
+            // a tab the island sent to another page of its guide has arrived there: the card is the same card
+            g.nav.retain(|_, (_, _, at)| at.elapsed() < Duration::from_secs(30));
+            if let Some((old_url, old_title, _)) = g.nav.get(&(*id, m.tab)).cloned() {
+                if old_url != m.url {
+                    g.nav.remove(&(*id, m.tab));
+                    let now = crate::browse::clean_title(&m.title);
+                    if let Some(b) = g.conns.get(id).map(|c| c.browser.clone()) {
+                        if now != old_title {
+                            g.moves.push((b, old_title, now));
+                        }
+                    }
+                }
+            }
             g.pages.insert((*id, m.tab), TabPage { win: m.win, active: m.active, snap });
         }
-        "scroll" => {
+        "image" => {
+            // the picture arrives after the page: it was being fetched and shrunk
             let tab = v.get("tab").and_then(|x| x.as_i64()).unwrap_or(-1);
-            let pct = v.get("pct").and_then(|x| x.as_f64()).unwrap_or(0.0) as f32;
+            let Some(d) = v.get("image").and_then(|x| x.as_str()).filter(|d| d.starts_with("data:image/") && d.len() < 400_000) else { return true };
             let mut g = ext.inner.lock().unwrap();
             g.version += 1;
             let version = g.version;
+            g.next_image += 1;
+            let image = PageImage { id: g.next_image, data: d.into() };
             if let Some(p) = g.pages.get_mut(&(*id, tab)) {
-                if p.snap.page.scroll.is_some() {
-                    p.snap.page.scroll_now = Some(pct.clamp(0.0, 1.0));
-                    p.snap.version = version;
-                }
+                p.snap.image = Some(image);
+                p.snap.version = version;
             }
         }
         "video" => {
@@ -512,7 +763,18 @@ fn handle(state: &Arc<IslandState>, id: &mut u64, tx: &mpsc::Sender<String>, tex
             }
             g.lists.insert(*id, list);
         }
-        "pressed" => {
+        "imgd" => {
+            let wid = v.get("id").and_then(|x| x.as_u64()).unwrap_or(0);
+            let data = v
+                .get("data")
+                .and_then(|x| x.as_str())
+                .filter(|d| d.starts_with("data:image/") && d.len() < 600_000 && v.get("ok").and_then(|x| x.as_bool()).unwrap_or(false))
+                .map(str::to_string);
+            if let Some(w) = ext.inner.lock().unwrap().picture_waiters.get(&wid) {
+                let _ = w.send(data);
+            }
+        }
+        "pressed" | "went" => {
             let wid = v.get("id").and_then(|x| x.as_u64()).unwrap_or(0);
             let ok = v.get("ok").and_then(|x| x.as_bool()).unwrap_or(false);
             if let Some(w) = ext.inner.lock().unwrap().waiters.get(&wid) {
@@ -532,7 +794,7 @@ mod tests {
     fn page_messages_become_the_shape_the_classifier_reads() {
         let m: PageMsg = serde_json::from_str(
             r#"{"url":"https://x.dev/a","title":"T","tab":3,"win":1,"active":true,
-                "scroll":{"y":400,"h":4000,"vh":800,"pct":0.125},
+                "vh":800,
                 "nodes":[{"k":"h","l":2,"t":"Step 1: Go","x":10,"y":100,"w":300,"h":30},{"k":"p","t":"Some words here.","x":10,"y":140,"w":300,"h":60},{"k":"b","t":"Copy","x":10,"y":210,"w":40,"h":20},{"k":"zz","t":"?","x":0,"y":0,"w":1,"h":1}]}"#,
         )
         .unwrap();
@@ -541,16 +803,20 @@ mod tests {
         assert_eq!(p.nodes[0].kind, NodeKind::Heading(2));
         assert!(p.nodes[1].block && !p.nodes[0].block);
         assert_eq!(p.view, (0.0, 800.0));
-        assert_eq!(p.scroll, Some((0.125, 0.2)));
-        assert_eq!(p.scroll_now, Some(0.125));
     }
 
     #[test]
-    fn a_page_that_fits_the_window_has_no_scroll() {
-        let m: PageMsg = serde_json::from_str(r#"{"url":"u","scroll":{"h":700,"vh":800,"pct":0},"nodes":[]}"#).unwrap();
-        let p = to_page(&m);
-        assert_eq!(p.scroll, None);
-        assert_eq!(p.scroll_now, None);
+    fn a_guide_is_kept_with_a_key_that_follows_its_words() {
+        let blocks = |last: &str| format!(r#"{{"blocks":[["h",3,"8/8"],["p","Go **left**."],["ul",["a","b"]],["p","{last}"]],"url":"https://x.dev/g/1","next":{{"t":"8/9","u":"https://x.dev/g/2"}}}}"#);
+        let a = serde_json::from_str::<Guide>(&blocks("one")).unwrap().seal().unwrap();
+        let b = serde_json::from_str::<Guide>(&blocks("one")).unwrap().seal().unwrap();
+        let c = serde_json::from_str::<Guide>(&blocks("two")).unwrap().seal().unwrap();
+        assert_eq!(a.key, b.key);
+        assert_ne!(a.key, c.key);
+        assert_eq!(a.next.unwrap().t, "8/9");
+        // too little to be a guide, or not blocks at all
+        assert!(serde_json::from_str::<Guide>(r#"{"blocks":[["p","x"]]}"#).unwrap().seal().is_none());
+        assert!(serde_json::from_str::<Guide>(r#"{"blocks":[1,2,3,4]}"#).unwrap().seal().is_none());
     }
 
     #[test]

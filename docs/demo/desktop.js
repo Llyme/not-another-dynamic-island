@@ -262,7 +262,7 @@ pub fn view_size(view: PillView, width: u64) -> (f64, f64) {
   // ------------------------------------------------------------ the browser (a page with buttons, and downloads)
   const STEPS = [
     ["Download the installer", "Grab the installer below. It is about 3 MB and needs no account.", "Download installer"],
-    ["Run it", "Run NADI_1.0.0_x64-setup.exe. Windows 10 or 11 is enough, and the WebView2 runtime comes with Windows 11."],
+    ["Run it", "Run NADI_1.1.0_x64-setup.exe. Windows 10 or 11 is enough, and the WebView2 runtime comes with Windows 11."],
     ["Call the island", "Rest your cursor on the top edge of a monitor. A glow builds up and the island lands. It hides again on its own."],
     ["Open the hub", "Click the island to expand it. Right-click to pin it in place, drag it sideways to move it."],
     ["Open Settings", "Use the tray icon next to the clock. Everything is in a row of icon tabs: theme, width, glow, sound, time."],
@@ -299,17 +299,10 @@ pub fn view_size(view: PillView, width: u64) -> (f64, f64) {
           render();
           return true;
         };
-        // where you are in the guide: how far down, and the last step that has reached the upper part of the window
+        // what the guide is: its steps (where you are on the page is not followed)
         NADI.browserReading = () => {
           if (!W.win.browser || !W.win.browser.open) return null;
-          const range = Math.max(1, pageEl.scrollHeight - pageEl.clientHeight);
-          const line = pageEl.scrollTop + pageEl.clientHeight * 0.4;
-          const heads = [...pageEl.querySelectorAll(".pstep")];
-          let step = -1;
-          heads.forEach((h, i) => {
-            if (h.getBoundingClientRect().top - pageEl.getBoundingClientRect().top + pageEl.scrollTop <= line) step = i;
-          });
-          return { progress: Math.min(1, pageEl.scrollTop / range), step, steps: STEPS.map(([name], i) => ({ n: i + 1, name })) };
+          return { steps: STEPS.map(([name], i) => ({ n: i + 1, name })) };
         };
       },
     );

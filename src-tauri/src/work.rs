@@ -177,8 +177,6 @@ pub struct WorkSnapshot {
     pub page_kind: Option<String>,
     pub page_main: Option<String>,
     pub page_sub: Option<String>,
-    /// how far down the page you are, 0..1
-    pub page_progress: Option<f32>,
 }
 
 pub fn spawn(app: AppHandle, state: Arc<IslandState>) {
@@ -286,14 +284,13 @@ pub fn spawn(app: AppHandle, state: Arc<IslandState>) {
                 .activity
                 .set_session(has_session.then(|| (category.clone(), confirmed_since)));
 
-            // browsing a walkthrough, an article, a video...: the pill names the page, not the activity
-            let (mut page_kind, mut page_main, mut page_sub, mut page_progress) = (None, None, None, None);
+            // browsing a walkthrough, an article...: the pill names the page, not the activity (not a video: the media card covers it)
+            let (mut page_kind, mut page_main, mut page_sub) = (None, None, None);
             if category == "browsing" {
-                if let Some(k) = state.activity.latest_browsing().and_then(|b| b.kind) {
+                if let Some(k) = state.activity.latest_browsing().and_then(|b| b.kind).filter(|k| k.id != "video") {
                     page_kind = Some(k.id.to_string());
                     page_main = Some(k.main.clone());
                     page_sub = Some(k.sub.clone());
-                    page_progress = k.progress;
                 }
             }
             let _ = app.emit(
@@ -307,7 +304,6 @@ pub fn spawn(app: AppHandle, state: Arc<IslandState>) {
                     page_kind,
                     page_main,
                     page_sub,
-                    page_progress,
                 },
             );
         }

@@ -132,8 +132,9 @@ struct GameInfo {
     pid: u32,
 }
 
-/// how many recently focused pages get their own hub card, across all browsers
-pub const BROWSE_MRU_CAP: usize = 3;
+/// how many pages get their own hub card, across all browsers: the ones focused last, and then the other open
+/// tabs the browser extension has read (see `seed_browse`)
+pub const BROWSE_MRU_CAP: usize = 8;
 /// a page not focused for this long drops out of the MRU list
 const BROWSE_MRU_TTL_S: u64 = 180;
 
@@ -233,6 +234,53 @@ impl ActivityState {
     /// the browser window in front is private: nothing about it is read or shown
     pub fn browse_private(&self) -> bool {
         self.inner.lock().unwrap().browse_private
+    }
+
+    /// The tabs the extension has read are open, so they have cards as well, behind the ones that were visited: they
+    /// go to the back of the list (a page that is already there keeps its place) while there is room, and stay
+    /// as long as the tab does (the caller says so every few seconds).
+    pub fn seed_browse(&self, exe: &str, titles: &[String]) {
+        let mut g = self.inner.lock().unwrap();
+        let now = Instant::now();
+        let app = g.browse_mru.iter().find(|e| e.exe.eq_ignore_ascii_case(exe)).map(|e| e.app.clone()).unwrap_or_default();
+        for t in titles {
+            if let Some(e) = g.browse_mru.iter_mut().find(|e| e.exe.eq_ignore_ascii_case(exe) && e.title == *t) {
+                e.last_seen = now;
+            } else if g.browse_mru.len() < BROWSE_MRU_CAP && !crate::browse::is_new_tab_or_empty(None, t) {
+                g.browse_mru.push_back(BrowseMru { exe: exe.to_string(), title: t.clone(), app: app.clone(), first_seen: now, last_seen: now });
+            }
+        }
+    }
+
+    /// A tab went to another page of its guide (see `ExtState::navigate`): the card of the page it left is the card
+    /// of the page it is on now, in the same place in the list. Returns the browsers' exes, one for each card that moved.
+    pub fn rename_browse(&self, browser: &str, old: &str, new: &str) -> Vec<String> {
+        let mut moved: Vec<String> = Vec::new();
+        {
+            let mut g = self.inner.lock().unwrap();
+            let mut i = 0;
+            while i < g.browse_mru.len() {
+                let e = &g.browse_mru[i];
+                if e.title == old && crate::ext::browser_of(&e.exe) == browser {
+                    let exe = e.exe.clone();
+                    if g.browse_mru.iter().any(|x| x.exe == exe && x.title == new) {
+                        g.browse_mru.remove(i); // (the new page is in the list already)
+                        moved.push(exe);
+                        continue;
+                    }
+                    g.browse_mru[i].title = new.to_string();
+                    moved.push(exe);
+                }
+                i += 1;
+            }
+        }
+        let mut b = self.browsing.lock().unwrap();
+        for exe in &moved {
+            if let Some(info) = b.remove(&browse_key(exe, old)) {
+                b.entry(browse_key(exe, new)).or_insert(info);
+            }
+        }
+        moved
     }
 
     /// store a finished page read under its key, dropping info for evicted pages
@@ -496,7 +544,8 @@ pub fn get_activity(window: WebviewWindow) -> ActivitySnapshot {
                     continue;
                 }
                 let info = infos.get(&browse_key(&exe, &title)).cloned().unwrap_or_default();
-                if info.blocked || info.is_empty() {
+                // (a video has no page card: the media card covers it)
+                if info.blocked || info.is_empty() || info.kind.as_ref().map_or(false, |k| k.id == "video") {
                     continue;
                 }
                 let app_name = if app.is_empty() {
@@ -549,15 +598,36 @@ mod tests {
     }
 
     #[test]
-    fn mru_keeps_three_most_recent_across_browsers() {
+    fn mru_keeps_the_most_recent_across_browsers() {
         let mut mru = VecDeque::new();
         let now = Instant::now();
-        mru_push(&mut mru, "chrome.exe".into(), "A".into(), "Chrome".into(), now);
-        mru_push(&mut mru, "msedge.exe".into(), "B".into(), "Edge".into(), now);
-        mru_push(&mut mru, "chrome.exe".into(), "C".into(), "Chrome".into(), now);
-        mru_push(&mut mru, "brave.exe".into(), "D".into(), "Brave".into(), now);
-        let titles: Vec<&str> = mru.iter().map(|e| e.title.as_str()).collect();
-        assert_eq!(titles, vec!["D", "C", "B"]);
+        for i in 0..BROWSE_MRU_CAP + 2 {
+            let exe = ["chrome.exe", "msedge.exe", "brave.exe"][i % 3];
+            mru_push(&mut mru, exe.into(), format!("P{i}"), "App".into(), now);
+        }
+        let titles: Vec<String> = mru.iter().map(|e| e.title.clone()).collect();
+        let want: Vec<String> = (2..BROWSE_MRU_CAP + 2).rev().map(|i| format!("P{i}")).collect();
+        assert_eq!(titles, want);
+    }
+
+    #[test]
+    fn a_card_follows_its_tab_to_the_next_page() {
+        let a = ActivityState::default();
+        {
+            let mut g = a.inner.lock().unwrap();
+            let now = Instant::now();
+            mru_push(&mut g.browse_mru, "C:/b/msedge.exe".into(), "Day 1".into(), "Edge".into(), now);
+            mru_push(&mut g.browse_mru, "C:/b/msedge.exe".into(), "Other".into(), "Edge".into(), now);
+        }
+        a.browsing.lock().unwrap().insert(browse_key("C:/b/msedge.exe", "Day 1"), BrowseInfo { blocked: true, ..Default::default() });
+        let moved = a.rename_browse("msedge", "Day 1", "Day 2");
+        assert_eq!(moved.len(), 1);
+        let keys = a.browse_keys();
+        assert_eq!(keys.iter().map(|k| k.1.as_str()).collect::<Vec<_>>(), vec!["Other", "Day 2"]);
+        assert!(a.browsing.lock().unwrap().contains_key(&browse_key("C:/b/msedge.exe", "Day 2")));
+        // the new page was in the list already: the old card just goes
+        a.rename_browse("msedge", "Day 2", "Other");
+        assert_eq!(a.browse_keys().len(), 1);
     }
 
     #[test]

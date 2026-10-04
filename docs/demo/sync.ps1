@@ -5,7 +5,7 @@ $here = Split-Path -Parent $MyInvocation.MyCommand.Path
 $src = Join-Path $here "..\..\ui"
 $dst = Join-Path $here "ui"
 New-Item -ItemType Directory -Force $dst | Out-Null
-foreach ($f in "style.css", "hub.css", "main.js") { Copy-Item (Join-Path $src $f) (Join-Path $dst $f) -Force }
+foreach ($f in "style.css", "hub.css", "main.js", "floats.js", "guide.js") { Copy-Item (Join-Path $src $f) (Join-Path $dst $f) -Force }
 $html = Get-Content -Raw (Join-Path $src "index.html")
 $html = $html.Replace('<link rel="stylesheet" href="style.css" />', '<script src="../shim.js"></script>' + "`n    " + '<link rel="stylesheet" href="style.css" />')
 [System.IO.File]::WriteAllText((Join-Path $dst "index.html"), $html, (New-Object System.Text.UTF8Encoding $false))

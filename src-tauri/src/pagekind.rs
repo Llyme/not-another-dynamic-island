@@ -12,10 +12,13 @@
 //! Below `MIN_CONFIDENCE` nothing is claimed and the card stays a plain page card. Everything here is pure:
 //! it takes what was read and returns what to show, so it is tested without a browser.
 
+use crate::ext::Social;
 use crate::page::{Node, NodeKind, Page};
 use serde::Serialize;
 
 pub const MIN_CONFIDENCE: f32 = 0.6;
+/// comments of a post that are passed on to the card
+const THREAD_COMMENTS: usize = 12;
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Kind {
@@ -99,6 +102,39 @@ pub struct PageField {
     pub rough: bool,
 }
 
+/// One comment of a post, ready to draw.
+#[derive(Serialize, Clone, Debug)]
+pub struct ThreadComment {
+    pub who: String,
+    pub text: String,
+    pub score: Option<String>,
+    /// the score is a like, not a vote
+    pub heart: bool,
+    pub depth: u8,
+    pub op: bool,
+    pub ago: Option<String>,
+}
+
+#[derive(Serialize, Clone, Debug)]
+pub struct ThreadStat {
+    pub icon: &'static str,
+    pub value: String,
+}
+
+/// A post with its numbers and the comments the page has loaded: the browsing card draws it read-only.
+#[derive(Serialize, Clone, Debug)]
+pub struct Thread {
+    pub who: Option<String>,
+    pub handle: Option<String>,
+    pub ago: Option<String>,
+    pub chip: Option<String>,
+    pub lead: Option<String>,
+    pub stats: Vec<ThreadStat>,
+    pub sort: Option<String>,
+    pub comments: Vec<ThreadComment>,
+    pub total: Option<u32>,
+}
+
 #[derive(Serialize, Clone, Debug)]
 pub struct PageKind {
     pub id: &'static str,
@@ -109,7 +145,19 @@ pub struct PageKind {
     pub main: String,
     pub sub: String,
     /// how far down the page you are, 0..1
-    pub progress: Option<f32>,
+    /// what the collapsed card says at its right
+    pub peek: Option<String>,
+    /// a post and its comments (social pages the extension described)
+    pub thread: Option<Thread>,
+    /// a guide laid out to be read: the card asks for its words by `key` (see `ext::Guide`)
+    pub guide: Option<GuideRef>,
+}
+
+/// What the browsing card knows of a guide before it has its words.
+#[derive(Serialize, Clone, Debug)]
+pub struct GuideRef {
+    pub key: String,
+    pub text: bool,
 }
 
 // ---- small text helpers (no regex: the app does not carry one) ---------------------------------------
@@ -635,63 +683,6 @@ fn headings(nodes: &[Node]) -> Vec<&Node> {
     nodes.iter().filter(|n| matches!(n.kind, NodeKind::Heading(_))).collect()
 }
 
-fn progress(p: &Page) -> Option<f32> {
-    if let Some(pct) = p.scroll_now.or(p.scroll.map(|x| x.0)) {
-        return Some(pct.clamp(0.0, 1.0));
-    }
-    // from where the nodes are drawn, when they carry real positions
-    let real: Vec<&Node> = p.nodes.iter().filter(|n| n.bottom > n.top && n.right > n.left).collect();
-    let (first, last) = (real.first()?, real.last()?);
-    let total = last.bottom - first.top;
-    let view = p.view.1 - p.view.0;
-    if view < 50.0 || total < view * 1.3 {
-        return None;
-    }
-    Some(((p.view.0 - first.top) / (total - view)).clamp(0.0, 1.0))
-}
-
-/// How far down the page (in px) the top of the screen is, for a scroll position (0..1).
-fn offset_px(p: &Page, pct: f32) -> Option<f32> {
-    let (_, size) = p.scroll?;
-    let view_h = p.view.1 - p.view.0;
-    if size <= 0.01 || view_h < 50.0 {
-        return None;
-    }
-    Some(pct * (view_h / size - view_h))
-}
-
-/// Where a node sits on the page itself (px from the top of the document), whatever the scroll is now.
-fn page_y(p: &Page, n: &Node) -> Option<f32> {
-    let (pct0, _) = p.scroll?;
-    Some(n.top - p.view.0 + offset_px(p, pct0)?)
-}
-
-/// The index of the item (a heading) you are reading: the last one that has reached the upper part of the screen,
-/// or `None` while you are still above the first. `true` in the second place when it is only a guess from how
-/// far down the page is.
-fn current(items: &[&Node], p: &Page) -> (Option<usize>, bool) {
-    if items.is_empty() {
-        return (None, true);
-    }
-    let reliable = items.iter().any(|n| n.bottom > n.top && n.top != 0.0);
-    if reliable {
-        // positions on the page, from the read; the line you read at, from the scroll now
-        if let (Some(now), Some(_)) = (p.scroll_now, p.scroll) {
-            if let Some(off) = offset_px(p, now) {
-                let line = off + (p.view.1 - p.view.0) * 0.4;
-                let at = items.iter().rposition(|n| page_y(p, n).map_or(false, |y| y <= line));
-                return (at, false);
-            }
-        }
-        let line = p.view.0 + (p.view.1 - p.view.0) * 0.4;
-        return (items.iter().rposition(|n| n.top <= line), false);
-    }
-    match progress(p) {
-        Some(pr) if pr > 0.0 => (Some(((pr * items.len() as f32) as usize).min(items.len() - 1)), true),
-        _ => (None, true),
-    }
-}
-
 /// The page's text as paragraphs. The tree hands over text in runs (a link splits a sentence in three), so
 /// runs of text and links that sit on the same line, or on the next one, are joined; a heading, a button, a list
 /// item or a gap of more than half a line ends the paragraph.
@@ -855,10 +846,6 @@ fn query_of(url: &str) -> Option<String> {
     None
 }
 
-fn pct(p: f32) -> String {
-    format!("{}% down the page", (p * 100.0).round() as u32)
-}
-
 /// "12.4k upvotes", "128 comments", "1 like": the trimmed text, when it is just
 /// a number and a count word (singular or plural). Bare buttons ("Upvote",
 /// "Share") carry no number and give nothing.
@@ -1004,14 +991,12 @@ fn social_title(title: &str, nodes: &[Node]) -> String {
 }
 
 /// What is worth saying about a page of this kind. `p` is the tree, if there was one.
-fn fields_for(kind: Kind, ev: &Evidence) -> (Vec<PageField>, String, String, Option<f32>) {
+fn fields_for(kind: Kind, ev: &Evidence) -> (Vec<PageField>, String, String) {
     let title = strip_site(ev.title);
     let empty: Vec<Node> = Vec::new();
     let nodes: &[Node] = ev.page.map_or(&empty[..], |p| &p.nodes[..]);
-    let prog = ev.page.and_then(progress);
     let mut f: Vec<PageField> = Vec::new();
     let (main, mut sub);
-    let page = ev.page;
     let name_after = |label: &str| -> Option<String> {
         let i = nodes.iter().position(|n| lc(&n.name).starts_with(label) && n.name.len() < 40)?;
         let n = &nodes[i];
@@ -1028,42 +1013,15 @@ fn fields_for(kind: Kind, ev: &Evidence) -> (Vec<PageField>, String, String, Opt
             let steps: Vec<(&Node, u32, String)> = nodes.iter().filter(|n| matches!(n.kind, NodeKind::Heading(_) | NodeKind::Item)).filter_map(|n| step_of(&n.name).map(|(k, t)| (n, k, t))).collect();
             main = h1_or_title(nodes, ev.title);
             sub = "Walkthrough".to_string();
-            if let (Some(p), false) = (page, steps.is_empty()) {
-                let items: Vec<&Node> = steps.iter().map(|s| s.0).collect();
+            if steps.is_empty() {
+                f.push(field("Guide", short(&title, 60), true));
+            } else {
                 let total = steps.iter().map(|s| s.1).max().unwrap_or(1);
-                let (at, rough) = current(&items, p);
-                let m;
-                match at {
-                    Some(i) => {
-                        let (num, name) = (steps[i].1, steps[i].2.clone());
-                        let label = if name.is_empty() { format!("Step {num}") } else { name.clone() };
-                        f.push(field("Doing now", short(&label, 60), rough));
-                        f.push(field("Step", format!("{num} of {total}"), rough));
-                        if let Some(n) = steps.get(i + 1) {
-                            f.push(field("Next", short(if n.2.is_empty() { "Next step" } else { &n.2 }, 60), false));
-                        }
-                        sub = format!("Step {num} of {total}");
-                        m = if name.is_empty() { main.clone() } else { short(&name, 60) };
-                    }
-                    None => {
-                        // above the first step: the introduction
-                        f.push(field("Doing now", "Introduction", rough));
-                        f.push(field("Steps", format!("{total} ahead"), false));
-                        if let Some(n) = steps.first() {
-                            f.push(field("Next", short(if n.2.is_empty() { "Step 1" } else { &n.2 }, 60), false));
-                        }
-                        sub = format!("{total} steps ahead");
-                        m = main.clone();
-                    }
+                f.push(field("Steps", format!("{total}"), false));
+                if let Some(first) = steps.first() {
+                    f.push(field("Starts with", short(if first.2.is_empty() { "Step 1" } else { &first.2 }, 60), false));
                 }
-                if let Some(pr) = prog {
-                    f.push(field("Progress", pct(pr), false));
-                }
-                return (f, m, sub, prog);
-            }
-            f.push(field("Guide", short(&title, 60), true));
-            if let Some(pr) = prog {
-                f.push(field("Progress", pct(pr), false));
+                sub = format!("{total} steps");
             }
         }
         Kind::Wiki => {
@@ -1074,16 +1032,8 @@ fn fields_for(kind: Kind, ev: &Evidence) -> (Vec<PageField>, String, String, Opt
                 f.push(field("Summary", t, false));
             }
             let secs: Vec<&Node> = nodes.iter().filter(|n| matches!(n.kind, NodeKind::Heading(2 | 3)) && n.name.len() < 60 && !matches!(lc(n.name.trim()).as_str(), "contents" | "navigation menu" | "personal tools")).collect();
-            if let (Some(p), false) = (page, secs.is_empty()) {
-                let (at, rough) = current(&secs, p);
-                if let Some(i) = at {
-                    f.push(field("You are in", short(&secs[i].name, 50), rough));
-                    sub = format!("In {}", short(&secs[i].name, 40));
-                }
+            if !secs.is_empty() {
                 f.push(field("Sections", format!("{}", nodes.iter().filter(|n| n.kind == NodeKind::Heading(2)).count()), false));
-            }
-            if let Some(pr) = prog {
-                f.push(field("Progress", pct(pr), false));
             }
         }
         Kind::News => {
@@ -1104,13 +1054,9 @@ fn fields_for(kind: Kind, ev: &Evidence) -> (Vec<PageField>, String, String, Opt
             if let Some(t) = first_long_text(nodes, 80, true) {
                 f.push(field("Gist", t, false));
             }
-            // the minutes left: the words still ahead of you, at about 230 a minute
-            if let Some(pr) = prog {
-                let words: usize = paragraphs(nodes).iter().filter(|(t, _)| t.len() > 60).map(|(t, _)| t.split_whitespace().count()).sum();
-                if words > 200 {
-                    let left = (words as f32 * (1.0 - pr) / 230.0).ceil() as u32;
-                    f.push(field("Read time", if left <= 1 { "about 1 min left".to_string() } else { format!("about {left} min left") }, true));
-                }
+            let words: usize = paragraphs(nodes).iter().filter(|(t, _)| t.len() > 60).map(|(t, _)| t.split_whitespace().count()).sum();
+            if words > 200 {
+                f.push(field("Read time", format!("about {} min", ((words as f32 / 230.0).ceil() as u32).max(1)), true));
             }
             if let Some(n) = nodes.iter().find(|n| has_any(&lc(&n.name), &["subscribe to continue", "to keep reading", "free articles", "to read the full"]) && n.name.len() < 120) {
                 f.push(field("Paywall", short(&n.name, 50), false));
@@ -1125,11 +1071,9 @@ fn fields_for(kind: Kind, ev: &Evidence) -> (Vec<PageField>, String, String, Opt
             main = h1_or_title(nodes, ev.title).replace(" - YouTube", "");
             f.push(field("Title", short(&main, 70), false));
             sub = "Video".to_string();
-            let mut ratio = None;
             if let Some((pos, dur)) = nodes.iter().find_map(|n| clock_pair(&n.name)) {
                 f.push(field("Time", format!("{} left of {}", fmt_clock(dur - pos), fmt_clock(dur)), false));
                 sub = format!("{} left", fmt_clock(dur - pos));
-                ratio = Some((pos / dur).clamp(0.0, 1.0));
             }
             let playing = nodes.iter().find(|n| n.kind == NodeKind::Button).and_then(|_| {
                 nodes.iter().find_map(|n| {
@@ -1148,7 +1092,7 @@ fn fields_for(kind: Kind, ev: &Evidence) -> (Vec<PageField>, String, String, Opt
             if let Some(pl) = playing {
                 f.push(field("State", if pl { "Playing" } else { "Paused" }, false));
             }
-            return (f, main, sub, ratio.or(prog));
+            return (f, main, sub);
         }
         Kind::Recipe => {
             main = h1_or_title(nodes, ev.title);
@@ -1173,19 +1117,11 @@ fn fields_for(kind: Kind, ev: &Evidence) -> (Vec<PageField>, String, String, Opt
                 }
             }
             let steps: Vec<&Node> = nodes.iter().filter(|n| matches!(n.kind, NodeKind::Heading(_) | NodeKind::Item) && step_of(&n.name).is_some()).collect();
-            if let (Some(p), false) = (page, steps.is_empty()) {
-                if let (Some(i), rough) = current(&steps, p) {
-                    let (num, name) = step_of(&steps[i].name).unwrap_or((1, String::new()));
-                    f.push(field("Step now", short(&format!("{num} \u{b7} {name}"), 60), rough));
-                    sub = format!("Step {num} of {}", steps.len());
-                } else if let Some(t) = &time {
-                    sub = t.clone();
-                }
-            } else if let Some(t) = &time {
-                sub = t.clone();
+            if !steps.is_empty() {
+                f.push(field("Steps", format!("{}", steps.len()), false));
             }
-            if let Some(pr) = prog {
-                f.push(field("Progress", pct(pr), false));
+            if let Some(t) = &time {
+                sub = t.clone();
             }
         }
         Kind::Qna => {
@@ -1198,9 +1134,6 @@ fn fields_for(kind: Kind, ev: &Evidence) -> (Vec<PageField>, String, String, Opt
             }
             if nodes.iter().any(|n| has_any(&lc(&n.name), &["accepted answer", "accepted"]) && n.name.len() < 40) {
                 f.push(field("Accepted", "Has an accepted answer", false));
-            }
-            if let Some(pr) = prog {
-                f.push(field("Progress", pct(pr), false));
             }
         }
         Kind::Api => {
@@ -1342,7 +1275,7 @@ fn fields_for(kind: Kind, ev: &Evidence) -> (Vec<PageField>, String, String, Opt
         }
     }
     let _ = &mut sub;
-    (f, main.clone(), sub, prog)
+    (f, main.clone(), sub)
 }
 
 /// Decide what the page is and what to say about it. `None` when nothing is sure enough.
@@ -1362,11 +1295,115 @@ pub fn read(ev: &Evidence) -> Option<PageKind> {
     if conf < MIN_CONFIDENCE {
         return None;
     }
-    let (mut fields, mut main, mut sub, mut progress) = fields_for(kind, ev);
+    let (mut fields, mut main, mut sub) = fields_for(kind, ev);
     if let Some(d) = ev.ext {
-        enrich(kind, d, &mut fields, &mut main, &mut sub, &mut progress);
+        enrich(kind, d, &mut fields, &mut main, &mut sub);
     }
-    Some(PageKind { id: kind.id(), label: kind.label(), confidence: conf, fields, main, sub, progress })
+    let (mut peek, mut thread, mut guide) = (None, None, None);
+    if matches!(kind, Kind::Walkthrough | Kind::Wiki) {
+        if let Some(g) = ev.ext.and_then(|d| d.guide.as_ref()) {
+            // the section on screen is what a closed card says
+            peek = g
+                .blocks
+                .iter()
+                .filter_map(|b| {
+                    let a = b.as_array()?;
+                    (a[0].as_str()? == "h" && a.get(1)?.as_u64()? >= 3).then(|| a.get(2).and_then(|t| t.as_str()).map(|t| short(t, 24)))?
+                })
+                .next();
+            guide = Some(GuideRef { key: g.key.clone(), text: g.text });
+        }
+    }
+    if kind == Kind::Social {
+        if let Some(s) = ev.ext.and_then(|d| d.social.as_ref()) {
+            let t = thread_of(s);
+            sub = thread_sub(s);
+            peek = s.comments.map(|n| compact(n as u64));
+            thread = Some(t);
+        }
+    }
+    Some(PageKind { id: kind.id(), label: kind.label(), confidence: conf, fields, main, sub, peek, thread, guide })
+}
+
+// ---- a post and its comments -----------------------------------------------------------------------------------
+
+/// 4213 -> "4.2k", 412000 -> "412k", 1500000 -> "1.5M"
+fn compact(n: u64) -> String {
+    let one = |x: f64| {
+        let s = format!("{x:.1}");
+        s.strip_suffix(".0").unwrap_or(&s).to_string()
+    };
+    if n >= 1_000_000 {
+        format!("{}M", one(n as f64 / 1e6))
+    } else if n >= 10_000 {
+        format!("{}k", n / 1000)
+    } else if n >= 1000 {
+        format!("{}k", one(n as f64 / 1000.0))
+    } else {
+        n.to_string()
+    }
+}
+
+/// "r/pcmasterrace \u{b7} 4.2k \u{b7} 312 comments", the header's second line
+fn thread_sub(s: &Social) -> String {
+    let mut parts: Vec<String> = Vec::new();
+    match s.site.as_str() {
+        "x" => parts.extend(s.handle.clone()),
+        _ => parts.extend(s.community.clone()),
+    }
+    match s.site.as_str() {
+        "x" => parts.extend(s.likes.map(|n| format!("{} likes", compact(n as u64)))),
+        "hn" => parts.extend(s.up.map(|n| format!("{} points", compact(n as u64)))),
+        _ => parts.extend(s.up.map(|n| compact(n as u64))),
+    }
+    parts.extend(s.comments.map(|n| format!("{} {}", compact(n as u64), if s.site == "x" { "replies" } else { "comments" })));
+    if parts.is_empty() { "Social post".to_string() } else { parts.join(" \u{b7} ") }
+}
+
+fn thread_of(s: &Social) -> Thread {
+    let reddit = s.site == "reddit";
+    let x = s.site == "x";
+    let user = |a: &str| if reddit && !a.starts_with("u/") && !a.is_empty() { format!("u/{a}") } else { a.to_string() };
+    let mut stats: Vec<ThreadStat> = Vec::new();
+    let mut stat = |icon: &'static str, n: Option<f64>| {
+        if let Some(n) = n {
+            stats.push(ThreadStat { icon, value: compact(n as u64) });
+        }
+    };
+    if x {
+        stat("chat", s.comments);
+        stat("repost", s.reposts);
+        stat("heart", s.likes);
+        stat("eye", s.views);
+    } else {
+        stat("up", s.up);
+        stat("chat", s.comments);
+    }
+    let ago_of = |iso: &Option<String>| iso.as_deref().and_then(ago);
+    Thread {
+        who: s.author.as_deref().map(user),
+        handle: s.handle.clone(),
+        ago: ago_of(&s.posted),
+        chip: s.community.clone(),
+        lead: s.text.clone().filter(|t| !t.is_empty()),
+        stats,
+        sort: s.sort.clone(),
+        comments: s
+            .list
+            .iter()
+            .take(THREAD_COMMENTS)
+            .map(|c| ThreadComment {
+                who: user(&c.a),
+                text: c.t.clone(),
+                score: c.s.map(|n| compact(n as u64)),
+                heart: x,
+                depth: c.d.min(3),
+                op: c.op,
+                ago: ago_of(&c.at).map(|a| a.trim_end_matches(" ago").to_string()),
+            })
+            .collect(),
+        total: s.comments.map(|n| n as u32),
+    }
 }
 
 // ---- what the page says about itself (from the browser extension) ---------------------------------------------
@@ -1505,7 +1542,7 @@ fn ld_of<'a>(d: &'a crate::ext::ExtData, ty: &str) -> Option<&'a crate::ext::LdI
 }
 
 /// What the page's own metadata and video add to a reading of its text.
-fn enrich(kind: Kind, d: &crate::ext::ExtData, f: &mut Vec<PageField>, main: &mut String, sub: &mut String, progress: &mut Option<f32>) {
+fn enrich(kind: Kind, d: &crate::ext::ExtData, f: &mut Vec<PageField>, main: &mut String, sub: &mut String) {
     match kind {
         Kind::Recipe => {
             if let Some(r) = ld_of(d, "Recipe") {
@@ -1568,9 +1605,9 @@ fn enrich(kind: Kind, d: &crate::ext::ExtData, f: &mut Vec<PageField>, main: &mu
             if let Some(sec) = d.meta.section.clone().or_else(|| art.and_then(|a| a.section.clone())) {
                 put(f, "Section", short(&sec, 30));
             }
-            if let (Some(pr), true) = (*progress, d.words > 200) {
-                let left = (d.words as f32 * (1.0 - pr) / 230.0).ceil() as u32;
-                put(f, "Read time", if left <= 1 { "about 1 min left".to_string() } else { format!("about {left} min left") });
+            if d.words > 200 {
+                let mins = ((d.words as f32 / 230.0).ceil() as u32).max(1);
+                put(f, "Read time", format!("about {mins} min"));
             }
             if let Some(o) = &outlet {
                 *sub = match &when {
@@ -1590,7 +1627,6 @@ fn enrich(kind: Kind, d: &crate::ext::ExtData, f: &mut Vec<PageField>, main: &mu
                 let state = if v.ended { "Ended".to_string() } else if v.paused { "Paused".to_string() } else if (v.rate - 1.0).abs() > 0.01 { format!("Playing at {}\u{d7}", (v.rate * 100.0).round() / 100.0) } else { "Playing".to_string() };
                 put(f, "State", state);
                 *sub = format!("{} left", fmt_clock(left));
-                *progress = Some((v.cur / v.dur).clamp(0.0, 1.0));
             } else if let Some(m) = ld.and_then(|v| v.length) {
                 put(f, "Length", fmt_mins(m));
             }
@@ -1662,23 +1698,15 @@ pub const BLOCK_HOST_WORDS: &[&str] = &["bank", "banking", "health", "patient", 
 /// the address is not always known: a title containing one of these betrays the page
 pub const BLOCK_TITLE_WORDS: &[&str] = &["inbox (", " - inbox", "online banking", "internet banking", "sign in to your account", "password manager", "my chart", "patient portal"];
 
-pub fn is_blocked(url: Option<&str>, title: &str, custom: &str) -> bool {
+pub fn is_blocked(url: Option<&str>, title: &str) -> bool {
     let u = url.and_then(parse_url);
     if let Some(u) = &u {
         if BLOCK_HOSTS.iter().any(|h| host_is(u, h)) || has_any(&u.host, BLOCK_HOST_WORDS) {
             return true;
         }
-        for c in custom.split(|c| c == ',' || c == ';' || c == '\n').map(|s| lc(s.trim())).filter(|s| !s.is_empty()) {
-            if has(&u.host, &c) || has(&u.path, &c) {
-                return true;
-            }
-        }
     }
     let t = lc(title);
-    has_any(&t, BLOCK_TITLE_WORDS)
-        || t.ends_with(" - gmail")
-        || t.ends_with(" - outlook")
-        || custom.split(|c| c == ',' || c == ';' || c == '\n').map(|s| lc(s.trim())).filter(|s| s.len() >= 3).any(|c| has(&t, &c))
+    has_any(&t, BLOCK_TITLE_WORDS) || t.ends_with(" - gmail") || t.ends_with(" - outlook")
 }
 
 #[cfg(test)]
@@ -1689,8 +1717,8 @@ mod tests {
         Node { kind, name: name.to_string(), left: 0.0, top, right: 100.0, bottom: top + 20.0, block: false }
     }
 
-    fn page(nodes: Vec<Node>, scroll: Option<f32>) -> Page {
-        Page { url: None, nodes, view: (100.0, 900.0), scroll: scroll.map(|s| (s, 0.3)), scroll_now: scroll }
+    fn page(nodes: Vec<Node>) -> Page {
+        Page { url: None, nodes, view: (100.0, 900.0) }
     }
 
     #[test]
@@ -1735,14 +1763,15 @@ mod tests {
             n(NodeKind::Heading(2), "Step 4: Reload the config", 1400.0),
             n(NodeKind::Text, "a", 1500.0), n(NodeKind::Text, "b", 1600.0), n(NodeKind::Text, "c", 1700.0), n(NodeKind::Text, "d", 1800.0),
         ];
-        let p = page(nodes, Some(0.43));
+        let p = page(nodes);
         let ev = Evidence { url: Some("https://docs.example.dev/tutorials/reverse-proxy"), title: "Reverse proxy a Node app - Caddy", page: Some(&p), ext: None };
         let k = read(&ev).expect("kind");
         assert_eq!(k.id, "walkthrough");
-        assert_eq!(k.main, "Add the site block");
-        assert_eq!(k.sub, "Step 3 of 4");
-        assert!(k.fields.iter().any(|f| f.key == "Next" && f.value == "Reload the config"));
-        assert_eq!(k.progress, Some(0.43));
+        // where you are on the page is not followed: the card names the guide and how many steps it has
+        assert_eq!(k.main, "Put Caddy in front of Node");
+        assert_eq!(k.sub, "4 steps");
+        assert!(k.fields.iter().any(|f| f.key == "Steps" && f.value == "4"));
+        assert!(k.fields.iter().any(|f| f.key == "Starts with" && f.value == "Install Caddy"));
     }
 
     #[test]
@@ -1754,7 +1783,7 @@ mod tests {
             n(NodeKind::Button, "Subscribe", 700.0),
             n(NodeKind::Link, "Up next", 800.0), n(NodeKind::Text, "x", 900.0), n(NodeKind::Text, "y", 910.0), n(NodeKind::Text, "z", 920.0),
         ];
-        let p = page(nodes, None);
+        let p = page(nodes);
         let ev = Evidence { url: None, title: "Building a wooden clock, part 3 - Makers - YouTube", page: Some(&p), ext: None };
         let k = read(&ev).expect("kind");
         assert_eq!(k.id, "video");
@@ -1783,7 +1812,7 @@ mod tests {
             n(NodeKind::Text, "Former diver here: it is mostly about staying warm, the showers on deck are hot.", 780.0),
             n(NodeKind::Button, "Reply", 860.0),
         ];
-        let p = page(nodes, None);
+        let p = page(nodes);
         let ev = Evidence { url: Some("https://www.reddit.com/r/explainlikeimfive/comments/abc123/why_do_divers_shower/"), title: "Why do divers shower after every dive? : r/explainlikeimfive", page: Some(&p), ext: None };
         let k = read(&ev).expect("kind");
         assert_eq!(k.id, "social");
@@ -1815,7 +1844,7 @@ mod tests {
             n(NodeKind::Text, "Godspeed, hope the upper level winds cooperate for the catch attempt.", 580.0),
             n(NodeKind::Button, "Reply", 660.0),
         ];
-        let p = page(nodes, None);
+        let p = page(nodes);
         let ev = Evidence { url: Some("https://x.com/elonmusk/status/123456789"), title: "Elon Musk on X: \"Starship launch tomorrow\" / X", page: Some(&p), ext: None };
         let k = read(&ev).expect("kind");
         assert_eq!(k.id, "social");
@@ -1829,15 +1858,34 @@ mod tests {
     }
 
     #[test]
+    fn a_post_with_its_comments_is_a_read_only_thread() {
+        let d = ext_data(r#"{"social":{"site":"reddit","author":"glasscannon","community":"r/pcmasterrace","up":4213,"comments":312,"list":[{"a":"ferrule_","t":"Looks good.","s":1800,"d":0,"op":false},{"a":"glasscannon","t":"Thanks.","s":640,"d":1,"op":true}]}}"#);
+        let ev = Evidence { url: Some("https://www.reddit.com/r/pcmasterrace/comments/abc/a_post/"), title: "A post : r/pcmasterrace", page: None, ext: Some(&d) };
+        let k = read(&ev).expect("a social post");
+        assert_eq!(k.id, "social");
+        assert_eq!(k.peek.as_deref(), Some("312"));
+        assert_eq!(k.sub, "r/pcmasterrace \u{b7} 4.2k \u{b7} 312 comments");
+        let t = k.thread.expect("a thread");
+        assert_eq!(t.who.as_deref(), Some("u/glasscannon"));
+        assert_eq!(t.stats.iter().map(|s| (s.icon, s.value.as_str())).collect::<Vec<_>>(), vec![("up", "4.2k"), ("chat", "312")]);
+        assert_eq!(t.comments.len(), 2);
+        assert_eq!(t.comments[0].who, "u/ferrule_");
+        assert_eq!(t.comments[0].score.as_deref(), Some("1.8k"));
+        assert_eq!((t.comments[1].depth, t.comments[1].op), (1, true));
+        assert_eq!(compact(412_000), "412k");
+        assert_eq!(compact(1_500_000), "1.5M");
+        assert_eq!(compact(999), "999");
+    }
+
+    #[test]
     fn private_and_blocked() {
         assert!(is_private_title("New InPrivate tab - Microsoft Edge"));
         assert!(is_private_title("New Tab - Google Chrome (Incognito)"));
         assert!(!is_private_title("Rust docs - Google Chrome"));
-        assert!(is_blocked(Some("https://mail.google.com/mail/u/0/"), "Inbox", ""));
-        assert!(is_blocked(Some("https://online.mybank.com/login"), "Welcome", ""));
-        assert!(is_blocked(None, "Inbox (3) - me@example.com - Gmail", ""));
-        assert!(is_blocked(Some("https://news.example.com/a"), "x", "example.com"));
-        assert!(!is_blocked(Some("https://en.wikipedia.org/wiki/Bank"), "Bank - Wikipedia", ""));
+        assert!(is_blocked(Some("https://mail.google.com/mail/u/0/"), "Inbox"));
+        assert!(is_blocked(Some("https://online.mybank.com/login"), "Welcome"));
+        assert!(is_blocked(None, "Inbox (3) - me@example.com - Gmail"));
+        assert!(!is_blocked(Some("https://en.wikipedia.org/wiki/Bank"), "Bank - Wikipedia"));
     }
 
     fn ext_data(json: &str) -> crate::ext::ExtData {
@@ -1847,7 +1895,22 @@ mod tests {
             ld: serde_json::from_value(v.get("ld").cloned().unwrap_or_default()).unwrap_or_default(),
             video: v.get("video").and_then(|x| serde_json::from_value(x.clone()).ok()),
             words: v.get("words").and_then(|x| x.as_u64()).unwrap_or(0) as u32,
+            social: v.get("social").and_then(|x| serde_json::from_value(x.clone()).ok()),
+            guide: None,
         }
+    }
+
+    #[test]
+    fn a_walkthrough_with_a_guide_hands_the_card_its_key_and_the_section() {
+        let mut d = ext_data("{}");
+        let g: crate::ext::Guide = serde_json::from_str(r#"{"blocks":[["h",2,"Walkthrough"],["h",3,"8/8 - 8/13"],["h",4,"8/8"],["p","You arrive."]],"url":"https://gamefaqs.gamespot.com/ps4/1-x/faqs/2/8-8-8-13"}"#).unwrap();
+        d.guide = Some(g);
+        let ev = Evidence { url: Some("https://gamefaqs.gamespot.com/ps4/1-x/faqs/2/8-8-8-13"), title: "8/8 - 8/13 - Persona 5 Strikers Walkthrough & Guide - GameFAQs", page: None, ext: Some(&d) };
+        let k = read(&ev).expect("kind");
+        assert_eq!(k.id, "walkthrough");
+        // the key is made when the extension's message is taken in; here none was made
+        assert!(k.guide.is_some());
+        assert_eq!(k.peek.as_deref(), Some("8/8 - 8/13"));
     }
 
     #[test]
@@ -1887,7 +1950,6 @@ mod tests {
         assert_eq!(get("State").as_deref(), Some("Playing at 1.25\u{d7}"));
         assert_eq!(get("Channel").as_deref(), Some("Makers Channel"));
         assert_eq!(k.sub, "12:34 left");
-        assert!((k.progress.unwrap() - 936.0 / 1690.0).abs() < 1e-4);
     }
 
     #[test]
