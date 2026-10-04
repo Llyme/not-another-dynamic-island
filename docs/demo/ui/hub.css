@@ -263,7 +263,8 @@
   margin-bottom: 0;
 }
 
-#hub-media.hidden {
+#hub-media.hidden,
+.hub-media.hidden {
   display: none;
 }
 
@@ -381,7 +382,8 @@
   transform: scale(0.88);
 }
 
-.now-controls #hub-media-play {
+.now-controls #hub-media-play,
+.now-controls .hub-media-play {
   background: rgba(255, 255, 255, 0.1);
 }
 
@@ -407,7 +409,8 @@
   display: none;
 }
 
-#hub-media-seek-fill {
+#hub-media-seek-fill,
+.hub-media-seek-fill {
   height: 100%;
   width: 0;
   border-radius: 2px;
@@ -746,7 +749,8 @@
 
 /* media buttons: no backgrounds, just the glyph (scale + brighten on hover) */
 .now-controls button:hover,
-.now-controls #hub-media-play {
+.now-controls #hub-media-play,
+.now-controls .hub-media-play {
   background: transparent;
 }
 

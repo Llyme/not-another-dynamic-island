@@ -11,7 +11,7 @@ It is Windows-only for now. The goal is to stay light: it should never make the 
 
 - **Eyes.** The idle pill. They follow the cursor and react to the sound playing on the system. The sound's
   light can bleed outside the island, like YouTube's ambient mode.
-- **Media.** Now-playing with controls and a seek bar, from the Windows media session.
+- **Media.** Now-playing with controls and a seek bar, from the Windows media sessions — one card per player when several play at once.
 - **Games and work.** Detects running games, and what you are working on, even when the window is not
   focused. The coding card shows the git changes of the project (branch, files, added and deleted lines);
   the browsing card shows what is in the page and gives you buttons to click it from the island.

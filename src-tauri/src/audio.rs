@@ -28,8 +28,13 @@ const EMIT_EVERY: u32 = 2; // frames per emitted tick (~23 Hz)
 
 #[derive(Serialize, Clone)]
 pub struct AudioTick {
-    /// 0..1 overall loudness (normalized against the recent peak)
+    /// 0..1 overall loudness on a fixed dBFS scale (-60..-12): what the
+    /// lights and eyes show. Quiet reads quiet, loud reads loud.
     pub level: f32,
+    /// Same loudness stretched against the recent peak: quiet-but-active
+    /// audio still reads loud. Genre profiling ONLY (director + energy
+    /// gate) -- never visuals, so brightness can't get stuck.
+    pub nlevel: f32,
     /// 0..1 per-band energy, each normalized against its own recent peak:
     /// bass <230 Hz, low-mid <800 Hz, mid <3 kHz, high <12 kHz
     /// (kept for compatibility; derived from `bands` below)
@@ -37,9 +42,8 @@ pub struct AudioTick {
     pub lowmid: f32,
     pub mid: f32,
     pub high: f32,
-    /// 16 log-spaced bands from ~60 Hz to ~12 kHz, each 0..1 normalized
-    /// against its own recent peak. Index 0 = lowest. Drives the 24
-    /// gradient lights in the island visualizer.
+    /// 16 log-spaced bands from ~60 Hz to ~12 kHz, each 0..1 on a fixed
+    /// dBFS scale. Index 0 = lowest. Drives the gradient lights.
     pub bands: [f32; VIZ_BANDS],
     /// a beat landed since the previous tick (a real onset, or a tempo-predicted
     /// one when the track has a steady pulse but this hit was too soft to catch)
@@ -121,6 +125,9 @@ struct Analyzer {
     speech_ema: f32,
     voice: f32,
     level: f32,
+    /// peak-normalized loudness twin of `level`, for genre profiling only
+    slow_peak: f32,
+    nlevel: f32,
     frame_no: u32,
     // per-band envelopes (16 log-spaced visualizer bands, fixed dB
     // mapping -- no adaptive peak tracking, so brightness never gets
@@ -168,6 +175,8 @@ impl Analyzer {
             speech_ema: 0.0,
             voice: 0.0,
             level: 0.0,
+            slow_peak: 0.4,
+            nlevel: 0.0,
             frame_no: 0,
             band_env: [0.0; VIZ_BANDS],
             prev_log: vec![0.0; FFT_N / 2],
@@ -307,6 +316,12 @@ impl Analyzer {
         self.db_ema += (db.max(-80.0) - self.db_ema) * 0.025;
         let k = if abs_level > self.level { 0.6 } else { 0.18 };
         self.level += (abs_level - self.level) * k;
+        // normalized twin for genre profiling only: quiet-but-active
+        // audio still counts as "something playing" for the director
+        self.slow_peak = (self.slow_peak * 0.9993).max(abs_level).max(0.35);
+        let ntarget = (abs_level / self.slow_peak).clamp(0.0, 1.0);
+        let nk = if ntarget > self.nlevel { 0.6 } else { 0.18 };
+        self.nlevel += (ntarget - self.nlevel) * nk;
 
         // stereo position: which side carries more of the energy (fast follow,
         // so a hit panned hard left reads as left right now)
@@ -419,7 +434,9 @@ impl Analyzer {
         let punch = ((self.onset_ratio_ema - 1.6) / 2.4).clamp(0.0, 1.0);
         let rate_f = ((self.onset_rate_ema - 0.8) / 1.2).clamp(0.0, 1.0);
         let tempo_f = if self.conf > 0.25 { ((self.tempo_ema - 70.0) / 35.0).clamp(0.0, 1.0) } else { 0.4 };
-        let energy_target = if self.level < 0.05 {
+        // the energy gate reads the normalized twin: quiet-but-active
+        // audio still counts for genre, exactly like before
+        let energy_target = if self.nlevel < 0.05 {
             0.0
         } else {
             0.1 * abs_norm + 0.2 * punch + 0.4 * rate_f + 0.3 * tempo_f
@@ -462,6 +479,7 @@ impl Analyzer {
         };
         Some(AudioTick {
             level: self.level,
+            nlevel: self.nlevel,
             bass: avg_range(0.0, 230.0),
             lowmid: avg_range(230.0, 800.0),
             mid: avg_range(800.0, 3000.0),

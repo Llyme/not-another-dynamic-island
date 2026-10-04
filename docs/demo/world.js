@@ -79,14 +79,45 @@
       source: "music",
     };
   };
+  // A second session for the two-players-at-once case (off until
+  // `NADI.world.mediaDuet(true)` runs in the console): a video in the
+  // browser with its own track, position and speed.
+  const media2 = (W.media2 = { on: false, playing: false, pos: 0, rate: 1 });
+  const mediaSnap2 = () => {
+    if (!media2.on) return null;
+    return {
+      has_session: true,
+      title: "Demo reel",
+      artist: "Browser",
+      playing: media2.playing,
+      position: media2.pos,
+      duration: 320,
+      can_previous: false,
+      can_next: false,
+      can_seek: true,
+      can_rate: false,
+      rate: 1,
+      art: art(210, 260),
+      source: "msedge.exe",
+    };
+  };
+  W.mediaDuet = (on = true) => {
+    media2.on = !!on;
+    media2.playing = media2.on;
+    media2.pos = 0;
+    mediaEmit();
+  };
+  const primaryOf = (snaps) => snaps.find((m) => m.playing) || snaps[0] || mediaSnap();
   function mediaEmit() {
-    const snap = mediaSnap();
-    st.hasMedia = snap.has_session;
-    const key = `${snap.title}|${snap.artist}`;
-    if (snap.has_session && key !== media.lastTrack) st.peekRequest = true;
-    media.lastTrack = snap.has_session ? key : "";
-    NADI.emit("media-tick", snap);
-    W.onMedia?.(snap);
+    const snaps = [mediaSnap()].filter((m) => m.has_session);
+    const second = mediaSnap2();
+    if (second) snaps.push(second);
+    st.hasMedia = snaps.length > 0;
+    const key = snaps.map((m) => `${m.title}|${m.artist}`).join("\n");
+    if (snaps.length > 0 && key !== media.lastTrack) st.peekRequest = true;
+    media.lastTrack = snaps.length > 0 ? key : "";
+    NADI.emit("media-tick", snaps);
+    W.onMedia?.(primaryOf(snaps));
   }
   W.mediaEmit = mediaEmit;
   W.mediaSnap = mediaSnap;
@@ -107,23 +138,46 @@
     NADIAudio.setTrack(media.idx);
     mediaEmit();
   }
-  C.media_play_pause = () => setPlaying(!media.playing);
-  C.media_next = () => skip(1);
-  C.media_previous = () => {
+  const isSecond = (args) => args && args.source === "msedge.exe";
+  C.media_play_pause = (args) => {
+    if (isSecond(args)) {
+      media2.playing = !media2.playing;
+      mediaEmit();
+      return;
+    }
+    setPlaying(!media.playing);
+  };
+  C.media_next = (args) => {
+    if (isSecond(args)) return;
+    skip(1);
+  };
+  C.media_previous = (args) => {
+    if (isSecond(args)) return;
     if (media.pos > 4) {
       media.pos = 0;
       mediaEmit();
     } else skip(-1);
   };
-  C.media_seek = ({ positionSeconds }) => {
+  C.media_seek = ({ positionSeconds, source }) => {
+    if (isSecond({ source })) {
+      media2.pos = clamp(positionSeconds, 0, 320);
+      mediaEmit();
+      return;
+    }
     media.pos = clamp(positionSeconds, 0, track().dur);
     mediaEmit();
   };
-  C.media_seek_by = ({ deltaSeconds }) => {
+  C.media_seek_by = ({ deltaSeconds, source }) => {
+    if (isSecond({ source })) {
+      media2.pos = clamp(media2.pos + deltaSeconds, 0, 320);
+      mediaEmit();
+      return;
+    }
     media.pos = clamp(media.pos + deltaSeconds, 0, track().dur);
     mediaEmit();
   };
-  C.media_set_rate = ({ rate }) => {
+  C.media_set_rate = ({ rate, source }) => {
+    if (isSecond({ source })) return true;
     media.rate = clamp(rate, 0.1, 16);
     NADIAudio.setRate(media.rate);
     mediaEmit();
@@ -133,6 +187,10 @@
     if (media.playing && W.win.music && W.win.music.open) {
       media.pos += 0.1 * media.rate;
       if (media.pos >= track().dur) skip(1);
+    }
+    if (media2.on && media2.playing) {
+      media2.pos += 0.1;
+      if (media2.pos >= 320) media2.pos = 0;
     }
   }, 100);
   setInterval(mediaEmit, 1000);

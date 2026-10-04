@@ -75,6 +75,8 @@ pub struct Settings {
     /// sites (domains or words, comma separated) that are never read, on top of the built-in ones
     /// (banking, mail, health, password managers)
     pub page_blocklist: String,
+    /// hovering the top edge does nothing while a fullscreen / borderless-fullscreen app is in front
+    pub fullscreen_guard: bool,
 }
 
 impl Default for Settings {
@@ -111,6 +113,7 @@ impl Default for Settings {
             glow_intensity: 70,
             page_preview: true,
             page_blocklist: String::new(),
+            fullscreen_guard: true,
         }
     }
 }
@@ -240,6 +243,7 @@ pub fn save_settings(window: WebviewWindow, settings: Settings) {
         .store(settings.idle_hide_delay_s.max(1) * 1000, Ordering::Relaxed);
 
     state.edge_dwell_ms.store(settings.edge_dwell_ms.min(2000), Ordering::Relaxed);
+    state.fullscreen_guard.store(settings.fullscreen_guard, Ordering::Relaxed);
     state.pin_shrink.store(settings.pin_shrink.clamp(30, 100), Ordering::Relaxed);
     state.compact_width.store(compact_px(settings.compact_width), Ordering::Relaxed);
     state.hub_width.store(settings.hub_width.clamp(340, 640), Ordering::Relaxed);
@@ -253,4 +257,14 @@ pub fn save_settings(window: WebviewWindow, settings: Settings) {
 
     save_to_disk(&settings);
     *state.settings.lock().unwrap() = settings;
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn guard_defaults_on() {
+        assert!(Settings::default().fullscreen_guard);
+    }
 }

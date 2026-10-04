@@ -153,6 +153,10 @@
                 </span>
               </label>
               <label class="hub-row">
+                <span>Fullscreen Guard</span>
+                <input type="checkbox" id="set-fullscreen-guard" />
+              </label>
+              <label class="hub-row">
                 <span>Hide Delay</span>
                 <span class="hub-row-value">
                   <input type="range" id="set-idle-hide-delay" data-default="1" min="1" max="15" step="1" />
@@ -304,26 +308,26 @@
           </div>
 
           <div id="pane-info">
-            <div id="hub-media" class="now-card spot hidden">
+            <div id="hub-media" class="now-card spot hub-media hidden">
               <div class="now-row">
-                <img id="hub-media-art" class="now-icon" alt="" />
+                <img id="hub-media-art" class="now-icon hub-media-art" alt="" />
                 <div class="now-text">
-                  <div id="hub-media-title" class="now-title"></div>
-                  <div id="hub-media-artist" class="now-sub"></div>
+                  <div id="hub-media-title" class="now-title hub-media-title"></div>
+                  <div id="hub-media-artist" class="now-sub hub-media-artist"></div>
                 </div>
                 <div class="now-controls">
-                  <button id="hub-media-prev" data-tip="Previous">â®</button>
-                  <button id="hub-media-play" data-tip="Play / Pause">â–¶</button>
-                  <button id="hub-media-next" data-tip="Next">â­</button>
+                  <button id="hub-media-prev" class="hub-media-prev" data-tip="Previous">â®</button>
+                  <button id="hub-media-play" class="hub-media-play" data-tip="Play / Pause">â–¶</button>
+                  <button id="hub-media-next" class="hub-media-next" data-tip="Next">â­</button>
                 </div>
               </div>
-              <div id="hub-media-extra" class="media-extra">
-                <button id="hub-media-back" class="media-jump" data-tip="Back 5 seconds"></button>
-                <div id="hub-media-seek" class="now-seek hidden"><div id="hub-media-seek-fill"></div></div>
-                <button id="hub-media-fwd" class="media-jump" data-tip="Forward 5 seconds"></button>
-                <button id="hub-media-rate" class="media-rate" data-tip="Playback speed"><span id="hub-media-rate-label">1Ã—</span></button>
+              <div id="hub-media-extra" class="media-extra hub-media-extra">
+                <button id="hub-media-back" class="media-jump hub-media-back" data-tip="Back 5 seconds"></button>
+                <div id="hub-media-seek" class="now-seek hub-media-seek hidden"><div id="hub-media-seek-fill" class="hub-media-seek-fill"></div></div>
+                <button id="hub-media-fwd" class="media-jump hub-media-fwd" data-tip="Forward 5 seconds"></button>
+                <button id="hub-media-rate" class="media-rate hub-media-rate" data-tip="Playback speed"><span id="hub-media-rate-label" class="hub-media-rate-label">1Ã—</span></button>
               </div>
-              <div id="hub-media-rates" class="rate-menu hidden"></div>
+              <div id="hub-media-rates" class="rate-menu hub-media-rates hidden"></div>
             </div>
             <div id="now-cards" class="flat"></div>
             <div id="calendar-status" class="notif-history-empty"></div>

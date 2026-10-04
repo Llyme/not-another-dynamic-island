@@ -204,6 +204,8 @@ pub(crate) struct IslandState {
     peek_ms: AtomicU64,
     /// how long the cursor must rest at the top edge before the island appears (0 = at once)
     edge_dwell_ms: AtomicU64,
+    /// top-edge hover neither summons nor keeps the island while a fullscreen app covers the monitor
+    fullscreen_guard: AtomicBool,
     /// size (percent) a pinned, untouched island shrinks to; 100 = it never shrinks
     pin_shrink: AtomicU64,
     /// width (percent) of the collapsed island; the hub keeps its own width
@@ -255,6 +257,7 @@ impl Default for IslandState {
             idle_hide_ms: AtomicU64::new(loaded.idle_hide_delay_s.max(1) * 1000),
             peek_ms: AtomicU64::new(loaded.peek_duration_s.max(1) * 1000),
             edge_dwell_ms: AtomicU64::new(loaded.edge_dwell_ms),
+            fullscreen_guard: AtomicBool::new(loaded.fullscreen_guard),
             pin_shrink: AtomicU64::new(loaded.pin_shrink.clamp(30, 100)),
             compact_width: AtomicU64::new(settings::compact_px(loaded.compact_width)),
             hub_width: AtomicU64::new(loaded.hub_width.clamp(340, 640)),
@@ -745,12 +748,27 @@ fn spawn_edge_poll(window: WebviewWindow) {
             }
 
             // -- edge dwell: resting at the top edge "calls" the island; a glow builds
-            // there while the timer runs, and only then does it appear
+            // there while the timer runs, and only then does it appear.
+            // While a fullscreen / borderless-fullscreen app covers the cursor's monitor the
+            // edge goes dead: nothing summons, no glow builds, and a visible island keeps
+            // counting down to hide instead of lingering while the cursor parks there.
+            // Status peeks (media/game/work banners, notifications, the hub) still show --
+            // only the edge call and the edge-stay are gated.
             let dwell_s = state.edge_dwell_ms.load(Ordering::Relaxed) as f64 / 1000.0;
+            let hidden_now = !state.shown.load(Ordering::Relaxed);
+            let cursor_near_edge = cy <= geo.y + EDGE_TRIGGER_PX;
+            // Fullscreen cover on the cursor's monitor. While hidden only the edge strip
+            // matters (the summon zone); while shown the pill itself lives at the edge, so
+            // a cursor resting on the pill must count as suppressed too.
+            let fs_covering = state.fullscreen_guard.load(Ordering::Relaxed)
+                && (!hidden_now || cursor_near_edge)
+                && winutil::foreground_fullscreen_on(geo, hwnd);
+            let edge_blocked = hidden_now && cursor_near_edge && fs_covering;
             let want_charge = dwell_s > 0.0
-                && !state.shown.load(Ordering::Relaxed)
+                && hidden_now
                 && !state.dragging.load(Ordering::Relaxed)
-                && cy <= geo.y + EDGE_TRIGGER_PX
+                && cursor_near_edge
+                && !edge_blocked
                 && hide_anim.is_none()
                 && size_anim.is_none();
             let mut charge_ready = false;
@@ -869,7 +887,7 @@ fn spawn_edge_poll(window: WebviewWindow) {
                     pinned_dash_target = None;
                     dashed_to_center = false;
                 }
-                if !shown && cursor_at_edge && (dwell_s <= 0.0 || charge_ready || hide_anim.is_some() || size_anim.is_some()) {
+                if !shown && cursor_at_edge && !edge_blocked && (dwell_s <= 0.0 || charge_ready || hide_anim.is_some() || size_anim.is_some()) {
                     shown = true;
                     state.shown.store(true, Ordering::Relaxed);
                     edge_revealed = true;
@@ -941,9 +959,10 @@ fn spawn_edge_poll(window: WebviewWindow) {
                     }
                     if pinned {
                         idle_ticks = 0;
-                    } else if hovering || cursor_at_edge || user_pin {
+                    } else if user_pin || ((hovering || cursor_at_edge) && !fs_covering) {
                         idle_ticks = 0;
                         if cursor_at_edge
+                            && !fs_covering
                             && !hovering
                             && !dashed_to_center
                             && state.cursor_follow.load(Ordering::Relaxed)
@@ -1016,13 +1035,23 @@ fn spawn_edge_poll(window: WebviewWindow) {
 
             // only the island itself takes the mouse: the margin around it must let clicks
             // through to whatever lies beneath (and the whole window does while the edge
-            // glow charges)
+            // glow charges). While a fullscreen / borderless-fullscreen app holds focus,
+            // auto-shown banners and pills stay visible but never steal its clicks -- the
+            // hub (explicitly opened by the user) and an active drag stay interactive.
             {
                 let over = (cx as f64) >= pos_x - 1.0
                     && (cx as f64) < pos_x + win_w + 1.0
                     && (cy as f64) >= pos_y - 1.0
                     && (cy as f64) < pos_y + win_h + 1.0;
-                let want_ignore = (charge_big && !revealing) || !(over || state.dragging.load(Ordering::Relaxed));
+                let dragging_now = state.dragging.load(Ordering::Relaxed);
+                let hub_now = state.hub_open.load(Ordering::Relaxed);
+                // (fs_covering already skips the foreground check while hidden: hidden pills take no input anyway)
+                let fs_yield = state.shown.load(Ordering::Relaxed)
+                    && !hub_now
+                    && !dragging_now
+                    && fs_covering;
+                let want_ignore =
+                    (charge_big && !revealing) || fs_yield || !(over || dragging_now);
                 // (checked every tick, cheaply: it also re-asserts the style if anything reset it)
                 ignoring = want_ignore;
                 winutil::click_through(hwnd, ignoring);

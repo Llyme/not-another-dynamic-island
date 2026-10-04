@@ -90,6 +90,7 @@
     glow_intensity: 70,
     page_preview: true,
     page_blocklist: "",
+    fullscreen_guard: true,
   };
   const SETTINGS_KEY = "nadi-demo-settings-v1";
   let settings = (() => {
@@ -328,6 +329,8 @@
   };
 
   // ---------------------------------------------------------------- the poll loop (spawn_edge_poll)
+  // demo stand-in for the real fullscreen guard (winutil): the browser has no
+  // foreground-window API, so a real browser fullscreen stands in.
   function startLoop() {
     const desk = NADI.desk;
     const frame = NADI.frame;
@@ -488,9 +491,16 @@
         }
       }
 
-      // edge dwell: resting at the top edge calls the island, a glow builds meanwhile
+      // edge dwell: resting at the top edge calls the island, a glow builds meanwhile.
+      // While a browser fullscreen covers the screen the edge goes dead: no summon, no
+      // glow, and a visible island keeps counting down instead of lingering at the edge.
       const dwellS = clamp(settings.edge_dwell_ms, 0, 2000) / 1000;
-      const wantCharge = dwellS > 0 && !st.shown && !st.dragging && cy <= geo.y + EDGE_TRIGGER_PX && hideAnim === null && sizeAnim === null;
+      const cursorNearEdge = cy <= geo.y + EDGE_TRIGGER_PX;
+      // while shown the pill itself lives at the edge, so a cursor resting on it
+      // counts as suppressed too -- not just the 3px summon strip
+      const fsCovering = settings.fullscreen_guard && document.fullscreenElement != null;
+      const edgeBlocked = !st.shown && cursorNearEdge && fsCovering;
+      const wantCharge = dwellS > 0 && !st.shown && !st.dragging && cursorNearEdge && !edgeBlocked && hideAnim === null && sizeAnim === null;
       let chargeReady = false;
       if (wantCharge) {
         if (!chargeBig) {
@@ -555,7 +565,7 @@
           pinnedDashTarget = null;
           dashedToCenter = false;
         }
-        if (!shown && cursorAtEdge && (dwellS <= 0 || chargeReady || hideAnim !== null || sizeAnim !== null)) {
+        if (!shown && cursorAtEdge && !edgeBlocked && (dwellS <= 0 || chargeReady || hideAnim !== null || sizeAnim !== null)) {
           shown = true;
           st.shown = true;
           edgeRevealed = true;
@@ -592,9 +602,9 @@
           }
           if (pinned) {
             idleTicks = 0;
-          } else if (hovering || cursorAtEdge || userPin) {
+          } else if (userPin || ((hovering || cursorAtEdge) && !fsCovering)) {
             idleTicks = 0;
-            if (cursorAtEdge && !hovering && !dashedToCenter && settings.cursor_follow) {
+            if (cursorAtEdge && !fsCovering && !hovering && !dashedToCenter && settings.cursor_follow) {
               posX = lerp(posX, clampX(cx - halfW), NUDGE_EASE);
             }
           } else {

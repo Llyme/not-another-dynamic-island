@@ -46,9 +46,30 @@ pub struct MediaSnapshot {
     pub source: String,
 }
 
-fn current_session() -> windows::core::Result<Option<Session>> {
-    let manager = SessionManager::RequestAsync()?.get()?;
-    Ok(manager.GetCurrentSession().ok())
+fn all_sessions() -> Vec<Session> {
+    let manager = match SessionManager::RequestAsync().and_then(|op| op.get()) {
+        Ok(m) => m,
+        Err(_) => return Vec::new(),
+    };
+    // All sessions with usable metadata, not just the focused one --
+    // two players at once (e.g. Spotify + a browser) means two cards.
+    let mut out = Vec::new();
+    if let Ok(list) = manager.GetSessions() {
+        for i in 0..list.Size().unwrap_or(0) {
+            if let Ok(session) = list.GetAt(i) {
+                if read_snapshot(&session).ok().flatten().is_some() {
+                    out.push(session);
+                }
+            }
+        }
+    }
+    // Fall back to the current session when enumeration itself found nothing.
+    if out.is_empty() {
+        if let Ok(session) = manager.GetCurrentSession() {
+            out.push(session);
+        }
+    }
+    out
 }
 
 fn read_snapshot(session: &Session) -> windows::core::Result<Option<MediaSnapshot>> {
@@ -145,14 +166,11 @@ fn read_thumbnail(
     Ok(Some(format!("data:{mime};base64,{b64}")))
 }
 
-fn snapshot_now() -> MediaSnapshot {
-    match current_session().and_then(|s| match s {
-        Some(session) => read_snapshot(&session),
-        None => Ok(None),
-    }) {
-        Ok(Some(snap)) => snap,
-        Ok(None) | Err(_) => MediaSnapshot::default(),
-    }
+fn snapshots_now() -> Vec<MediaSnapshot> {
+    all_sessions()
+        .iter()
+        .filter_map(|s| read_snapshot(s).ok().flatten())
+        .collect()
 }
 
 /// Spawns the poll thread; call once from `setup`.
@@ -161,15 +179,16 @@ pub fn spawn(app: AppHandle, state: Arc<IslandState>) {
         unsafe {
             let _ = CoInitializeEx(None, COINIT_MULTITHREADED);
         }
-        let mut last_track = (String::new(), String::new());
+        let mut last_tracks: Vec<(String, String)> = Vec::new();
         loop {
-            let snap = snapshot_now();
-            state.has_media.store(snap.has_session, Ordering::Relaxed);
-            let track = (snap.title.clone(), snap.artist.clone());
-            if snap.has_session && track != last_track {
+            let snaps = snapshots_now();
+            state.has_media.store(!snaps.is_empty(), Ordering::Relaxed);
+            let tracks: Vec<(String, String)> =
+                snaps.iter().map(|s| (s.title.clone(), s.artist.clone())).collect();
+            if !tracks.is_empty() && tracks != last_tracks {
                 state.peek_request.store(true, Ordering::Relaxed);
             }
-            last_track = track;
+            last_tracks = tracks;
             // Emitted unconditionally (no change-detection dedup) -- a
             // dedup-by-content-hash version of this raced the frontend's
             // listener registration: the first snapshot could fire (and get
@@ -177,38 +196,115 @@ pub fn spawn(app: AppHandle, state: Arc<IslandState>) {
             // `main.js` had finished loading and calling `listen()`, silently
             // losing the session forever. One JSON emit/sec is cheap enough
             // to not need the optimization.
-            let _ = app.emit("media-tick", snap);
+            let _ = app.emit("media-tick", snaps);
             std::thread::sleep(Duration::from_millis(POLL_MS));
         }
     });
 }
 
-fn with_current_session<F: FnOnce(&Session) -> windows::core::Result<()>>(f: F) {
-    if let Ok(Some(session)) = current_session() {
+/// The session a control targets: the one from that card (`source` is its
+/// AppUserModelId), else the focused one. `None` keeps the old pill behavior.
+///
+/// Matching uses only synchronous properties: `read_snapshot` (metadata +
+/// thumbnail stream reads) must stay on the COM-initialized poll thread --
+/// blocking `.get()`s for those on a command thread can hang it, and with
+/// it the island.
+fn find_session(source: Option<String>) -> Option<Session> {
+    let manager = SessionManager::RequestAsync().and_then(|op| op.get()).ok()?;
+    let want = source.filter(|s| !s.is_empty());
+    if let Some(w) = want.as_deref() {
+        if let Ok(list) = manager.GetSessions() {
+            for i in 0..list.Size().unwrap_or(0) {
+                if let Ok(s) = list.GetAt(i) {
+                    if s.SourceAppUserModelId().map(|h| h.to_string()).unwrap_or_default() == w {
+                        return Some(s);
+                    }
+                }
+            }
+        }
+    }
+    manager.GetCurrentSession().ok()
+}
+
+fn with_session<F: FnOnce(&Session) -> windows::core::Result<()>>(source: Option<String>, f: F) {
+    if let Some(session) = find_session(source) {
         let _ = f(&session);
     }
 }
 
+/// Block at most `timeout_ms` for a WinRT control op. Some players take the
+/// call but never finish it (a browser tab mid-navigation, a paused remote
+/// session), and a bare `.get()` then hangs the command thread -- and the
+/// island with it -- forever. True when the op actually completed.
+fn wait_completed(
+    mut get_status: impl FnMut() -> windows::core::Result<windows::Foundation::AsyncStatus>,
+    timeout_ms: u64,
+) -> bool {
+    use windows::Foundation::AsyncStatus;
+    let limit = Duration::from_millis(timeout_ms);
+    let start = std::time::Instant::now();
+    loop {
+        match get_status() {
+            Ok(AsyncStatus::Completed) => return true,
+            Ok(AsyncStatus::Started) => {}
+            _ => return false,
+        }
+        if start.elapsed() >= limit {
+            return false;
+        }
+        std::thread::sleep(Duration::from_millis(10));
+    }
+}
+
+/// A control op gets 2 s to finish; a stuck player is dropped, never hung on.
+const OP_TIMEOUT_MS: u64 = 2000;
+
 #[tauri::command]
-pub fn media_play_pause() {
-    with_current_session(|s| s.TryTogglePlayPauseAsync()?.get().map(|_| ()));
+pub fn media_play_pause(source: Option<String>) {
+    with_session(source, |s| {
+        let op = s.TryTogglePlayPauseAsync()?;
+        if wait_completed(|| op.Status(), OP_TIMEOUT_MS) {
+            op.get().map(|_| ())
+        } else {
+            Ok(())
+        }
+    });
 }
 
 #[tauri::command]
-pub fn media_next() {
-    with_current_session(|s| s.TrySkipNextAsync()?.get().map(|_| ()));
+pub fn media_next(source: Option<String>) {
+    with_session(source, |s| {
+        let op = s.TrySkipNextAsync()?;
+        if wait_completed(|| op.Status(), OP_TIMEOUT_MS) {
+            op.get().map(|_| ())
+        } else {
+            Ok(())
+        }
+    });
 }
 
 #[tauri::command]
-pub fn media_previous() {
-    with_current_session(|s| s.TrySkipPreviousAsync()?.get().map(|_| ()));
+pub fn media_previous(source: Option<String>) {
+    with_session(source, |s| {
+        let op = s.TrySkipPreviousAsync()?;
+        if wait_completed(|| op.Status(), OP_TIMEOUT_MS) {
+            op.get().map(|_| ())
+        } else {
+            Ok(())
+        }
+    });
 }
 
 #[tauri::command]
-pub fn media_seek(position_seconds: f64) {
-    with_current_session(|s| {
+pub fn media_seek(position_seconds: f64, source: Option<String>) {
+    with_session(source, |s| {
         let ticks = (position_seconds * 10_000_000.0) as i64;
-        s.TryChangePlaybackPositionAsync(ticks)?.get().map(|_| ())
+        let op = s.TryChangePlaybackPositionAsync(ticks)?;
+        if wait_completed(|| op.Status(), OP_TIMEOUT_MS) {
+            op.get().map(|_| ())
+        } else {
+            Ok(())
+        }
     });
 }
 
@@ -216,8 +312,8 @@ pub fn media_seek(position_seconds: f64) {
 /// the timeline's position is the one it last reported, so the time since then is added (at
 /// the playback speed) while it plays
 #[tauri::command]
-pub fn media_seek_by(delta_seconds: f64) {
-    with_current_session(|s| {
+pub fn media_seek_by(delta_seconds: f64, source: Option<String>) {
+    with_session(source, |s| {
         let tl = s.GetTimelineProperties()?;
         let playback = s.GetPlaybackInfo()?;
         let playing = playback.PlaybackStatus()? == PlaybackStatus::Playing;
@@ -233,19 +329,60 @@ pub fn media_seek_by(delta_seconds: f64) {
             pos += since * rate;
         }
         let target = (pos + delta_seconds).clamp(start, if end > start { end } else { f64::MAX });
-        s.TryChangePlaybackPositionAsync((target * 10_000_000.0) as i64)?.get().map(|_| ())
+        let op = s.TryChangePlaybackPositionAsync((target * 10_000_000.0) as i64)?;
+        if wait_completed(|| op.Status(), OP_TIMEOUT_MS) {
+            op.get().map(|_| ())
+        } else {
+            Ok(())
+        }
     });
 }
 
 /// set the playback speed (0.1 to 16); true when the player took it
 #[tauri::command]
-pub fn media_set_rate(rate: f64) -> bool {
+pub fn media_set_rate(rate: f64, source: Option<String>) -> bool {
     let rate = rate.clamp(0.1, 16.0);
     let mut ok = false;
-    with_current_session(|s| {
-        ok = s.TryChangePlaybackRateAsync(rate)?.get()?;
+    with_session(source, |s| {
+        let op = s.TryChangePlaybackRateAsync(rate)?;
+        if wait_completed(|| op.Status(), OP_TIMEOUT_MS) {
+            ok = op.get()?;
+        }
         Ok(())
     });
     ok
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use windows::Foundation::AsyncStatus;
+
+    #[test]
+    fn wait_completed_true_once_the_op_finishes() {
+        let mut polls = 0;
+        let done = wait_completed(
+            || {
+                polls += 1;
+                Ok(if polls >= 3 { AsyncStatus::Completed } else { AsyncStatus::Started })
+            },
+            1000,
+        );
+        assert!(done);
+    }
+
+    #[test]
+    fn wait_completed_false_when_the_op_never_finishes() {
+        let start = std::time::Instant::now();
+        let done = wait_completed(|| Ok(AsyncStatus::Started), 50);
+        assert!(!done);
+        assert!(start.elapsed() < Duration::from_secs(5));
+    }
+
+    #[test]
+    fn wait_completed_false_on_error_status() {
+        let done = wait_completed(|| Ok(AsyncStatus::Error), 1000);
+        assert!(!done);
+    }
 }
 

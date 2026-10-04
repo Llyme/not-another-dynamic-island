@@ -246,18 +246,33 @@ function onTrackChange(key) {
 	director.since = 0; // no dwell wait: the new song may deserve a different vibe at once
 }
 
+// media-tick arrives as a list of sessions (one per player); older
+// payloads and some harnesses still send a single session object.
+function mediaListOf(payload) {
+	if (Array.isArray(payload))
+		return payload.filter((m) => m && m.has_session);
+	if (payload && payload.has_session) return [payload];
+	return [];
+}
+
+// the pill and the eyes follow one session: the playing one, else the first.
+function pickPrimaryMedia(list) {
+	return (
+		(list || []).find((m) => m.playing) || (list || [])[0] || null
+	);
+}
+
 listen("media-tick", (e) => {
-	const m = e.payload;
+	const m = pickPrimaryMedia(mediaListOf(e.payload));
 	// video context: a video player, or anything long enough to be an episode/film
 	// rather than a song. Mostly dialogue -- the eyes must not "vibe" to it.
 	director.video =
 		!!m &&
-		!!m.has_session &&
 		((m.duration || 0) > 900 ||
 			/potplayer|vlc|mpv|mpc|wmplayer|kmplayer|gom|video|movies|netflix|primevideo|disney|hulu/i.test(
 				m.source || "",
 			));
-	if (!m || !m.has_session) return;
+	if (!m) return;
 	const key = `${m.title || ""}|${m.artist || ""}`;
 	if (key !== director.track) onTrackChange(key);
 });
@@ -339,7 +354,9 @@ listen("audio-tick", (e) => {
 	director.acc.n++;
 	director.acc.voice += a.voice;
 	director.acc.energy += a.energy;
-	director.acc.level += a.level;
+	// genre profiling reads the peak-normalized twin (quiet-but-active
+	// still counts); visuals read the absolute `level` below
+	director.acc.level += a.nlevel ?? a.level;
 	director.acc.bass += a.bass;
 	if (a.beat) director.acc.beats++;
 	if (a.kick) director.acc.kicks++;
@@ -1088,6 +1105,7 @@ const LI_PATHS = {
 	play: "M4.5 3.5v9l8-4.5z",
 	branch: "M4.5 3v10M11.5 5.5v1c0 2-3 2-7 4",
 	chat: "M2.8 3.5h10.4v6.8H8l-2.6 2.2v-2.2H2.8zM5 6.2h6M5 8.2h4",
+	shield: "M8 2.2 12.6 4v3.3c0 2.9-1.9 4.9-4.6 6.2-2.7-1.3-4.6-3.3-4.6-6.2V4z",
 };
 // which glyph stands for a kind of page (see pagekind.rs)
 const KIND_GLYPH = {
@@ -1553,7 +1571,9 @@ function paintViz(now, dt) {
 	viz.on = true;
 	c.setTransform(1, 0, 0, 1, 0, 0);
 	c.clearRect(0, 0, w, h);
-	c.globalCompositeOperation = "lighter";
+	// source-over, not additive: stacked lights converge toward the cap
+	// instead of summing past it, so a huddle never blows out white
+	c.globalCompositeOperation = "source-over";
 
 	viz.hue =
 		(viz.hue + dt * 7 * (1 - 0.75 * audio.chill)) % 360;
@@ -2232,11 +2252,16 @@ mediaNext.innerHTML = ICON.next;
 const mediaProgress = document.getElementById("media-progress");
 const mediaProgressFill = mediaProgress.firstElementChild;
 
+let pillMediaSource = "";
+
 listen("media-tick", (event) => {
-	const m = event.payload;
-	// (also when the session is gone: that is what hides the hub's media card)
-	applyHubMedia(m);
-	if (!m.has_session) return;
+	const list = mediaListOf(event.payload);
+	// (also when the sessions are gone: that is what hides the hub's media cards)
+	applyHubMediaList(list);
+	const m = pickPrimaryMedia(list);
+	// the pill follows one session; the hub shows them all
+	pillMediaSource = m ? m.source || "" : "";
+	if (!m) return;
 
 	setMarquee(mediaTitle, m.title || "");
 	mediaArtist.textContent = m.artist || "";
@@ -2261,12 +2286,14 @@ for (const btn of [mediaPlay, mediaPrev, mediaNext]) {
 	);
 }
 mediaPlay.addEventListener("click", () =>
-	invoke("media_play_pause"),
+	invoke("media_play_pause", { source: pillMediaSource }),
 );
 mediaPrev.addEventListener("click", () =>
-	invoke("media_previous"),
+	invoke("media_previous", { source: pillMediaSource }),
 );
-mediaNext.addEventListener("click", () => invoke("media_next"));
+mediaNext.addEventListener("click", () =>
+	invoke("media_next", { source: pillMediaSource }),
+);
 
 // -- game pill: driven by game-tick events from the Rust foreground-window poll --
 const gameEl = document.getElementById("game");
@@ -2609,6 +2636,7 @@ const hubEl = document.getElementById("hub");
 		"set-react-to-audio": "wave",
 		"set-audio-bleed": "sun",
 		"set-edge-dwell": "timer",
+		"set-fullscreen-guard": "shield",
 		"set-idle-hide-delay": "eyeoff",
 		"set-peek-duration": "hourglass",
 		"set-pin-shrink": "shrink",
@@ -2678,6 +2706,8 @@ const hubEl = document.getElementById("hub");
 			"Sound light bleeding outside the island: strength and reach (0 = off)",
 		"set-edge-dwell":
 			"How long the cursor rests at the edge before it appears",
+		"set-fullscreen-guard":
+			"Stay hidden while a fullscreen game or video is in front",
 		"set-idle-hide-delay": "How long before it hides again",
 		"set-peek-duration": "How long a status stays up",
 		"set-pin-shrink":
@@ -2873,6 +2903,9 @@ const setEdgeDwell = document.getElementById("set-edge-dwell");
 const setEdgeDwellLabel = document.getElementById(
 	"set-edge-dwell-label",
 );
+const setFullscreenGuard = document.getElementById(
+	"set-fullscreen-guard",
+);
 const edgeDwellText = (ms) =>
 	Number(ms) === 0 ? "off" : `${ms} ms`;
 const setCalendarUrl = document.getElementById(
@@ -2948,6 +2981,8 @@ async function loadSettingsIntoForm() {
 	setEdgeDwellLabel.textContent = edgeDwellText(
 		currentSettings.edge_dwell_ms,
 	);
+	setFullscreenGuard.checked =
+		currentSettings.fullscreen_guard ?? true;
 	setPeekDuration.value = currentSettings.peek_duration_s;
 	setPeekDurationLabel.textContent = `${currentSettings.peek_duration_s}s`;
 	setCalendarUrl.value = currentSettings.calendar_ics_url;
@@ -3033,6 +3068,7 @@ function saveSettingsFromForm() {
 		time_24h: setTime24h.checked,
 		peek_duration_s: Number(setPeekDuration.value),
 		edge_dwell_ms: Number(setEdgeDwell.value),
+		fullscreen_guard: setFullscreenGuard.checked,
 		pin_shrink: Number(setPinShrink.value),
 		compact_width: Number(setCompactWidth.value),
 		hub_width: Number(setHubWidth.value),
@@ -3061,6 +3097,7 @@ for (const el of [
 	setStartWithWindows,
 	setShowAtCursor,
 	setCursorFollow,
+	setFullscreenGuard,
 	setReactToAudio,
 	setShowEyes,
 	setTimeAnnounce,
@@ -3903,189 +3940,255 @@ async function loadUsage() {
 	applyUsage(await invoke("get_usage"));
 }
 
-// -- hub "Now" section: media card (live, from media-tick) + game / work /
+// -- hub "Now" section: one media card per live session (live, from media-tick) + game / work /
 // coding cards (polled from Rust while the hub is showing the info pane) --
 const hubMediaEl = document.getElementById("hub-media");
-const hubMediaArt = document.getElementById("hub-media-art");
-const hubMediaTitle = document.getElementById(
-	"hub-media-title",
-);
-const hubMediaArtist = document.getElementById(
-	"hub-media-artist",
-);
-const hubMediaPlay = document.getElementById("hub-media-play");
-const hubMediaPrev = document.getElementById("hub-media-prev");
-const hubMediaNext = document.getElementById("hub-media-next");
-const hubMediaSeek = document.getElementById("hub-media-seek");
-const hubMediaSeekFill = document.getElementById(
-	"hub-media-seek-fill",
-);
-const hubMediaBack = document.getElementById("hub-media-back");
-const hubMediaFwd = document.getElementById("hub-media-fwd");
-const hubMediaRate = document.getElementById("hub-media-rate");
-const hubMediaRateLabel = document.getElementById(
-	"hub-media-rate-label",
-);
-const hubMediaRates = document.getElementById(
-	"hub-media-rates",
-);
 const nowCardsEl = document.getElementById("now-cards");
 // cards the user has opened (all start collapsed); kept by key so a re-render keeps them open
 const openCards = new Set();
 
-hubMediaPrev.innerHTML = ICON.prev;
 // the jump buttons: a circular arrow with the number inside (the forward one is the mirror image)
 const JUMP_SVG = (flip) =>
 	`<svg viewBox="0 0 16 16"><g${flip ? ' transform="translate(16 0) scale(-1 1)"' : ""}><path d="M3.2 8a4.8 4.8 0 1 1 1.4 3.4M3 4v3.2h3.2"/></g><text x="8" y="10.2" text-anchor="middle">5</text></svg>`;
-hubMediaBack.innerHTML = JUMP_SVG(false);
-hubMediaFwd.innerHTML = JUMP_SVG(true);
 // speed: a dropdown of fixed steps from 0.1x to 16x
 const RATES = [
 	0.1, 0.25, 0.5, 0.75, 1, 1.25, 1.5, 1.75, 2, 3, 4, 8, 16,
 ];
 const rateText = (r) => `${Number(r.toFixed(2))}×`;
-let hubMediaRateNow = 1;
-hubMediaNext.innerHTML = ICON.next;
-let hubMediaDuration = 0;
-let hubMediaSource = "";
-let hubMediaTitleText = "";
 let hubHasMedia = false;
 let hubHasActivity = false;
 
 // (an empty list just stays empty -- no placeholder text; callers still call this)
 function updateInfoEmpty() {}
 
-function applyHubMedia(m) {
-	hubHasMedia = !!(m && m.has_session);
-	hubMediaEl.classList.toggle("hidden", !hubHasMedia);
-	updateInfoEmpty();
-	if (!hubHasMedia) return;
-	hubMediaTitle.textContent = m.title || "";
-	hubMediaSource = m.source || "";
-	hubMediaTitleText = m.title || "";
-	hubMediaArtist.textContent = m.artist || "";
-	if (m.art) hubMediaArt.src = m.art;
-	hubMediaArt.classList.toggle("hidden", !m.art);
-	setPlayIcon(hubMediaPlay, m.playing);
-	hubMediaPrev.classList.toggle("hidden", !m.can_previous);
-	hubMediaNext.classList.toggle("hidden", !m.can_next);
+// one entry per live media card; [0] wraps the static #hub-media card,
+// the rest are built to the same shape (classes, never duplicate ids)
+const hubMediaCards = [];
+
+function wrapHubMediaCard(root, index) {
+	const q = (id, cls) =>
+		root.querySelector(`#${CSS.escape(id)}, .${cls}`) ||
+		root.querySelector(`.${cls}`);
+	const card = {
+		root,
+		art: q("hub-media-art", "hub-media-art"),
+		title: q("hub-media-title", "hub-media-title"),
+		artist: q("hub-media-artist", "hub-media-artist"),
+		play: q("hub-media-play", "hub-media-play"),
+		prev: q("hub-media-prev", "hub-media-prev"),
+		next: q("hub-media-next", "hub-media-next"),
+		seek: q("hub-media-seek", "hub-media-seek"),
+		seekFill: q("hub-media-seek-fill", "hub-media-seek-fill"),
+		back: q("hub-media-back", "hub-media-back"),
+		fwd: q("hub-media-fwd", "hub-media-fwd"),
+		rate: q("hub-media-rate", "hub-media-rate"),
+		rateLabel: q("hub-media-rate-label", "hub-media-rate-label"),
+		rates: q("hub-media-rates", "hub-media-rates"),
+		extra: q("hub-media-extra", "hub-media-extra"),
+		source: "",
+		titleText: "",
+		duration: 0,
+		rateNow: 1,
+	};
+	wireHubMediaCard(card, index);
+	hubMediaCards[index] = card;
+	return card;
+}
+
+function buildHubMediaCard(index) {
+	const root = document.createElement("div");
+	root.className = "now-card spot hub-media";
+	root.innerHTML =
+		`<div class="now-row">` +
+		`<img class="now-icon hub-media-art" alt="" />` +
+		`<div class="now-text"><div class="now-title hub-media-title"></div>` +
+		`<div class="now-sub hub-media-artist"></div></div>` +
+		`<div class="now-controls">` +
+		`<button class="hub-media-prev" data-tip="Previous"></button>` +
+		`<button class="hub-media-play" data-tip="Play / Pause"></button>` +
+		`<button class="hub-media-next" data-tip="Next"></button>` +
+		`</div></div>` +
+		`<div class="media-extra hub-media-extra">` +
+		`<button class="media-jump hub-media-back" data-tip="Back 5 seconds"></button>` +
+		`<div class="now-seek hub-media-seek hidden"><div class="hub-media-seek-fill"></div></div>` +
+		`<button class="media-jump hub-media-fwd" data-tip="Forward 5 seconds"></button>` +
+		`<button class="media-rate hub-media-rate" data-tip="Playback speed">` +
+		`<span class="hub-media-rate-label">1×</span></button>` +
+		`</div><div class="rate-menu hub-media-rates hidden"></div>`;
+	if (hubMediaCards.length > 1)
+		hubMediaCards[hubMediaCards.length - 1].root.after(root);
+	else hubMediaEl.after(root);
+	return wrapHubMediaCard(root, index);
+}
+
+function wireHubMediaCard(card, index) {
+	card.prev.innerHTML = ICON.prev;
+	card.next.innerHTML = ICON.next;
+	card.back.innerHTML = JUMP_SVG(false);
+	card.fwd.innerHTML = JUMP_SVG(true);
+	for (const r of RATES) {
+		const o = el("button", "rate-opt", rateText(r));
+		o.dataset.rate = String(r);
+		o.addEventListener("click", async () => {
+			card.rates.classList.add("hidden");
+			card.rateLabel.textContent = rateText(r);
+			scheduleHubHeight();
+			await invoke("media_set_rate", {
+				rate: r,
+				source: card.source,
+			}); // the next update shows the speed the player took
+		});
+		card.rates.append(o);
+	}
+	for (const btn of [
+		card.play,
+		card.prev,
+		card.next,
+		card.seek,
+		card.back,
+		card.fwd,
+		card.rate,
+		card.rates,
+	]) {
+		btn.addEventListener("mousedown", (e) =>
+			e.stopPropagation(),
+		);
+	}
+	// clicking the card itself (not its buttons / seek bar) jumps to whoever is playing
+	card.root.classList.add("clickable");
+	collapsible(card.root, `media:${index}`);
+	card.root.addEventListener("mousedown", (e) =>
+		e.stopPropagation(),
+	);
+	const focus = () =>
+		invoke("focus_source", {
+			titleHint: card.titleText,
+			sourceId: card.source,
+		});
+	card.root.addEventListener("click", (e) => {
+		if (
+			e.target.closest("button, .now-seek") ||
+			(e.target.closest(".now-row") &&
+				!card.root.classList.contains("flat-card"))
+		)
+			return; // the header toggles the card
+		focus();
+	});
+	card.root.addEventListener("dblclick", (e) => {
+		if (
+			!card.root.classList.contains("flat-card") &&
+			card.root._inHeader(e)
+		)
+			focus();
+	});
+	card.play.addEventListener("click", () =>
+		invoke("media_play_pause", { source: card.source }),
+	);
+	card.prev.addEventListener("click", () =>
+		invoke("media_previous", { source: card.source }),
+	);
+	card.next.addEventListener("click", () =>
+		invoke("media_next", { source: card.source }),
+	);
+	card.back.addEventListener("click", () =>
+		invoke("media_seek_by", {
+			deltaSeconds: -5,
+			source: card.source,
+		}),
+	);
+	card.fwd.addEventListener("click", () =>
+		invoke("media_seek_by", {
+			deltaSeconds: 5,
+			source: card.source,
+		}),
+	);
+	card.rate.addEventListener("click", () => {
+		card.rates.classList.toggle("hidden");
+		scheduleHubHeight();
+	});
+	card.seek.addEventListener("click", (e) => {
+		if (!(card.duration > 0)) return;
+		const rect = card.seek.getBoundingClientRect();
+		const frac = Math.max(
+			0,
+			Math.min(1, (e.clientX - rect.left) / rect.width),
+		);
+		invoke("media_seek", {
+			positionSeconds: frac * card.duration,
+			source: card.source,
+		});
+		card.seekFill.style.width = `${frac * 100}%`;
+	});
+}
+
+function applyHubMediaCard(card, m) {
+	card.title.textContent = m.title || "";
+	card.source = m.source || "";
+	card.titleText = m.title || "";
+	card.artist.textContent = m.artist || "";
+	if (m.art) card.art.src = m.art;
+	card.art.classList.toggle("hidden", !m.art);
+	setPlayIcon(card.play, m.playing);
+	card.prev.classList.toggle("hidden", !m.can_previous);
+	card.next.classList.toggle("hidden", !m.can_next);
 	// live streams report no duration -- nothing to seek in, so no bar
-	hubMediaDuration = m.duration || 0;
-	hubMediaSeek.classList.toggle(
+	card.duration = m.duration || 0;
+	card.seek.classList.toggle(
 		"hidden",
-		!(hubMediaDuration > 0),
+		!(card.duration > 0),
 	);
 	// jump buttons need a player that takes seeks; the speed slider one that takes a speed
-	hubMediaBack.classList.toggle("hidden", !m.can_seek);
-	hubMediaFwd.classList.toggle("hidden", !m.can_seek);
+	card.back.classList.toggle("hidden", !m.can_seek);
+	card.fwd.classList.toggle("hidden", !m.can_seek);
 	// the speed dropdown only exists for a player that takes a speed
-	hubMediaRate.classList.toggle("hidden", !m.can_rate);
-	if (!m.can_rate) hubMediaRates.classList.add("hidden");
-	hubMediaRateNow = m.rate || 1;
-	hubMediaRateLabel.textContent = rateText(hubMediaRateNow);
-	for (const o of hubMediaRates.children)
+	card.rate.classList.toggle("hidden", !m.can_rate);
+	if (!m.can_rate) card.rates.classList.add("hidden");
+	card.rateNow = m.rate || 1;
+	card.rateLabel.textContent = rateText(card.rateNow);
+	for (const o of card.rates.children)
 		o.classList.toggle(
 			"on",
-			Math.abs(Number(o.dataset.rate) - hubMediaRateNow) <
+			Math.abs(Number(o.dataset.rate) - card.rateNow) <
 				0.01,
 		);
 	// nothing to show in the row (no jumps, no speed, no seek bar): the row goes
-	document
-		.getElementById("hub-media-extra")
-		.classList.toggle(
-			"hidden",
-			!(m.can_seek || m.can_rate || hubMediaDuration > 0),
-		);
-	if (hubMediaDuration > 0) {
-		hubMediaSeekFill.style.width = `${Math.min(100, ((m.position || 0) / hubMediaDuration) * 100)}%`;
+	card.extra.classList.toggle(
+		"hidden",
+		!(m.can_seek || m.can_rate || card.duration > 0),
+	);
+	if (card.duration > 0) {
+		card.seekFill.style.width = `${Math.min(100, ((m.position || 0) / card.duration) * 100)}%`;
 	}
-	hubMediaEl._syncBody?.(); // nothing to open to (no seek bar, jumps or speed): not expandable
+	card.root._syncBody?.(); // nothing to open to (no seek bar, jumps or speed): not expandable
 }
 
-for (const btn of [
-	hubMediaPlay,
-	hubMediaPrev,
-	hubMediaNext,
-	hubMediaSeek,
-	hubMediaBack,
-	hubMediaFwd,
-	hubMediaRate,
-	hubMediaRates,
-]) {
-	btn.addEventListener("mousedown", (e) =>
-		e.stopPropagation(),
-	);
+function applyHubMediaList(list) {
+	const sessions = Array.isArray(list)
+		? list.filter((m) => m && m.has_session)
+		: mediaListOf(list);
+	hubHasMedia = sessions.length > 0;
+	// one card per session; surplus cards leave the DOM (card 0 wraps the
+	// static element and is kept, only hidden, so it is never wired twice)
+	while (hubMediaCards.length < sessions.length)
+		buildHubMediaCard(hubMediaCards.length);
+	while (hubMediaCards.length > Math.max(sessions.length, 1))
+		hubMediaCards.pop().root.remove();
+	sessions.forEach((m, i) => {
+		const card = hubMediaCards[i];
+		card.root.classList.remove("hidden");
+		applyHubMediaCard(card, m);
+	});
+	if (sessions.length === 0 && hubMediaCards.length > 0)
+		hubMediaCards[0].root.classList.add("hidden");
+	updateInfoEmpty();
 }
-// clicking the card itself (not its buttons / seek bar) jumps to whoever is playing
-hubMediaEl.classList.add("clickable");
-collapsible(hubMediaEl, "media");
-hubMediaEl.addEventListener("mousedown", (e) =>
-	e.stopPropagation(),
-);
-hubMediaEl.addEventListener("click", (e) => {
-	if (
-		e.target.closest("button, #hub-media-seek") ||
-		(e.target.closest(".now-row") &&
-			!hubMediaEl.classList.contains("flat-card"))
-	)
-		return; // the header toggles the card
-	invoke("focus_source", {
-		titleHint: hubMediaTitleText,
-		sourceId: hubMediaSource,
-	});
-});
-hubMediaEl.addEventListener("dblclick", (e) => {
-	if (
-		!hubMediaEl.classList.contains("flat-card") &&
-		hubMediaEl._inHeader(e)
-	)
-		invoke("focus_source", {
-			titleHint: hubMediaTitleText,
-			sourceId: hubMediaSource,
-		});
-});
-hubMediaPlay.addEventListener("click", () =>
-	invoke("media_play_pause"),
-);
-hubMediaPrev.addEventListener("click", () =>
-	invoke("media_previous"),
-);
-hubMediaNext.addEventListener("click", () =>
-	invoke("media_next"),
-);
-hubMediaBack.addEventListener("click", () =>
-	invoke("media_seek_by", { deltaSeconds: -5 }),
-);
-hubMediaFwd.addEventListener("click", () =>
-	invoke("media_seek_by", { deltaSeconds: 5 }),
-);
-for (const r of RATES) {
-	const o = el("button", "rate-opt", rateText(r));
-	o.dataset.rate = String(r);
-	o.addEventListener("click", async () => {
-		hubMediaRates.classList.add("hidden");
-		hubMediaRateLabel.textContent = rateText(r);
-		scheduleHubHeight();
-		await invoke("media_set_rate", { rate: r }); // the next update shows the speed the player took
-	});
-	hubMediaRates.append(o);
+
+// single-session callers (older harnesses) still work
+function applyHubMedia(m) {
+	applyHubMediaList(mediaListOf(m));
 }
-hubMediaRate.addEventListener("click", () => {
-	hubMediaRates.classList.toggle("hidden");
-	scheduleHubHeight();
-});
-hubMediaSeek.addEventListener("click", (e) => {
-	if (!(hubMediaDuration > 0)) return;
-	const rect = hubMediaSeek.getBoundingClientRect();
-	const frac = Math.max(
-		0,
-		Math.min(1, (e.clientX - rect.left) / rect.width),
-	);
-	invoke("media_seek", {
-		positionSeconds: frac * hubMediaDuration,
-	});
-	hubMediaSeekFill.style.width = `${frac * 100}%`;
-});
+
+wrapHubMediaCard(hubMediaEl, 0);
 
 const WORK_CARD_LABEL = {
 	coding: "Coding",

@@ -10,8 +10,8 @@ use windows::Win32::Graphics::Gdi::{
 };
 use windows::Win32::UI::Input::KeyboardAndMouse::{GetAsyncKeyState, VK_LBUTTON};
 use windows::Win32::UI::WindowsAndMessaging::{
-    GetCursorPos, GetWindowLongPtrW, SetWindowLongPtrW, SetWindowPos, GWL_EXSTYLE, HWND_TOPMOST,
-    SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOOWNERZORDER, SWP_NOSIZE, SWP_NOZORDER, WS_EX_LAYERED, WS_EX_TRANSPARENT,
+    GetCursorPos, GetForegroundWindow, GetWindowLongPtrW, GetWindowLongW, GetWindowRect, SetWindowLongPtrW, SetWindowPos, GWL_EXSTYLE, GWL_STYLE, HWND_TOPMOST,
+    SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOOWNERZORDER, SWP_NOSIZE, SWP_NOZORDER, WS_CAPTION, WS_EX_LAYERED, WS_EX_TRANSPARENT,
 };
 
 /// Ask Windows for 1 ms timer resolution. Without it a 16 ms sleep really lasts
@@ -89,6 +89,37 @@ pub struct MonitorGeometry {
 /// swallow the DOM `mouseup` the webview would otherwise get.
 pub fn left_button_down() -> bool {
     unsafe { GetAsyncKeyState(VK_LBUTTON.0 as i32) as u16 & 0x8000 != 0 }
+}
+
+/// Whether the current foreground window is truly fullscreen on `geo`:
+/// covers the whole monitor AND has no title bar (`WS_CAPTION`), i.e.
+/// exclusive-fullscreen or borderless-fullscreen. A maximized browser/IDE
+/// still carries its caption even filling the screen, so alt-tabbing from a
+/// game to a maximized window summons the island normally. A 2 px tolerance
+/// absorbs window borders; the island's own window never qualifies (it is a
+/// small pill) but is excluded anyway via `exclude_hwnd`.
+pub fn foreground_fullscreen_on(geo: MonitorGeometry, exclude_hwnd: isize) -> bool {
+    unsafe {
+        let fg = GetForegroundWindow();
+        if fg.is_invalid() || fg.0 as isize == exclude_hwnd {
+            return false;
+        }
+        // caption first: cheap, and rules out every maximized normal window
+        let style = GetWindowLongW(fg, GWL_STYLE) as u32;
+        if style & WS_CAPTION.0 != 0 {
+            return false;
+        }
+        let mut rect = RECT::default();
+        if GetWindowRect(fg, &mut rect).is_err() {
+            return false;
+        }
+        // the covering window may live on another monitor -- only block the
+        // edge it actually covers (the cursor's own monitor)
+        rect.left <= geo.x + 2
+            && rect.top <= geo.y + 2
+            && rect.right >= geo.x + geo.width - 2
+            && rect.bottom >= geo.y + geo.height - 2
+    }
 }
 
 /// Global cursor position in physical screen pixels, regardless of which
