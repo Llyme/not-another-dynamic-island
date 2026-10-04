@@ -1,4 +1,5 @@
 mod activity;
+mod ext;
 mod audio;
 mod background;
 mod calendar;
@@ -16,7 +17,7 @@ mod gamestats;
 mod llm;
 mod pagekind;
 mod pagetext;
-mod uia;
+mod page;
 mod project;
 mod scan;
 mod notify_listener;
@@ -190,6 +191,8 @@ pub(crate) struct IslandState {
     pub(crate) usage: usage::UsageState,
     pub(crate) calendar: calendar::CalendarState,
     pub(crate) activity: activity::ActivityState,
+    /// the browser extension's connection and what it has said about the pages
+    pub(crate) ext: ext::ExtState,
     pub(crate) gpu: gpu::GpuState,
     pub(crate) game_meter: std::sync::Mutex<gamestats::GameMeter>,
     pub(crate) sys: std::sync::Mutex<sysinfo::System>,
@@ -249,6 +252,7 @@ impl Default for IslandState {
             usage: usage::UsageState::default(),
             calendar: calendar::CalendarState::default(),
             activity: activity::ActivityState::default(),
+            ext: ext::ExtState::default(),
             gpu: gpu::GpuState::default(),
             game_meter: std::sync::Mutex::new(gamestats::GameMeter::default()),
             sys: std::sync::Mutex::new(stats::new_system()),
@@ -1101,6 +1105,7 @@ pub fn run() {
             open_notification_action,
             dismiss_notification,
             click_notification,
+            ext::ext_status,
             focus::focus_source,
             toggle_pin,
             media::media_play_pause,
@@ -1174,6 +1179,7 @@ pub fn run() {
             audio::spawn(app.handle().clone(), window.state::<Arc<IslandState>>().inner().clone());
             project::spawn(window.state::<Arc<IslandState>>().inner().clone());
     browse::spawn(window.state::<Arc<IslandState>>().inner().clone());
+    ext::spawn(window.state::<Arc<IslandState>>().inner().clone());
     downloads::spawn(window.state::<Arc<IslandState>>().inner().clone());
     // screenshot aid: `DI_OPEN_SETTINGS=1` opens the hub on its settings pane shortly after launch
     if std::env::var_os("DI_OPEN_SETTINGS").is_some() {

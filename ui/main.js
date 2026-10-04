@@ -2685,7 +2685,7 @@ const hubEl = document.getElementById("hub");
 		"set-llm-brief":
 			"Drop the island down when a Claude Code session needs you or finishes",
 		"set-page-preview":
-			"Read the page in front of you: what kind it is, where you are in it (never a private window, never banking, mail or health sites)",
+			"Read the page in front of you through the browser extension: what kind it is, where you are in it. Needs the extension (never a private window, never banking, mail or health sites)",
 		"set-page-blocklist":
 			"Sites that are never read, besides banking, mail and health: domains or words, separated by commas",
 		"set-start-with-windows": "Start with Windows",
@@ -2941,7 +2941,7 @@ async function loadSettingsIntoForm() {
 	setLlmDetection.checked =
 		currentSettings.llm_detection ?? true;
 	setLlmBrief.checked = currentSettings.llm_brief ?? true;
-	setPagePreview.checked = currentSettings.page_preview;
+	syncPageToggle();
 	setPageBlocklist.value =
 		currentSettings.page_blocklist || "";
 	setPageBlocklist
@@ -3055,7 +3055,10 @@ function saveSettingsFromForm() {
 		download_detection: setDownloadDetection.checked,
 		llm_detection: setLlmDetection.checked,
 		llm_brief: setLlmBrief.checked,
-		page_preview: setPagePreview.checked,
+		// locked (and shown off) while no extension is connected: the saved choice stays
+		page_preview: setPagePreview.disabled
+			? currentSettings.page_preview
+			: setPagePreview.checked,
 		page_blocklist: setPageBlocklist.value.trim(),
 		start_with_windows: setStartWithWindows.checked,
 		idle_hide_delay_s: Number(setIdleHideDelay.value),
@@ -3145,7 +3148,36 @@ const SET_TABS = [
 	{ id: "time", icon: "clock", tip: "Time" },
 	{ id: "calendar", icon: "calendar", tip: "Calendar" },
 ];
+// the browser extension: which browsers have it connected. Reading pages needs it, so the Page Reader
+// switch is locked (and shown off) until one is.
+const BROWSER_NAME = { msedge: "Edge", chrome: "Chrome", brave: "Brave", opera: "Opera", vivaldi: "Vivaldi" };
+let extConnected = false;
+function syncPageToggle() {
+	setPagePreview.disabled = !extConnected;
+	setPagePreview.checked =
+		extConnected && !!currentSettings?.page_preview;
+	setPagePreview.closest(".hub-row")?.classList.toggle("locked", !extConnected);
+}
+async function refreshExtStatus() {
+	const el = document.getElementById("ext-status");
+	try {
+		const list = await invoke("ext_status");
+		extConnected = list.length > 0;
+		el.textContent = extConnected
+			? `Connected \u00b7 ${list.map((b) => BROWSER_NAME[b] || b).join(", ")}`
+			: "Not connected";
+		el.classList.toggle("on", extConnected);
+		syncPageToggle();
+	} catch (_) {}
+}
+// the extension may connect or leave while the settings are open
+setInterval(() => {
+	if (document.getElementById("ext-status")?.offsetParent) refreshExtStatus();
+}, 4000);
+refreshExtStatus();
+
 function showSettingsTab(id) {
+  if (id === "general") refreshExtStatus();
 	for (const p of document.querySelectorAll(
 		"#pane-settings .set-tab",
 	))
@@ -4579,8 +4611,6 @@ function pageButton(b) {
 		btn.disabled = true;
 		const ok = await invoke("click_page_button", {
 			label: b.label,
-			x: b.x,
-			y: b.y,
 		});
 		btn.classList.add(ok ? "done" : "fail");
 		setTimeout(

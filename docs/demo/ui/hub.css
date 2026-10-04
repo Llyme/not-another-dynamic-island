@@ -2731,3 +2731,11 @@ svg.li {
   content: "\2248\00a0";
   color: var(--fg-dim);
 }
+
+#ext-status.on {
+  color: var(--accent);
+}
+
+.hub-row.locked {
+  opacity: 0.5;
+}

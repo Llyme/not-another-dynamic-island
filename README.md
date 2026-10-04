@@ -19,11 +19,13 @@ It is Windows-only for now. The goal is to stay light: it should never make the 
   article, video, recipe, Q&A thread, API reference, product page, search results, web app such as a pull
   request) and says what matters for that kind: the step you are on and the next one, the section you are in,
   the minutes left, the answers on a question. The work pill names the page and how far down you are. It
-  works in tiers, cheapest first: the address and window title, then the page's structure through UI
-  Automation (the accessibility tree screen readers use, no extension, one full read per page and a cheap
-  scroll poll after that), then OCR if there is no tree. Private and incognito windows and banking, mail, health
-  and password-manager sites are never read, and you can add your own sites in Settings. Nothing is stored or
-  sent. Turn it off with Settings > Page Text.
+  needs the browser extension ([nadi-chrome](https://github.com/Llyme/nadi-chrome), Chrome, Edge, Brave, Opera,
+  Vivaldi): the page describes itself (its metadata, headings, video clock, scroll), exactly, and costs the
+  browser next to nothing. Without the extension the Page Reader switch in Settings is locked, and a browser is
+  not read at all (the card keeps to the window title). The extension connects over a WebSocket on 127.0.0.1
+  (ports 47653 to 47657) and NADI only accepts a browser extension's origin. Private and incognito windows and
+  banking, mail, health and password-manager sites are never read, nor are sign-in pages, and you can add your
+  own sites in Settings. Nothing is stored or sent. Settings > General shows whether the extension is connected.
 - **Downloads.** Active downloads from browsers, Steam and qBittorrent, in one card. Finished ones open
   their folder or can be put away with a click.
 - **Notifications.** Captures the notifications of all apps.

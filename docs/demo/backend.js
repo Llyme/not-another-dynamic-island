@@ -321,6 +321,8 @@
     st.dragGrabDx = ptr.x - st.posX;
   };
   C.get_settings = () => ({ ...settings });
+  // the demo's browser describes its page itself, like the NADI Page Reader extension does
+  C.ext_status = () => ["msedge"];
   C.save_settings = ({ settings: s }) => {
     const accent = settings.accent_color;
     settings = { ...s };

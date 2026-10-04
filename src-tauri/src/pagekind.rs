@@ -5,20 +5,17 @@
 //!
 //! * the address (domain and path patterns),
 //! * the window title (its shape: " - Wikipedia", "How to ...", "Pull Request #212"),
-//! * the page's structure from UI Automation (headings like "Step 3", "Ingredients", a price and an
+//! * the page's structure from the browser extension (headings like "Step 3", "Ingredients", a price and an
 //!   "Add to cart" button, a "0:34 / 4:12" timer),
-//! * the OCR lines of the window when there is no tree (the same anchors, trusted less),
-//! * the browsing trail (the page you came from).
+//! * the page's own metadata from the extension (JSON-LD, Open Graph, the video's clock).
 //!
 //! Below `MIN_CONFIDENCE` nothing is claimed and the card stays a plain page card. Everything here is pure:
 //! it takes what was read and returns what to show, so it is tested without a browser.
 
-use crate::uia::{Node, NodeKind, Page};
+use crate::page::{Node, NodeKind, Page};
 use serde::Serialize;
 
 pub const MIN_CONFIDENCE: f32 = 0.6;
-/// OCR has no structure and misreads: its anchors count for this much of a tree's
-const OCR_TRUST: f32 = 0.6;
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Kind {
@@ -85,23 +82,13 @@ impl Kind {
     }
 }
 
-/// The page you came from, from the browser history.
-#[derive(Default, Clone, Debug)]
-pub struct Trail {
-    pub prev_title: Option<String>,
-    pub prev_url: Option<String>,
-    /// this exact address was visited before today's visit
-    pub seen_before: bool,
-}
-
 pub struct Evidence<'a> {
     pub url: Option<&'a str>,
     /// the window title without the browser's name
     pub title: &'a str,
     pub page: Option<&'a Page>,
-    /// OCR lines, used only when there is no tree
-    pub ocr: &'a [String],
-    pub trail: &'a Trail,
+    /// what the browser extension said about the page (metadata, video), when it is connected
+    pub ext: Option<&'a crate::ext::ExtData>,
 }
 
 #[derive(Serialize, Clone, Debug)]
@@ -483,15 +470,7 @@ fn vote_title(v: &mut Votes, title: &str) {
     }
 }
 
-fn vote_trail(v: &mut Votes, trail: &Trail) {
-    if let Some(t) = trail.prev_title.as_deref().map(lc) {
-        if has_any(&t, &["step ", "part ", "tutorial", "how to "]) {
-            v.add(Kind::Walkthrough, 0.2);
-        }
-    }
-}
-
-/// The anchors of every kind, found in a list of texts (a tree's names or OCR lines). `trust` scales the weights.
+/// The anchors of every kind, found in a list of texts (the page's nodes). `trust` scales the weights.
 fn vote_texts(v: &mut Votes, texts: &[(&str, Option<NodeKind>)], trust: f32) {
     let lower: Vec<(String, Option<NodeKind>)> = texts.iter().map(|(t, k)| (lc(t), *k)).collect();
     let heading = |k: &Option<NodeKind>| matches!(k, Some(NodeKind::Heading(_)) | None);
@@ -731,6 +710,12 @@ fn paragraphs(nodes: &[Node]) -> Vec<(String, usize)> {
     for (i, n) in nodes.iter().enumerate() {
         if !matches!(n.kind, NodeKind::Text | NodeKind::Link) {
             flush(&mut cur, &mut out, first);
+            prev = None;
+            continue;
+        }
+        if n.block {
+            flush(&mut cur, &mut out, first);
+            out.push((n.name.trim().to_string(), i));
             prev = None;
             continue;
         }
@@ -1074,9 +1059,6 @@ fn fields_for(kind: Kind, ev: &Evidence) -> (Vec<PageField>, String, String, Opt
                 if let Some(pr) = prog {
                     f.push(field("Progress", pct(pr), false));
                 }
-                if let Some(t) = ev.trail.prev_title.as_deref().filter(|t| lc(t).contains("part ")) {
-                    f.push(field("Came from", short(t, 50), false));
-                }
                 return (f, m, sub, prog);
             }
             f.push(field("Guide", short(&title, 60), true));
@@ -1256,9 +1238,6 @@ fn fields_for(kind: Kind, ev: &Evidence) -> (Vec<PageField>, String, String, Opt
             if let Some(n) = nodes.iter().find(|n| n.name.len() < 40 && has_any(&lc(&n.name), &["in stock", "out of stock", "left in stock"])) {
                 f.push(field("Stock", short(&n.name, 36), false));
             }
-            if ev.trail.seen_before {
-                f.push(field("Seen before", "You looked at this one earlier", false));
-            }
         }
         Kind::Search => {
             let q = ev.url.and_then(query_of).unwrap_or_else(|| strip_site(ev.title));
@@ -1373,22 +1352,293 @@ pub fn read(ev: &Evidence) -> Option<PageKind> {
         vote_url(&mut v, &u);
     }
     vote_title(&mut v, ev.title);
-    vote_trail(&mut v, ev.trail);
-    match ev.page {
-        Some(p) if p.nodes.len() >= 8 => vote_texts(&mut v, &lines_of(&p.nodes), 1.0),
-        _ => {
-            if !ev.ocr.is_empty() {
-                let lines: Vec<(&str, Option<NodeKind>)> = ev.ocr.iter().map(|l| (l.as_str(), None)).collect();
-                vote_texts(&mut v, &lines, OCR_TRUST);
-            }
-        }
+    if let Some(d) = ev.ext {
+        vote_ext(&mut v, d);
+    }
+    if let Some(p) = ev.page.filter(|p| p.nodes.len() >= 8) {
+        vote_texts(&mut v, &lines_of(&p.nodes), 1.0);
     }
     let (kind, conf) = v.best();
     if conf < MIN_CONFIDENCE {
         return None;
     }
-    let (fields, main, sub, progress) = fields_for(kind, ev);
+    let (mut fields, mut main, mut sub, mut progress) = fields_for(kind, ev);
+    if let Some(d) = ev.ext {
+        enrich(kind, d, &mut fields, &mut main, &mut sub, &mut progress);
+    }
     Some(PageKind { id: kind.id(), label: kind.label(), confidence: conf, fields, main, sub, progress })
+}
+
+// ---- what the page says about itself (from the browser extension) ---------------------------------------------
+
+/// The page's own metadata is the strongest evidence there is: a page that says it is a Recipe is one.
+fn vote_ext(v: &mut Votes, d: &crate::ext::ExtData) {
+    for it in &d.ld {
+        for t in &it.types {
+            match t.as_str() {
+                "Recipe" => v.add(Kind::Recipe, 0.95),
+                "HowTo" => v.add(Kind::Walkthrough, 0.95),
+                "NewsArticle" | "ReportageNewsArticle" | "AnalysisNewsArticle" | "OpinionNewsArticle" | "BackgroundNewsArticle" | "LiveBlogPosting" => v.add(Kind::News, 0.9),
+                "Article" | "BlogPosting" => v.add(Kind::News, 0.5),
+                "TechArticle" => {
+                    v.add(Kind::Api, 0.3);
+                    v.add(Kind::Walkthrough, 0.3);
+                }
+                "Product" | "ProductGroup" => v.add(Kind::Product, 0.95),
+                "VideoObject" => v.add(Kind::Video, 0.9),
+                "QAPage" | "Question" => v.add(Kind::Qna, 0.9),
+                "FAQPage" => v.add(Kind::Qna, 0.35),
+                "SearchResultsPage" => v.add(Kind::Search, 0.9),
+                "SocialMediaPosting" => v.add(Kind::Social, 0.9),
+                "DiscussionForumPosting" => v.add(Kind::Social, 0.6),
+                "ProfilePage" => v.add(Kind::Social, 0.4),
+                "WebApplication" | "SoftwareApplication" => v.add(Kind::WebApp, 0.3),
+                _ => {}
+            }
+        }
+    }
+    if let Some(t) = d.meta.og_type.as_deref().map(lc) {
+        if t == "article" {
+            v.add(Kind::News, 0.4);
+        } else if t.starts_with("video") {
+            v.add(Kind::Video, 0.8);
+        } else if t.starts_with("product") {
+            v.add(Kind::Product, 0.8);
+        } else if t == "profile" {
+            v.add(Kind::Social, 0.4);
+        }
+    }
+    if let Some(g) = d.meta.generator.as_deref().map(lc) {
+        if g.contains("mediawiki") {
+            v.add(Kind::Wiki, 0.9);
+        } else if g.contains("dokuwiki") || g.contains("wiki") {
+            v.add(Kind::Wiki, 0.6);
+        }
+    }
+    if !d.meta.facts.is_empty() {
+        v.add(Kind::Wiki, 0.3);
+    }
+    if d.video.as_ref().map_or(false, |x| x.dur >= 20.0) {
+        v.add(Kind::Video, 0.5);
+    }
+}
+
+fn fmt_mins(m: u32) -> String {
+    if m >= 60 {
+        if m % 60 == 0 { format!("{} h", m / 60) } else { format!("{} h {} min", m / 60, m % 60) }
+    } else {
+        format!("{m} min")
+    }
+}
+
+fn money(amount: &str, currency: Option<&str>) -> String {
+    let sym = match currency.map(|c| c.to_uppercase()).as_deref() {
+        Some("USD") => "$".to_string(),
+        Some("EUR") => "\u{20ac}".to_string(),
+        Some("GBP") => "\u{a3}".to_string(),
+        Some("JPY") | Some("CNY") => "\u{a5}".to_string(),
+        Some("PHP") => "\u{20b1}".to_string(),
+        Some(c) => format!("{c} "),
+        None => String::new(),
+    };
+    format!("{sym}{amount}")
+}
+
+/// "2026-10-02T06:00:00Z" -> "2 h ago"; an older date as "Mar 2, 2025"
+fn ago(iso: &str) -> Option<String> {
+    use chrono::{DateTime, NaiveDate, Utc};
+    let then = DateTime::parse_from_rfc3339(iso).map(|d| d.with_timezone(&Utc)).ok().or_else(|| {
+        let day = iso.get(..10)?;
+        NaiveDate::parse_from_str(day, "%Y-%m-%d").ok()?.and_hms_opt(12, 0, 0).map(|d| d.and_utc())
+    })?;
+    let mins = (Utc::now() - then).num_minutes();
+    Some(if mins < -5 {
+        then.format("%b %-d, %Y").to_string()
+    } else if mins < 2 {
+        "just now".to_string()
+    } else if mins < 60 {
+        format!("{mins} min ago")
+    } else if mins < 24 * 60 {
+        format!("{} h ago", mins / 60)
+    } else if mins < 48 * 60 {
+        "yesterday".to_string()
+    } else if mins < 30 * 24 * 60 {
+        format!("{} d ago", mins / (24 * 60))
+    } else {
+        then.format("%b %-d, %Y").to_string()
+    })
+}
+
+fn thousands(n: u64) -> String {
+    let s = n.to_string();
+    let mut out = String::new();
+    for (i, c) in s.chars().enumerate() {
+        if i > 0 && (s.len() - i) % 3 == 0 {
+            out.push(',');
+        }
+        out.push(c);
+    }
+    out
+}
+
+fn rating_text(r: &crate::ext::Rating) -> Option<String> {
+    let v = r.value?;
+    Some(match r.count {
+        Some(c) if c > 0 => format!("{v:.1} \u{b7} {} reviews", thousands(c)),
+        _ => format!("{v:.1}"),
+    })
+}
+
+/// Put a field in, or replace what a looser reading said: the page's own words win.
+fn put(f: &mut Vec<PageField>, key: &'static str, value: String) {
+    if let Some(x) = f.iter_mut().find(|x| x.key == key) {
+        x.value = value;
+        x.rough = false;
+        return;
+    }
+    let at = f.iter().position(|x| x.key == "Progress").unwrap_or(f.len());
+    f.insert(at, PageField { key, value, rough: false });
+}
+
+fn ld_of<'a>(d: &'a crate::ext::ExtData, ty: &str) -> Option<&'a crate::ext::LdItem> {
+    d.ld.iter().find(|i| i.is(ty))
+}
+
+/// What the page's own metadata and video add to a reading of its text.
+fn enrich(kind: Kind, d: &crate::ext::ExtData, f: &mut Vec<PageField>, main: &mut String, sub: &mut String, progress: &mut Option<f32>) {
+    match kind {
+        Kind::Recipe => {
+            if let Some(r) = ld_of(d, "Recipe") {
+                let time = r.total.or_else(|| match (r.prep, r.cook) {
+                    (Some(a), Some(b)) => Some(a + b),
+                    (a, b) => a.or(b),
+                });
+                if let Some(t) = time {
+                    put(f, "Time", match &r.yields {
+                        Some(y) => format!("{} \u{b7} {}", fmt_mins(t), y),
+                        None => fmt_mins(t),
+                    });
+                    if sub == "Recipe" {
+                        *sub = fmt_mins(t);
+                    }
+                } else if let Some(y) = &r.yields {
+                    put(f, "Serves", y.clone());
+                }
+                if let Some(n) = r.ingredients {
+                    put(f, "Ingredients", format!("{n} items"));
+                }
+                if let Some(t) = r.rating.as_ref().and_then(rating_text) {
+                    put(f, "Rating", t);
+                }
+                if !r.steps.is_empty() && !f.iter().any(|x| x.key == "Step now") {
+                    put(f, "Steps", format!("{}", r.steps.len()));
+                }
+            }
+        }
+        Kind::Walkthrough => {
+            if let Some(h) = ld_of(d, "HowTo") {
+                if let Some(t) = h.total {
+                    put(f, "Time", fmt_mins(t));
+                }
+                if !h.steps.is_empty() && !f.iter().any(|x| x.key == "Step") {
+                    put(f, "Steps", format!("{}", h.steps.len()));
+                }
+            }
+        }
+        Kind::Wiki => {
+            if !d.meta.facts.is_empty() {
+                let facts: Vec<String> = d.meta.facts.iter().take(3).map(|(k, v)| format!("{k}: {}", short(v, 28))).collect();
+                put(f, "Facts", facts.join(" \u{b7} "));
+            }
+        }
+        Kind::News => {
+            let art = d.ld.iter().find(|i| i.is("NewsArticle") || i.is("Article") || i.is("BlogPosting") || i.is("ReportageNewsArticle"));
+            let by = d.meta.author.clone().or_else(|| art.and_then(|a| a.author.clone()));
+            if let Some(b) = by {
+                put(f, "Byline", short(b.trim().trim_start_matches("By ").trim_start_matches("by "), 40));
+            }
+            let when = d.meta.published.clone().or_else(|| art.and_then(|a| a.published.clone())).and_then(|p| ago(&p));
+            if let Some(w) = &when {
+                put(f, "Published", w.clone());
+            }
+            let outlet = d.meta.site.clone().or_else(|| art.and_then(|a| a.publisher.clone()));
+            if let Some(o) = &outlet {
+                put(f, "Outlet", o.clone());
+            }
+            if let Some(sec) = d.meta.section.clone().or_else(|| art.and_then(|a| a.section.clone())) {
+                put(f, "Section", short(&sec, 30));
+            }
+            if let (Some(pr), true) = (*progress, d.words > 200) {
+                let left = (d.words as f32 * (1.0 - pr) / 230.0).ceil() as u32;
+                put(f, "Read time", if left <= 1 { "about 1 min left".to_string() } else { format!("about {left} min left") });
+            }
+            if let Some(o) = &outlet {
+                *sub = match &when {
+                    Some(w) => format!("{o} \u{b7} {w}"),
+                    None => o.clone(),
+                };
+            }
+        }
+        Kind::Video => {
+            let ld = ld_of(d, "VideoObject");
+            if let Some(a) = ld.and_then(|v| v.author.clone()).or_else(|| d.meta.author.clone()) {
+                put(f, "Channel", short(&a, 40));
+            }
+            if let Some(v) = d.video.as_ref().filter(|v| v.dur > 0.0) {
+                let left = (v.dur - v.cur).max(0.0);
+                put(f, "Time", format!("{} left of {}", fmt_clock(left), fmt_clock(v.dur)));
+                let state = if v.ended { "Ended".to_string() } else if v.paused { "Paused".to_string() } else if (v.rate - 1.0).abs() > 0.01 { format!("Playing at {}\u{d7}", (v.rate * 100.0).round() / 100.0) } else { "Playing".to_string() };
+                put(f, "State", state);
+                *sub = format!("{} left", fmt_clock(left));
+                *progress = Some((v.cur / v.dur).clamp(0.0, 1.0));
+            } else if let Some(m) = ld.and_then(|v| v.length) {
+                put(f, "Length", fmt_mins(m));
+            }
+        }
+        Kind::Product => {
+            let p = ld_of(d, "Product").or_else(|| ld_of(d, "ProductGroup"));
+            let offer = p.and_then(|x| x.offer.as_ref());
+            let price = offer.and_then(|o| o.price.as_deref().map(|a| money(a, o.currency.as_deref()))).or_else(|| d.meta.price.as_deref().map(|a| money(a, d.meta.currency.as_deref())));
+            if let Some(pr) = price {
+                put(f, "Price", pr.clone());
+                *sub = pr;
+            }
+            if let Some(a) = offer.and_then(|o| o.availability.as_deref()) {
+                let text = match a {
+                    "InStock" | "InStoreOnly" | "OnlineOnly" => "In stock",
+                    "OutOfStock" | "SoldOut" => "Out of stock",
+                    "PreOrder" | "PreSale" => "Pre-order",
+                    "BackOrder" => "Back-ordered",
+                    "LimitedAvailability" => "Few left",
+                    _ => "",
+                };
+                if !text.is_empty() {
+                    put(f, "Stock", text.to_string());
+                }
+            }
+            if let Some(t) = p.and_then(|x| x.rating.as_ref()).and_then(rating_text) {
+                put(f, "Rating", t);
+            }
+            if let Some(b) = p.and_then(|x| x.brand.clone()) {
+                put(f, "Brand", short(&b, 30));
+            }
+        }
+        Kind::Qna => {
+            let q = d.ld.iter().find(|i| i.is("Question") || i.is("QAPage"));
+            if let Some(n) = q.and_then(|x| x.answers) {
+                put(f, "Answers", format!("{n} {}", if n == 1 { "answer" } else { "answers" }));
+                *sub = format!("{n} {}", if n == 1 { "answer" } else { "answers" });
+            }
+            if let Some(v) = q.and_then(|x| x.votes) {
+                put(f, "Votes", format!("{v:+}"));
+            }
+            if let Some(a) = q.and_then(|x| x.accepted.clone()).filter(|a| !a.is_empty()) {
+                put(f, "Accepted", format!("\u{201c}{}\u{201d}", short(&a, 70)));
+            }
+        }
+        _ => {}
+    }
+    let _ = main;
 }
 
 // ---- privacy ------------------------------------------------------------------------------------------
@@ -1401,16 +1651,21 @@ pub fn is_private_title(raw_title: &str) -> bool {
 
 /// Sites that are never read: banking, mail, health and password managers, plus the user's own list
 /// (comma separated domains or words).
+pub const BLOCK_HOSTS: &[&str] = &[
+    "mail.google.com", "outlook.live.com", "outlook.office.com", "outlook.office365.com", "mail.yahoo.com", "proton.me", "protonmail.com",
+    "paypal.com", "chase.com", "bankofamerica.com", "wellsfargo.com", "citi.com", "capitalone.com", "americanexpress.com", "hsbc.com",
+    "mychart.com", "mychart.org", "lastpass.com", "1password.com", "bitwarden.com", "my.1password.com", "accounts.google.com",
+    "login.microsoftonline.com", "login.live.com", "wise.com", "revolut.com", "coinbase.com", "binance.com", "bdo.com.ph", "bpi.com.ph", "unionbankph.com",
+];
+/// a site whose name contains one of these is never read
+pub const BLOCK_HOST_WORDS: &[&str] = &["bank", "banking", "health", "patient", "medical", "clinic"];
+/// the address is not always known: a title containing one of these betrays the page
+pub const BLOCK_TITLE_WORDS: &[&str] = &["inbox (", " - inbox", "online banking", "internet banking", "sign in to your account", "password manager", "my chart", "patient portal"];
+
 pub fn is_blocked(url: Option<&str>, title: &str, custom: &str) -> bool {
-    const HOSTS: &[&str] = &[
-        "mail.google.com", "outlook.live.com", "outlook.office.com", "outlook.office365.com", "mail.yahoo.com", "proton.me", "protonmail.com",
-        "paypal.com", "chase.com", "bankofamerica.com", "wellsfargo.com", "citi.com", "capitalone.com", "americanexpress.com", "hsbc.com",
-        "mychart.com", "mychart.org", "lastpass.com", "1password.com", "bitwarden.com", "my.1password.com", "accounts.google.com",
-        "login.microsoftonline.com", "login.live.com", "wise.com", "revolut.com", "coinbase.com", "binance.com", "bdo.com.ph", "bpi.com.ph", "unionbankph.com",
-    ];
     let u = url.and_then(parse_url);
     if let Some(u) = &u {
-        if HOSTS.iter().any(|h| host_is(u, h)) || has_any(&u.host, &["bank", "banking", "health", "patient", "medical", "clinic"]) {
+        if BLOCK_HOSTS.iter().any(|h| host_is(u, h)) || has_any(&u.host, BLOCK_HOST_WORDS) {
             return true;
         }
         for c in custom.split(|c| c == ',' || c == ';' || c == '\n').map(|s| lc(s.trim())).filter(|s| !s.is_empty()) {
@@ -1420,8 +1675,7 @@ pub fn is_blocked(url: Option<&str>, title: &str, custom: &str) -> bool {
         }
     }
     let t = lc(title);
-    // the address is not always known: the title betrays these
-    has_any(&t, &["inbox (", " - inbox", "online banking", "internet banking", "sign in to your account", "password manager", "my chart", "patient portal"])
+    has_any(&t, BLOCK_TITLE_WORDS)
         || t.ends_with(" - gmail")
         || t.ends_with(" - outlook")
         || custom.split(|c| c == ',' || c == ';' || c == '\n').map(|s| lc(s.trim())).filter(|s| s.len() >= 3).any(|c| has(&t, &c))
@@ -1432,11 +1686,11 @@ mod tests {
     use super::*;
 
     fn n(kind: NodeKind, name: &str, top: f32) -> Node {
-        Node { kind, name: name.to_string(), left: 0.0, top, right: 100.0, bottom: top + 20.0 }
+        Node { kind, name: name.to_string(), left: 0.0, top, right: 100.0, bottom: top + 20.0, block: false }
     }
 
     fn page(nodes: Vec<Node>, scroll: Option<f32>) -> Page {
-        Page { url: None, nodes, view: (100.0, 900.0), scroll: scroll.map(|s| (s, 0.3)), scroll_now: scroll, capped: false }
+        Page { url: None, nodes, view: (100.0, 900.0), scroll: scroll.map(|s| (s, 0.3)), scroll_now: scroll }
     }
 
     #[test]
@@ -1458,8 +1712,7 @@ mod tests {
 
     #[test]
     fn a_wiki_address_alone_is_enough() {
-        let t = Trail::default();
-        let ev = Evidence { url: Some("https://en.wikipedia.org/wiki/Zeppelin"), title: "Zeppelin - Wikipedia", page: None, ocr: &[], trail: &t };
+        let ev = Evidence { url: Some("https://en.wikipedia.org/wiki/Zeppelin"), title: "Zeppelin - Wikipedia", page: None, ext: None };
         let k = read(&ev).expect("kind");
         assert_eq!(k.id, "wiki");
         assert!(k.confidence >= 0.9);
@@ -1467,8 +1720,7 @@ mod tests {
 
     #[test]
     fn an_unknown_page_claims_nothing() {
-        let t = Trail::default();
-        let ev = Evidence { url: Some("https://example.com/"), title: "Example Domain", page: None, ocr: &[], trail: &t };
+        let ev = Evidence { url: Some("https://example.com/"), title: "Example Domain", page: None, ext: None };
         assert!(read(&ev).is_none());
     }
 
@@ -1484,8 +1736,7 @@ mod tests {
             n(NodeKind::Text, "a", 1500.0), n(NodeKind::Text, "b", 1600.0), n(NodeKind::Text, "c", 1700.0), n(NodeKind::Text, "d", 1800.0),
         ];
         let p = page(nodes, Some(0.43));
-        let t = Trail::default();
-        let ev = Evidence { url: Some("https://docs.example.dev/tutorials/reverse-proxy"), title: "Reverse proxy a Node app - Caddy", page: Some(&p), ocr: &[], trail: &t };
+        let ev = Evidence { url: Some("https://docs.example.dev/tutorials/reverse-proxy"), title: "Reverse proxy a Node app - Caddy", page: Some(&p), ext: None };
         let k = read(&ev).expect("kind");
         assert_eq!(k.id, "walkthrough");
         assert_eq!(k.main, "Add the site block");
@@ -1504,8 +1755,7 @@ mod tests {
             n(NodeKind::Link, "Up next", 800.0), n(NodeKind::Text, "x", 900.0), n(NodeKind::Text, "y", 910.0), n(NodeKind::Text, "z", 920.0),
         ];
         let p = page(nodes, None);
-        let t = Trail::default();
-        let ev = Evidence { url: None, title: "Building a wooden clock, part 3 - Makers - YouTube", page: Some(&p), ocr: &[], trail: &t };
+        let ev = Evidence { url: None, title: "Building a wooden clock, part 3 - Makers - YouTube", page: Some(&p), ext: None };
         let k = read(&ev).expect("kind");
         assert_eq!(k.id, "video");
         assert!(k.fields.iter().any(|f| f.key == "Time" && f.value == "12:34 left of 28:10"), "{:?}", k.fields);
@@ -1534,8 +1784,7 @@ mod tests {
             n(NodeKind::Button, "Reply", 860.0),
         ];
         let p = page(nodes, None);
-        let t = Trail::default();
-        let ev = Evidence { url: Some("https://www.reddit.com/r/explainlikeimfive/comments/abc123/why_do_divers_shower/"), title: "Why do divers shower after every dive? : r/explainlikeimfive", page: Some(&p), ocr: &[], trail: &t };
+        let ev = Evidence { url: Some("https://www.reddit.com/r/explainlikeimfive/comments/abc123/why_do_divers_shower/"), title: "Why do divers shower after every dive? : r/explainlikeimfive", page: Some(&p), ext: None };
         let k = read(&ev).expect("kind");
         assert_eq!(k.id, "social");
         assert!(k.fields.iter().any(|f| f.key == "Community" && f.value == "r/explainlikeimfive"), "{:?}", k.fields);
@@ -1567,8 +1816,7 @@ mod tests {
             n(NodeKind::Button, "Reply", 660.0),
         ];
         let p = page(nodes, None);
-        let t = Trail::default();
-        let ev = Evidence { url: Some("https://x.com/elonmusk/status/123456789"), title: "Elon Musk on X: \"Starship launch tomorrow\" / X", page: Some(&p), ocr: &[], trail: &t };
+        let ev = Evidence { url: Some("https://x.com/elonmusk/status/123456789"), title: "Elon Musk on X: \"Starship launch tomorrow\" / X", page: Some(&p), ext: None };
         let k = read(&ev).expect("kind");
         assert_eq!(k.id, "social");
         assert_eq!(k.main, "Starship launch tomorrow");
@@ -1581,17 +1829,6 @@ mod tests {
     }
 
     #[test]
-    fn ocr_alone_counts_for_less() {
-        let t = Trail::default();
-        let lines: Vec<String> = ["Step 1: Install", "Step 2: Configure", "Step 3: Run"].iter().map(|s| s.to_string()).collect();
-        let ev = Evidence { url: None, title: "Some page", page: None, ocr: &lines, trail: &t };
-        // two or more steps give 0.8 * 0.6 = 0.48: not enough on its own
-        assert!(read(&ev).is_none());
-        let ev = Evidence { url: Some("https://example.com/guides/setup"), title: "Setup", page: None, ocr: &lines, trail: &t };
-        assert_eq!(read(&ev).map(|k| k.id), Some("walkthrough"));
-    }
-
-    #[test]
     fn private_and_blocked() {
         assert!(is_private_title("New InPrivate tab - Microsoft Edge"));
         assert!(is_private_title("New Tab - Google Chrome (Incognito)"));
@@ -1601,5 +1838,65 @@ mod tests {
         assert!(is_blocked(None, "Inbox (3) - me@example.com - Gmail", ""));
         assert!(is_blocked(Some("https://news.example.com/a"), "x", "example.com"));
         assert!(!is_blocked(Some("https://en.wikipedia.org/wiki/Bank"), "Bank - Wikipedia", ""));
+    }
+
+    fn ext_data(json: &str) -> crate::ext::ExtData {
+        let v: serde_json::Value = serde_json::from_str(json).unwrap();
+        crate::ext::ExtData {
+            meta: serde_json::from_value(v.get("meta").cloned().unwrap_or_default()).unwrap_or_default(),
+            ld: serde_json::from_value(v.get("ld").cloned().unwrap_or_default()).unwrap_or_default(),
+            video: v.get("video").and_then(|x| serde_json::from_value(x.clone()).ok()),
+            words: v.get("words").and_then(|x| x.as_u64()).unwrap_or(0) as u32,
+        }
+    }
+
+    #[test]
+    fn a_page_that_says_it_is_a_recipe_is_one() {
+        let d = ext_data(r#"{"ld":[{"type":["Recipe"],"name":"Soup","total":45,"yield":"4 servings","ingredients":5,"steps":["a","b","c"],"rating":{"value":4.7,"count":1204}}]}"#);
+        let ev = Evidence { url: Some("https://x.example/some/page"), title: "Soup", page: None, ext: Some(&d) };
+        let k = read(&ev).expect("kind");
+        assert_eq!(k.id, "recipe");
+        let get = |key: &str| k.fields.iter().find(|f| f.key == key).map(|f| f.value.clone());
+        assert_eq!(get("Time").as_deref(), Some("45 min \u{b7} 4 servings"));
+        assert_eq!(get("Ingredients").as_deref(), Some("5 items"));
+        assert_eq!(get("Rating").as_deref(), Some("4.7 \u{b7} 1,204 reviews"));
+        assert_eq!(k.sub, "45 min");
+    }
+
+    #[test]
+    fn a_product_page_gives_the_price_from_its_offer() {
+        let d = ext_data(r#"{"meta":{"ogType":"product"},"ld":[{"type":["Product"],"name":"Aurora","brand":"Aurora","offer":{"price":"129.00","currency":"USD","availability":"InStock"},"rating":{"value":4.6,"count":2310}}]}"#);
+        let ev = Evidence { url: Some("https://shop.example/p/aurora"), title: "Aurora ANC Headphones - $129 | Shop", page: None, ext: Some(&d) };
+        let k = read(&ev).expect("kind");
+        assert_eq!(k.id, "product");
+        let get = |key: &str| k.fields.iter().find(|f| f.key == key).map(|f| f.value.clone());
+        assert_eq!(get("Price").as_deref(), Some("$129.00"));
+        assert_eq!(get("Stock").as_deref(), Some("In stock"));
+        assert_eq!(get("Rating").as_deref(), Some("4.6 \u{b7} 2,310 reviews"));
+        assert_eq!(k.sub, "$129.00");
+    }
+
+    #[test]
+    fn the_players_own_clock_wins_for_video() {
+        let d = ext_data(r#"{"video":{"cur":936,"dur":1690,"paused":false,"ended":false,"rate":1.25},"ld":[{"type":["VideoObject"],"author":"Makers Channel"}]}"#);
+        let ev = Evidence { url: Some("https://v.example/watch?v=1"), title: "Building a clock", page: None, ext: Some(&d) };
+        let k = read(&ev).expect("kind");
+        assert_eq!(k.id, "video");
+        let get = |key: &str| k.fields.iter().find(|f| f.key == key).map(|f| f.value.clone());
+        assert_eq!(get("Time").as_deref(), Some("12:34 left of 28:10"));
+        assert_eq!(get("State").as_deref(), Some("Playing at 1.25\u{d7}"));
+        assert_eq!(get("Channel").as_deref(), Some("Makers Channel"));
+        assert_eq!(k.sub, "12:34 left");
+        assert!((k.progress.unwrap() - 936.0 / 1690.0).abs() < 1e-4);
+    }
+
+    #[test]
+    fn dates_read_as_how_long_ago() {
+        let now = chrono::Utc::now();
+        assert_eq!(ago(&(now - chrono::Duration::hours(2)).to_rfc3339()).as_deref(), Some("2 h ago"));
+        assert_eq!(ago(&(now - chrono::Duration::minutes(30)).to_rfc3339()).as_deref(), Some("30 min ago"));
+        assert_eq!(ago(&(now - chrono::Duration::days(3)).to_rfc3339()).as_deref(), Some("3 d ago"));
+        assert_eq!(ago("not a date"), None);
+        assert_eq!(thousands(1204), "1,204");
     }
 }

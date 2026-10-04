@@ -255,6 +255,7 @@ pub fn save_settings(window: WebviewWindow, settings: Settings) {
         .peek_ms
         .store(settings.peek_duration_s.max(1) * 1000, Ordering::Relaxed);
 
+    state.ext.push_config(&settings);
     save_to_disk(&settings);
     *state.settings.lock().unwrap() = settings;
 }
