@@ -1,0 +1,14 @@
+{
+  "id": "games",
+  "name": "Games",
+  "description": "The game you are playing, for how long, and how it runs.",
+  "version": "1.0.0",
+  "default_on": true,
+  "permissions": {
+    "sees": [
+      { "name": "windows" },
+      { "name": "performance" }
+    ]
+  },
+  "pills": [{ "id": "game", "w": 320, "h": 40, "rank": 20 }]
+}

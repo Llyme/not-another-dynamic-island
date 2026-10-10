@@ -1,24 +1,17 @@
-//! Calendar reminders + the hub's calendar view from an `.ics` feed -- port of
-//! `parse_ics`/`fetch_ics_events`/`_check_calendar_reminders` from `main.py`.
-//! Minimal ICS: VEVENT DTSTART/DTEND/SUMMARY/UID plus a small RRULE subset
-//! (DAILY/WEEKLY+BYDAY/MONTHLY/YEARLY, INTERVAL, COUNT, UNTIL, EXDATE and
-//! RECURRENCE-ID overrides), expanded over a window around today.
+//! The calendar: a main feature of the island. It keeps the events that any source has brought (a plugin: the ICS
+//! feed, or a module that knows where else a calendar lives), shows them in the hub's month view, and tells the UI
+//! when they change. Where the events come from, and what is made of them (cards, reminders), is for plugins.
 
 use crate::IslandState;
-use chrono::{Datelike, Duration as CDuration, Local, Months, NaiveDate, NaiveDateTime, TimeZone, Utc, Weekday};
 use serde::Serialize;
-use std::collections::{HashMap, HashSet};
-use std::sync::atomic::{AtomicBool, Ordering};
+use serde_json::Value;
+use std::collections::HashMap;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
-use std::time::{Duration, Instant};
 use tauri::{AppHandle, Emitter, Manager, WebviewWindow};
 
-const CHECK_S: u64 = 15;
-/// how far around today the calendar view can browse (events outside are dropped)
-const WINDOW_PAST_DAYS: i64 = 92;
-const WINDOW_FUTURE_DAYS: i64 = 400;
-const MAX_EVENTS: usize = 4000;
-const MAX_OCCURRENCES_PER_RULE: usize = 3000;
+/// events kept for the month view, over all the sources
+pub const MAX_EVENTS: usize = 4000;
 
 #[derive(Clone, Serialize)]
 pub struct CalendarEvent {
@@ -30,407 +23,156 @@ pub struct CalendarEvent {
     pub all_day: bool,
 }
 
-#[derive(Clone, Serialize, Default)]
+#[derive(Clone, Serialize, Default, Debug, PartialEq)]
 pub struct CalendarSnapshot {
+    /// some source is on
     pub configured: bool,
     pub error: Option<String>,
     pub events: Vec<CalendarEvent>,
 }
 
-#[derive(Default)]
-pub struct CalendarState {
-    last: Mutex<CalendarSnapshot>,
-    notified: Mutex<HashSet<String>>,
-    /// set by save_settings when the url changes, so the poll thread refetches now
-    pub refetch: AtomicBool,
+impl std::fmt::Debug for CalendarEvent {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}@{}", self.summary, self.start_ms)
+    }
 }
 
-fn unfold(text: &str) -> Vec<String> {
-    let mut out: Vec<String> = Vec::new();
-    for line in text.replace("\r\n", "\n").split('\n') {
-        if line.starts_with(' ') || line.starts_with('\t') {
-            if let Some(last) = out.last_mut() {
-                last.push_str(&line[1..]);
-            }
-        } else {
-            out.push(line.to_string());
-        }
+impl PartialEq for CalendarEvent {
+    fn eq(&self, o: &Self) -> bool {
+        self.uid == o.uid && self.start_ms == o.start_ms && self.end_ms == o.end_ms && self.summary == o.summary
     }
-    out
 }
 
-/// Returns (start ms since epoch, all_day).
-fn parse_datetime(value: &str, is_date_param: bool) -> Option<(i64, bool)> {
-    let value = value.trim();
-    if is_date_param || (value.len() == 8 && !value.contains('T')) {
-        let d = NaiveDate::parse_from_str(value, "%Y%m%d").ok()?;
-        let dt = Local.from_local_datetime(&d.and_hms_opt(0, 0, 0)?).earliest()?;
-        return Some((dt.timestamp_millis(), true));
-    }
-    if let Some(stripped) = value.strip_suffix('Z') {
-        let n = NaiveDateTime::parse_from_str(stripped, "%Y%m%dT%H%M%S").ok()?;
-        return Some((Utc.from_utc_datetime(&n).timestamp_millis(), false));
-    }
-    let n = NaiveDateTime::parse_from_str(value, "%Y%m%dT%H%M%S").ok()?;
-    let dt = Local.from_local_datetime(&n).earliest()?;
-    Some((dt.timestamp_millis(), false))
+struct Source {
+    error: Option<String>,
+    events: Vec<CalendarEvent>,
 }
 
 #[derive(Default)]
-struct RawEvent {
-    start: Option<(i64, bool)>,
-    end: Option<i64>,
-    summary: Option<String>,
-    uid: Option<String>,
-    rrule: Option<String>,
-    exdates: Vec<i64>,
-    recurrence_id: Option<i64>,
+pub struct CalendarState {
+    sources: Mutex<HashMap<String, Source>>,
+    /// counts every change (a plugin that reads the calendar asks only when this moved)
+    version: AtomicU64,
 }
 
-fn local_naive(ms: i64) -> Option<NaiveDateTime> {
-    Local.timestamp_millis_opt(ms).earliest().map(|d| d.naive_local())
-}
+impl CalendarState {
+    /// What every source has brought, in one list by time. A source with a problem says so (the first one shown).
+    pub fn snapshot(&self) -> CalendarSnapshot {
+        let sources = self.sources.lock().unwrap();
+        let mut ids: Vec<&String> = sources.keys().collect();
+        ids.sort();
+        let mut events: Vec<CalendarEvent> = Vec::new();
+        let mut error = None;
+        for id in ids {
+            let s = &sources[id];
+            if error.is_none() {
+                error = s.error.clone();
+            }
+            events.extend(s.events.iter().cloned());
+        }
+        events.sort_by_key(|e| e.start_ms);
+        events.truncate(MAX_EVENTS);
+        CalendarSnapshot { configured: !sources.is_empty(), error, events }
+    }
 
-fn from_naive(n: NaiveDateTime) -> Option<i64> {
-    Local.from_local_datetime(&n).earliest().map(|d| d.timestamp_millis())
-}
+    pub fn version(&self) -> u64 {
+        self.version.load(Ordering::Relaxed)
+    }
 
-fn weekday_from_code(code: &str) -> Option<Weekday> {
-    // strip a leading ordinal like "2MO" / "-1FR"
-    let letters: String = code.chars().filter(|c| c.is_ascii_alphabetic()).collect();
-    match letters.to_uppercase().as_str() {
-        "MO" => Some(Weekday::Mon),
-        "TU" => Some(Weekday::Tue),
-        "WE" => Some(Weekday::Wed),
-        "TH" => Some(Weekday::Thu),
-        "FR" => Some(Weekday::Fri),
-        "SA" => Some(Weekday::Sat),
-        "SU" => Some(Weekday::Sun),
-        _ => None,
+    fn put(&self, id: &str, source: Option<Source>) {
+        self.version.fetch_add(1, Ordering::Relaxed);
+        let mut sources = self.sources.lock().unwrap();
+        match source {
+            Some(s) => {
+                sources.insert(id.to_string(), s);
+            }
+            None => {
+                sources.remove(id);
+            }
+        }
     }
 }
 
-/// Expands one RRULE into occurrence start times (ms), from the event's own
-/// start up to `window_end`. Stepping is done in local wall-clock time.
-fn expand_rrule(start_ms: i64, rule: &str, window_end: i64) -> Vec<i64> {
-    let mut freq = "";
-    let mut interval: u32 = 1;
-    let mut count: Option<usize> = None;
-    let mut until: Option<i64> = None;
-    let mut byday: Vec<Weekday> = Vec::new();
-    for part in rule.split(';') {
-        let Some((k, v)) = part.split_once('=') else { continue };
-        match k.to_uppercase().as_str() {
-            "FREQ" => freq = v,
-            "INTERVAL" => interval = v.parse().unwrap_or(1).max(1),
-            "COUNT" => count = v.parse().ok(),
-            "UNTIL" => {
-                until = parse_datetime(v, v.len() == 8)
-                    .map(|(ms, all_day)| if all_day { ms + 86_400_000 - 1 } else { ms })
-            }
-            "BYDAY" => byday = v.split(',').filter_map(weekday_from_code).collect(),
-            _ => {}
+/// A source brings its events (or says why it cannot): the month view shows them from now on.
+pub fn set_source(app: &AppHandle, state: &IslandState, id: &str, result: Result<Vec<CalendarEvent>, String>) {
+    state.calendar.put(
+        id,
+        Some(match result {
+            Ok(events) => Source { error: None, events },
+            Err(e) => Source { error: Some(e), events: Vec::new() },
+        }),
+    );
+    let _ = app.emit("calendar-tick", state.calendar.snapshot());
+}
+
+/// A source has gone (switched off): its events go with it.
+pub fn drop_source(app: &AppHandle, state: &IslandState, id: &str) {
+    state.calendar.put(id, None);
+    let _ = app.emit("calendar-tick", state.calendar.snapshot());
+}
+
+const MAX_SUMMARY: usize = 200;
+/// the most events one plugin may bring
+const MAX_PER_SOURCE: usize = 500;
+
+/// The events a module brought, as JSON: at most 500, each with a summary (cut at 200 characters) and a start.
+pub fn events_from_json(v: &Value) -> Vec<CalendarEvent> {
+    let mut out: Vec<CalendarEvent> = Vec::new();
+    for e in v.as_array().into_iter().flatten().take(MAX_PER_SOURCE) {
+        let summary: String = e.get("summary").and_then(|s| s.as_str()).unwrap_or("").trim().chars().take(MAX_SUMMARY).collect();
+        let Some(start) = e.get("start_ms").and_then(|s| s.as_i64()) else { continue };
+        if summary.is_empty() {
+            continue;
         }
-    }
-    let Some(start) = local_naive(start_ms) else { return vec![start_ms] };
-    let limit = until.map_or(window_end, |u| u.min(window_end));
-    let time = start.time();
-    let max_n = count.unwrap_or(usize::MAX).min(MAX_OCCURRENCES_PER_RULE);
-    let mut out: Vec<i64> = Vec::new();
-    // returns true when generation must stop
-    let push = |ms: i64, out: &mut Vec<i64>| -> bool {
-        if ms > limit {
-            return true;
-        }
-        out.push(ms);
-        out.len() >= max_n
-    };
-    match freq.to_uppercase().as_str() {
-        "DAILY" => {
-            for k in 0..MAX_OCCURRENCES_PER_RULE as i64 * 4 {
-                let n = start.date() + CDuration::days(k * interval as i64);
-                let Some(ms) = from_naive(n.and_time(time)) else { continue };
-                if push(ms, &mut out) {
-                    break;
-                }
-            }
-        }
-        "WEEKLY" => {
-            if byday.is_empty() {
-                byday.push(start.weekday());
-            }
-            byday.sort_by_key(|d| d.num_days_from_monday());
-            let base = start.date() - CDuration::days(start.weekday().num_days_from_monday() as i64);
-            'weeks: for k in 0..MAX_OCCURRENCES_PER_RULE as i64 {
-                for wd in &byday {
-                    let d = base + CDuration::days(7 * interval as i64 * k + wd.num_days_from_monday() as i64);
-                    let n = d.and_time(time);
-                    if n < start {
-                        continue;
-                    }
-                    let Some(ms) = from_naive(n) else { continue };
-                    if push(ms, &mut out) {
-                        break 'weeks;
-                    }
-                }
-            }
-        }
-        "MONTHLY" | "YEARLY" => {
-            let step = if freq.eq_ignore_ascii_case("YEARLY") { 12 } else { 1 } * interval;
-            for k in 0..MAX_OCCURRENCES_PER_RULE as u32 {
-                // checked_add_months clamps the 31st to month end; RFC 5545 skips those
-                let Some(d) = start.date().checked_add_months(Months::new(k * step)) else { break };
-                if d.day() != start.day() {
-                    continue;
-                }
-                let Some(ms) = from_naive(d.and_time(time)) else { continue };
-                if push(ms, &mut out) {
-                    break;
-                }
-            }
-        }
-        _ => out.push(start_ms),
+        let end = e.get("end_ms").and_then(|s| s.as_i64()).filter(|end| *end >= start).unwrap_or(start);
+        let uid = e.get("uid").and_then(|s| s.as_str()).map(str::to_string).unwrap_or_else(|| format!("{summary}|{start}"));
+        out.push(CalendarEvent { uid, summary, start_ms: start, end_ms: end, all_day: e.get("all_day").and_then(|b| b.as_bool()).unwrap_or(false) });
     }
     out
-}
-
-fn parse_ics(text: &str) -> Vec<CalendarEvent> {
-    parse_ics_window(text, Utc::now().timestamp_millis())
-}
-
-/// Parses the feed and expands recurrences into a flat, sorted list of events
-/// within [now - 92 days, now + 400 days].
-fn parse_ics_window(text: &str, now_ms: i64) -> Vec<CalendarEvent> {
-    let win_start = now_ms - WINDOW_PAST_DAYS * 86_400_000;
-    let win_end = now_ms + WINDOW_FUTURE_DAYS * 86_400_000;
-
-    let mut raws: Vec<RawEvent> = Vec::new();
-    let mut cur: Option<RawEvent> = None;
-    for line in unfold(text) {
-        let stripped = line.trim();
-        if stripped == "BEGIN:VEVENT" {
-            cur = Some(RawEvent::default());
-        } else if stripped == "END:VEVENT" {
-            if let Some(ev) = cur.take() {
-                raws.push(ev);
-            }
-        } else if let (Some(c), Some((key_part, value))) = (cur.as_mut(), line.split_once(':')) {
-            let mut bits = key_part.split(';');
-            let key = bits.next().unwrap_or("").to_uppercase();
-            let is_date_param = bits.any(|b| b.eq_ignore_ascii_case("VALUE=DATE"));
-            match key.as_str() {
-                "DTSTART" => c.start = parse_datetime(value, is_date_param),
-                "DTEND" => c.end = parse_datetime(value, is_date_param).map(|(ms, _)| ms),
-                "SUMMARY" => {
-                    c.summary = Some(value.replace("\\n", " ").replace("\\,", ",").trim().to_string())
-                }
-                "UID" => c.uid = Some(value.trim().to_string()),
-                "RRULE" => c.rrule = Some(value.trim().to_string()),
-                "EXDATE" => {
-                    for v in value.split(',') {
-                        if let Some((ms, _)) = parse_datetime(v, is_date_param) {
-                            c.exdates.push(ms);
-                        }
-                    }
-                }
-                "RECURRENCE-ID" => c.recurrence_id = parse_datetime(value, is_date_param).map(|(ms, _)| ms),
-                _ => {}
-            }
-        }
-    }
-
-    // a moved/edited single instance carries RECURRENCE-ID: hide the master's
-    // original occurrence at that time
-    let mut overridden: HashMap<String, Vec<i64>> = HashMap::new();
-    for r in &raws {
-        if let (Some(id), Some(uid)) = (r.recurrence_id, r.uid.as_ref()) {
-            overridden.entry(uid.clone()).or_default().push(id);
-        }
-    }
-
-    let mut events = Vec::new();
-    for r in raws {
-        let (Some((start_ms, all_day)), Some(summary)) = (r.start, r.summary.clone()) else { continue };
-        let duration = match r.end {
-            Some(end) if end > start_ms => end - start_ms,
-            _ if all_day => 86_400_000,
-            _ => 0,
-        };
-        let uid = r.uid.clone().unwrap_or_else(|| format!("{summary}|{start_ms}"));
-        let recurring = r.rrule.is_some() && r.recurrence_id.is_none();
-        let starts: Vec<i64> = if recurring {
-            let skip: HashSet<i64> = r
-                .exdates
-                .iter()
-                .copied()
-                .chain(overridden.get(&uid).into_iter().flatten().copied())
-                .collect();
-            expand_rrule(start_ms, r.rrule.as_deref().unwrap_or(""), win_end)
-                .into_iter()
-                .filter(|s| !skip.contains(s))
-                .collect()
-        } else {
-            vec![start_ms]
-        };
-        for s in starts {
-            if s + duration < win_start || s > win_end {
-                continue;
-            }
-            events.push(CalendarEvent {
-                // each occurrence needs its own id (reminders are de-duplicated by it)
-                uid: if recurring { format!("{uid}|{s}") } else { uid.clone() },
-                summary: summary.clone(),
-                start_ms: s,
-                end_ms: s + duration,
-                all_day,
-            });
-        }
-    }
-    events.sort_by_key(|e| e.start_ms);
-    events.truncate(MAX_EVENTS);
-    events
-}
-
-fn fetch_events(url: &str) -> Result<Vec<CalendarEvent>, String> {
-    let resp = ureq::get(url)
-        .set("User-Agent", "NADI/1.0")
-        .timeout(Duration::from_secs(15))
-        .call()
-        .map_err(|e| match e {
-            ureq::Error::Status(code, _) => {
-                format!("HTTP {code} -- check the .ics link is correct and still valid")
-            }
-            other => format!("Network error: {other}"),
-        })?;
-    let text = resp.into_string().map_err(|e| e.to_string())?;
-    Ok(parse_ics(&text))
-}
-
-fn check_reminders(app: &AppHandle, state: &Arc<IslandState>) {
-    let lead_ms = state.settings.lock().unwrap().calendar_reminder_lead_min as i64 * 60_000;
-    let now = Utc::now().timestamp_millis();
-    let events = state.calendar.last.lock().unwrap().events.clone();
-    for ev in events {
-        let delta = ev.start_ms - now;
-        if delta > 0 && delta <= lead_ms && state.calendar.notified.lock().unwrap().insert(ev.uid.clone()) {
-            let mins = (delta / 60_000).max(1);
-            let history = {
-                let mut notif = state.notif.lock().unwrap();
-                notif.push("Upcoming event".into(), format!("{} in {mins} min", ev.summary));
-                notif.history()
-            };
-            let _ = app.emit("notification-history-tick", history);
-        }
-    }
-}
-
-fn emit(app: &AppHandle, state: &Arc<IslandState>, snapshot: CalendarSnapshot) {
-    *state.calendar.last.lock().unwrap() = snapshot.clone();
-    let _ = app.emit("calendar-tick", snapshot);
-}
-
-pub fn spawn(app: AppHandle, state: Arc<IslandState>) {
-    std::thread::spawn(move || {
-        let mut last_fetch: Option<Instant> = None;
-        loop {
-            let (url, poll_min) = {
-                let s = state.settings.lock().unwrap();
-                (s.calendar_ics_url.trim().to_string(), s.calendar_poll_min.max(1))
-            };
-            if url.is_empty() {
-                if state.calendar.last.lock().unwrap().configured {
-                    emit(&app, &state, CalendarSnapshot::default());
-                }
-                last_fetch = None;
-            } else {
-                let forced = state.calendar.refetch.swap(false, Ordering::Relaxed);
-                let due = last_fetch.map_or(true, |t| t.elapsed() >= Duration::from_secs(poll_min * 60));
-                if forced || due {
-                    last_fetch = Some(Instant::now());
-                    let snapshot = match fetch_events(&url) {
-                        Ok(events) => CalendarSnapshot { configured: true, error: None, events },
-                        Err(e) => CalendarSnapshot { configured: true, error: Some(e), events: Vec::new() },
-                    };
-                    emit(&app, &state, snapshot);
-                }
-                check_reminders(&app, &state);
-            }
-            std::thread::sleep(Duration::from_secs(CHECK_S));
-        }
-    });
 }
 
 #[tauri::command]
 pub fn get_calendar(window: WebviewWindow) -> CalendarSnapshot {
-    let state = window.state::<Arc<IslandState>>();
-    let snapshot = state.calendar.last.lock().unwrap().clone();
-    snapshot
+    window.state::<Arc<IslandState>>().calendar.snapshot()
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
+    fn ev(uid: &str, start: i64) -> CalendarEvent {
+        CalendarEvent { uid: uid.into(), summary: uid.into(), start_ms: start, end_ms: start + 1, all_day: false }
+    }
+
     #[test]
-    fn parses_folded_events_and_date_only() {
-        let ics = "BEGIN:VCALENDAR\r\nBEGIN:VEVENT\r\nUID:a1\r\nDTSTART:20260930T090000Z\r\nSUMMARY:Standup\\, team\r\n  sync\r\nEND:VEVENT\r\nBEGIN:VEVENT\r\nDTSTART;VALUE=DATE:20261001\r\nSUMMARY:Holiday\r\nEND:VEVENT\r\nBEGIN:VEVENT\r\nSUMMARY:No start\r\nEND:VEVENT\r\nEND:VCALENDAR\r\n";
-        let ev = parse_ics(ics);
+    fn events_from_a_module_are_cleaned() {
+        let v = serde_json::json!([
+            { "summary": "Raid night", "start_ms": 1000, "end_ms": 5000, "uid": "r1" },
+            { "summary": "   ", "start_ms": 1 },
+            { "summary": "No start" },
+            { "summary": "Backwards", "start_ms": 900, "end_ms": 100, "all_day": true }
+        ]);
+        let ev = events_from_json(&v);
         assert_eq!(ev.len(), 2);
-        assert_eq!(ev[0].uid, "a1");
-        assert_eq!(ev[0].summary, "Standup, team sync");
-        assert!(!ev[0].all_day);
-        assert!(ev[1].all_day);
-    }
-
-    fn ms(y: i32, m: u32, d: u32, h: u32) -> i64 {
-        from_naive(NaiveDate::from_ymd_opt(y, m, d).unwrap().and_hms_opt(h, 0, 0).unwrap()).unwrap()
+        assert_eq!((ev[0].uid.as_str(), ev[0].end_ms), ("r1", 5000));
+        // an end before the start is a zero-length event
+        assert_eq!((ev[1].start_ms, ev[1].end_ms, ev[1].all_day), (900, 900, true));
+        assert!(events_from_json(&serde_json::json!("not a list")).is_empty());
     }
 
     #[test]
-    fn expands_weekly_rule_with_exdate_and_override() {
-        // Mon+Wed standup starting Mon 2026-09-07, 4 occurrences, one excluded, one moved
-        let ics = "BEGIN:VEVENT
-UID:s
-DTSTART:20260907T090000
-DTEND:20260907T093000
-SUMMARY:Standup
-RRULE:FREQ=WEEKLY;BYDAY=MO,WE;COUNT=4
-EXDATE:20260909T090000
-END:VEVENT
-BEGIN:VEVENT
-UID:s
-RECURRENCE-ID:20260914T090000
-DTSTART:20260914T140000
-SUMMARY:Standup (moved)
-END:VEVENT
-";
-        let ev = parse_ics_window(ics, ms(2026, 9, 10, 12));
-        let titles: Vec<_> = ev.iter().map(|e| (e.summary.as_str(), e.start_ms)).collect();
-        // Mon 7 kept, Wed 9 exdate, Mon 14 moved away (+ its moved instance), Wed 16 kept
-        assert_eq!(ev.len(), 3, "{titles:?}");
-        assert_eq!(ev[0].start_ms, ms(2026, 9, 7, 9));
-        assert_eq!(ev[0].end_ms - ev[0].start_ms, 30 * 60_000);
-        assert_eq!(ev[1].start_ms, ms(2026, 9, 14, 14));
-        assert_eq!(ev[2].start_ms, ms(2026, 9, 16, 9));
-    }
-
-    #[test]
-    fn expands_daily_until_and_monthly_skips_missing_days() {
-        let ics = "BEGIN:VEVENT
-UID:d
-DTSTART;VALUE=DATE:20260901
-SUMMARY:Daily
-RRULE:FREQ=DAILY;UNTIL=20260905
-END:VEVENT
-BEGIN:VEVENT
-UID:m
-DTSTART:20260131T100000
-SUMMARY:Month end
-RRULE:FREQ=MONTHLY;COUNT=3
-END:VEVENT
-";
-        let ev = parse_ics_window(ics, ms(2026, 9, 3, 12));
-        assert_eq!(ev.iter().filter(|e| e.summary == "Daily").count(), 5);
-        assert!(ev.iter().filter(|e| e.summary == "Month end").count() <= 3);
+    fn events_of_every_source_are_one_list_by_time() {
+        let c = CalendarState::default();
+        assert_eq!(c.snapshot(), CalendarSnapshot::default());
+        c.put("a", Some(Source { error: None, events: vec![ev("late", 30), ev("early", 10)] }));
+        c.put("b", Some(Source { error: Some("down".into()), events: vec![ev("mid", 20)] }));
+        let s = c.snapshot();
+        assert!(s.configured);
+        assert_eq!(s.error.as_deref(), Some("down"));
+        assert_eq!(s.events.iter().map(|e| e.uid.as_str()).collect::<Vec<_>>(), vec!["early", "mid", "late"]);
+        c.put("a", None);
+        assert_eq!(c.snapshot().events.len(), 1);
+        c.put("b", None);
+        assert!(!c.snapshot().configured);
     }
 }

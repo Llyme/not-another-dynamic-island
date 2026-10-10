@@ -1,0 +1,25 @@
+{
+  "id": "ics-calendar",
+  "name": "ICS calendar",
+  "description": "Brings the events of a calendar link (.ics: Google Calendar, Outlook, iCloud) to the island's calendar.",
+  "version": "2.0.0",
+  "kind": "declarative",
+  "default_on": false,
+  "permissions": {
+    "net": ["{{settings.url}}"]
+  },
+  "source": {
+    "http": "{{settings.url}}",
+    "every": "{{settings.poll_min}}m",
+    "format": "ics",
+    "when": "always",
+    "max_kb": 8000
+  },
+  "needs": ["url"],
+  "setup": "Paste the link of a calendar (.ics) in the setting below.",
+  "status": "{{count}} events read.",
+  "settings": {
+    "url": { "label": "Calendar link (.ics)", "type": "text", "default": "" },
+    "poll_min": { "label": "Look again every (minutes)", "type": "number", "default": 10 }
+  }
+}

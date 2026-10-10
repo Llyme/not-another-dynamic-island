@@ -4,19 +4,33 @@
 // this is the whole idle-state UI, kept as cheap as the old QPainter path.
 
 import { initFloats } from "./floats.js";
-import { guideReader } from "./guide.js";
+import { initPluginUi, pluginCard, setRings, whenText } from "./pluginui.js";
+import { plugins } from "./plugins/index.js";
+import {
+	FLOATS,
+	LLM_COLOR,
+	LLM_LETTER,
+	LLM_RING_C,
+	llmCtxColor,
+	llmStateIcon,
+	ringEls,
+	setRing,
+	ICON,
+	call,
+	el,
+	floatKeys,
+	host,
+	invoke,
+	li,
+	listen,
+	mediaListOf,
+	pickPrimaryMedia,
+	pills,
+	ringFrom,
+	view,
+	withIcon,
+} from "./kit.js";
 
-const { invoke } = window.__TAURI__.core;
-const { listen: listenAll } = window.__TAURI__.event;
-// The floating cards live in a second window that runs this same page (see floats.rs): it draws nothing but
-// those cards, so it only listens for its own events and skips the island's animations and polling.
-const FLOATS = new URLSearchParams(location.search).has("floats");
-const listen = FLOATS
-	? (name, cb) =>
-			name.startsWith("float-")
-				? listenAll(name, cb)
-				: Promise.resolve(() => {})
-	: listenAll;
 if (FLOATS) document.documentElement.classList.add("floats");
 
 // ---- the island is not a web page: nothing of the browser should work on it ----
@@ -257,22 +271,6 @@ function onTrackChange(key) {
 		? Array.from({ length: 8 }, () => ({ ...known }))
 		: [];
 	director.since = 0; // no dwell wait: the new song may deserve a different vibe at once
-}
-
-// media-tick arrives as a list of sessions (one per player); older
-// payloads and some harnesses still send a single session object.
-function mediaListOf(payload) {
-	if (Array.isArray(payload))
-		return payload.filter((m) => m && m.has_session);
-	if (payload && payload.has_session) return [payload];
-	return [];
-}
-
-// the pill and the eyes follow one session: the playing one, else the first.
-function pickPrimaryMedia(list) {
-	return (
-		(list || []).find((m) => m.playing) || (list || [])[0] || null
-	);
 }
 
 listen("media-tick", (e) => {
@@ -1045,141 +1043,6 @@ function paintHubEyes() {
 	paintEyesAt(hubEyesCtx, cx, cy, { scale: 1.3 });
 }
 
-// -- small shared helpers for the compact views --
-const ICON = {
-	prev: '<svg viewBox="0 0 24 24"><path d="M6 6h2v12H6zM20 6v12L9.5 12z"/></svg>',
-	next: '<svg viewBox="0 0 24 24"><path d="M16 6h2v12h-2zM4 6l10.5 6L4 18z"/></svg>',
-	play: '<svg viewBox="0 0 24 24"><path d="M8 5v14l11-7z"/></svg>',
-	pause: '<svg viewBox="0 0 24 24"><path d="M6 5h4v14H6zM14 5h4v14h-4z"/></svg>',
-	bell: '<svg viewBox="0 0 24 24"><path d="M12 22a2.5 2.5 0 0 0 2.4-2h-4.8A2.5 2.5 0 0 0 12 22zm7-6V11a7 7 0 0 0-5-6.7V3a2 2 0 0 0-4 0v1.3A7 7 0 0 0 5 11v5l-2 2v1h18v-1z"/></svg>',
-};
-
-// ---- line icons used across the island: one stroke style, coloured by the text around them ----
-const LI_PATHS = {
-	island: "M5 5.5h6a2.5 2.5 0 0 1 0 5H5a2.5 2.5 0 0 1 0-5z",
-	palette:
-		"M8 2.5a5.5 5.5 0 1 0 0 11c.9 0 1.2-.7.8-1.3-.4-.6 0-1.4.8-1.4h1.4a2 2 0 0 0 2-2A5.5 5.5 0 0 0 8 2.5zM5 8h.01M7 5.5h.01M10 5.5h.01",
-	reset: "M3.2 8a4.8 4.8 0 1 0 1.5-3.5M3 2.8v2.4h2.4",
-	gamepad:
-		"M4.6 5.5h6.8a3 3 0 0 1 2.9 3.7l-.6 2.3a1.5 1.5 0 0 1-2.6.5L10 10.5H6l-1.1 1.5a1.5 1.5 0 0 1-2.6-.5l-.6-2.3a3 3 0 0 1 2.9-3.7zM5.2 7.3v2.6M3.9 8.6h2.6M10.6 7.8h.01M12.1 9.3h.01",
-	briefcase:
-		"M2.5 5.5h11v7.5h-11zM6 5.5V4a1 1 0 0 1 1-1h2a1 1 0 0 1 1 1v1.5M2.5 9h11",
-	lock: "M4 7.2h8v6.3H4zM5.6 7.2V5.2a2.4 2.4 0 0 1 4.8 0v2M8 9.6v1.6",
-	unlock: "M4 7.2h8v6.3H4zM5.6 7.2V5.2a2.4 2.4 0 0 1 4.6-.9M8 9.6v1.6",
-	shrink: "M6 3v3H3M10 3v3h3M6 13v-3H3M10 13v-3h3",
-	term: "M2.5 3.5h11v9h-11zM5 6.5 7 8.2 5 9.9M8.5 10h2.5",
-	search: "M7 3a4 4 0 1 0 0 8 4 4 0 0 0 0-8zM10 10l3 3",
-	phone: "M3.6 2.6h2.4l1.1 2.8-1.5 1a7.4 7.4 0 0 0 3.4 3.4l1-1.5 2.8 1.1v2.4a1.4 1.4 0 0 1-1.5 1.4A10.6 10.6 0 0 1 2.2 4.1a1.4 1.4 0 0 1 1.4-1.5zM10 2.4a3.6 3.6 0 0 1 3.6 3.6M10 4.7a1.4 1.4 0 0 1 1.3 1.3",
-	moon: "M12.5 9.8A5 5 0 0 1 6.2 3.5a5 5 0 1 0 6.3 6.3z",
-	chevron: "M4.5 6.5 8 10l3.5-3.5",
-	download: "M8 2.5v7.6M4.8 7.3 8 10.5l3.2-3.2M3 13h10",
-	up: "M8 13V3M3.5 7.5 8 3l4.5 4.5",
-	repost: "M3 7V6a2 2 0 0 1 2-2h7M10 2l2 2-2 2M13 9v1a2 2 0 0 1-2 2H4M6 14l-2-2 2-2",
-	heart: "M8 13.5S2.5 10 2.5 6.2A2.9 2.9 0 0 1 8 5a2.9 2.9 0 0 1 5.5 1.2C13.5 10 8 13.5 8 13.5z",
-	eye: "M1.8 8S4 4 8 4s6.2 4 6.2 4-2.2 4-6.2 4S1.8 8 1.8 8zM8 6.4a1.6 1.6 0 1 0 0 3.2 1.6 1.6 0 0 0 0-3.2z",
-	eyeoff: "M2 8s2.2-4 6-4c.9 0 1.7.2 2.4.5M14 8s-2.2 4-6 4c-.9 0-1.7-.2-2.4-.5M3 13 13 3",
-	power: "M8 2v5.6M4.7 4.5a5 5 0 1 0 6.6 0",
-	cursor: "M3.2 2.6 12.6 6.5 8.7 8.2 7 12.4z",
-	sq: "M3.8 3.8h8.4v8.4H3.8z",
-	focus:
-		"M8 2.5v2.4M8 11.1v2.4M2.5 8h2.4M11.1 8h2.4M8 6.2a1.8 1.8 0 1 0 0 3.6 1.8 1.8 0 0 0 0-3.6z",
-	follow: "M2.5 8h11M5 5.5 2.5 8 5 10.5M11 5.5 13.5 8 11 10.5",
-	wave: "M3 6.2v3.6M6 3.6v8.8M9 5.6v4.8M12 4.2v7.6",
-	timer: "M8 3.4a5 5 0 1 0 0 9.9 5 5 0 0 0 0-9.9zM8 5.8V8.4l1.7 1.1M6.6 1.6h2.8",
-	hourglass:
-		"M4.5 2.5h7M4.5 13.5h7M5 2.5c0 3 3 3.4 3 5.5s-3 2.5-3 5.5M11 2.5c0 3-3 3.4-3 5.5s3 2.5 3 5.5",
-	image: "M2.5 3.5h11v9h-11zM2.5 10.6l3.2-3.2 3 3 2-2 2.8 2.8M10.6 6.3h.01",
-	expand: "M3 6V3h3M13 6V3h-3M3 10v3h3M13 10v3h-3",
-	contrast:
-		"M8 2.5a5.5 5.5 0 1 0 0 11 5.5 5.5 0 0 0 0-11zM8 2.5v11",
-	calendar:
-		"M2.5 4.5h11v9h-11zM2.5 7.5h11M5.5 2.5v3M10.5 2.5v3",
-	bell: "M4.5 11V7.5a3.5 3.5 0 0 1 7 0V11l1 1.2h-9zM6.7 13.6a1.4 1.4 0 0 0 2.6 0",
-	link: "M6.8 9.2a2.6 2.6 0 0 0 3.7 0l2-2a2.6 2.6 0 0 0-3.7-3.7l-.9.9M9.2 6.8a2.6 2.6 0 0 0-3.7 0l-2 2a2.6 2.6 0 0 0 3.7 3.7l.9-.9",
-	code: "M5.5 4.5 2 8l3.5 3.5M10.5 4.5 14 8l-3.5 3.5M9 3.5l-2 9",
-	pen: "M10.5 2.8l2.7 2.7-7.3 7.3-3.2.5.5-3.2zM9 4.3l2.7 2.7",
-	sun: "M8 5.5a2.5 2.5 0 1 0 0 5 2.5 2.5 0 0 0 0-5zM8 1.8v1.6M8 12.6v1.6M1.8 8h1.6M12.6 8h1.6M3.6 3.6l1.1 1.1M11.3 11.3l1.1 1.1M3.6 12.4l1.1-1.1M11.3 4.7l1.1-1.1",
-	sparkle:
-		"M8 2l1.4 3.6L13 7l-3.6 1.4L8 12l-1.4-3.6L3 7l3.6-1.4zM12.5 11.5v2.5M11.3 12.7h2.4",
-	mail: "M2.5 4h11v8h-11zM2.5 4.6 8 9l5.5-4.4",
-	music: "M6 12.2V3.8l7-1.3v8.4M6 12.2a1.7 1.7 0 1 1-3.4 0 1.7 1.7 0 0 1 3.4 0zM13 10.9a1.7 1.7 0 1 1-3.4 0 1.7 1.7 0 0 1 3.4 0z",
-	globe: "M8 2a6 6 0 1 0 0 12A6 6 0 0 0 8 2zM2 8h12M8 2c2 1.7 2.8 3.7 2.8 6S10 12.3 8 14c-2-1.7-2.8-3.7-2.8-6S6 3.7 8 2z",
-	dot: "M8 6.2a1.8 1.8 0 1 0 0 3.6 1.8 1.8 0 0 0 0-3.6z",
-	plus: "M8 3.5v9M3.5 8h9",
-	minus: "M3.5 8h9",
-	x: "M4 4l8 8M12 4l-8 8",
-	clock: "M8 2.5a5.5 5.5 0 1 0 0 11 5.5 5.5 0 0 0 0-11zM8 5v3.2l2.2 1.3",
-	sliders:
-		"M3 5h6.5M12 5h1M3 11h1.5M7 11h6M9.5 3.4v3.2M4.5 9.4v3.2",
-	file: "M4 2.5h5l3 3v8H4zM9 2.5v3h3",
-	check: "M3.5 8.5 6.5 11.5 12.5 4.5",
-	pillshape:
-		"M4.5 5.5h7a2.5 2.5 0 0 1 0 5h-7a2.5 2.5 0 0 1 0-5z",
-	steps: "M3 4h2M7 4h6M3 8h2M7 8h6M3 12h2M7 12h6",
-	book: "M3 3.5h5v9H3zM8 3.5h5v9H8z",
-	news: "M3 3h8v10H3zM11 6h2v7h-2M5 5.5h4M5 8h4M5 10.5h2",
-	pot: "M3.5 7h9v4.5a1.5 1.5 0 0 1-1.5 1.5H5a1.5 1.5 0 0 1-1.5-1.5zM2.5 7h11M6 4.5c0-1 1-1 1-2M9 4.5c0-1 1-1 1-2",
-	ask: "M8 13.2v.1M6.2 6.2a1.9 1.9 0 1 1 2.7 1.7c-.6.3-.9.7-.9 1.4",
-	tag: "M2.5 8.5V3.5h5l6 6-5 5zM5.5 6h.01",
-	play: "M4.5 3.5v9l8-4.5z",
-	branch: "M4.5 3v10M11.5 5.5v1c0 2-3 2-7 4",
-	chat: "M2.8 3.5h10.4v6.8H8l-2.6 2.2v-2.2H2.8zM5 6.2h6M5 8.2h4",
-	shield: "M8 2.2 12.6 4v3.3c0 2.9-1.9 4.9-4.6 6.2-2.7-1.3-4.6-3.3-4.6-6.2V4z",
-};
-// which glyph stands for a kind of page (see pagekind.rs)
-const KIND_GLYPH = {
-	walkthrough: "steps",
-	wiki: "book",
-	news: "news",
-	video: "play",
-	recipe: "pot",
-	qna: "ask",
-	api: "code",
-	product: "tag",
-	search: "search",
-	webapp: "branch",
-	social: "chat",
-};
-
-function li(name) {
-	return `<svg class="li" viewBox="0 0 16 16" aria-hidden="true"><path d="${LI_PATHS[name] || LI_PATHS.dot}"/></svg>`;
-}
-
-// an element that starts with an icon, then plain text (never HTML)
-function withIcon(node, name, text) {
-	node.innerHTML = li(name);
-	node.append(document.createTextNode(` ${text}`));
-	return node;
-}
-
-function setPlayIcon(btn, playing) {
-	const want = playing ? "pause" : "play";
-	if (btn.dataset.icon !== want) {
-		btn.dataset.icon = want;
-		btn.innerHTML = ICON[want];
-	}
-}
-
-// long text scrolls back and forth instead of truncating
-function setMarquee(box, text) {
-	if (box.dataset.text === text) return;
-	box.dataset.text = text;
-	box.classList.remove("marquee", "run");
-	box.replaceChildren(document.createTextNode(text));
-	requestAnimationFrame(() => {
-		const over = box.scrollWidth - box.clientWidth;
-		if (over > 4) {
-			const span = document.createElement("span");
-			span.textContent = text;
-			box.replaceChildren(span);
-			span.style.setProperty(
-				"--dist",
-				`${-(over + 8)}px`,
-			);
-			box.classList.add("marquee", "run");
-		}
-	});
-}
 
 // pop a view's children in with a small stagger (see .enter in style.css)
 function playEnter(container) {
@@ -1196,46 +1059,6 @@ function playEnter(container) {
 // the frontend just reflects it rather than re-deriving it from has_session/
 // has_game flags that could race the resize.
 let currentView = "idle";
-
-// -- Claude usage peek: bars sit at the old value, then fill to the new one
-// once the island has landed (Rust decides when to show it) --
-const usagePeekEl = document.getElementById("usage-peek");
-let usagePeekData = null;
-let usagePeekTimer = null;
-listen("usage-peek", (e) => {
-	usagePeekData = e.payload;
-});
-
-function playUsagePeek() {
-	if (!usagePeekData) return;
-	const { before, after } = usagePeekData;
-	const keys = ["five_hour", "seven_day"];
-	for (const k of keys) {
-		const fill = document.getElementById(`peek-fill-${k}`);
-		fill.classList.remove("animating");
-		fill.style.width = `${before[k] ?? after[k] ?? 0}%`;
-		document.getElementById(`peek-pct-${k}`).textContent =
-			before[k] == null
-				? ""
-				: `${Math.round(before[k])}%`;
-	}
-	clearTimeout(usagePeekTimer);
-	usagePeekTimer = setTimeout(() => {
-		for (const k of keys) {
-			const fill = document.getElementById(
-				`peek-fill-${k}`,
-			);
-			fill.classList.add("animating");
-			fill.style.width = `${after[k] ?? 0}%`;
-			document.getElementById(
-				`peek-pct-${k}`,
-			).textContent =
-				after[k] == null
-					? ""
-					: `${Math.round(after[k])}%`;
-		}
-	}, 500);
-}
 
 // -- audio visualizer: an aura that lives in the island itself instead of bars.
 // 16 soft gradient lights (one per frequency band, ~60 Hz..12 kHz) drift
@@ -1846,9 +1669,8 @@ if (!FLOATS) requestAnimationFrame(frame);
 
 listen("view-tick", (event) => {
 	currentView = event.payload;
-	mediaEl.classList.toggle("hidden", currentView !== "media");
-	gameEl.classList.toggle("hidden", currentView !== "game");
-	workEl.classList.toggle("hidden", currentView !== "work");
+	view.name = currentView;
+	for (const [id, node] of pills) node.classList.toggle("hidden", currentView !== id);
 	notifEl.classList.toggle(
 		"hidden",
 		currentView !== "notification",
@@ -1869,19 +1691,10 @@ listen("view-tick", (event) => {
 	}
 	updateBg();
 	const enterTarget = {
-		media: mediaEl,
-		game: gameEl,
-		work: workEl,
 		notification: notifEl,
 		brief: briefEl,
-		usage_peek: usagePeekEl,
-	}[currentView];
+	}[currentView] || pills.get(currentView);
 	if (enterTarget) playEnter(enterTarget);
-	usagePeekEl.classList.toggle(
-		"hidden",
-		currentView !== "usage_peek",
-	);
-	if (currentView === "usage_peek") playUsagePeek();
 	if (currentView !== "idle") {
 		// the canvas stops repainting once a view takes over -- clear its last
 		// frame so stale eye pixels don't linger visible through any gaps
@@ -1900,7 +1713,7 @@ listen("view-tick", (event) => {
 		playHubEntrance(document.getElementById("hub-head"));
 		loadSettingsIntoForm();
 		loadNotificationHistory();
-		loadUsage();
+		for (const p of plugins) p.hubOpened?.();
 		loadCalendar();
 		refreshActivity();
 		pollSysStats();
@@ -2247,6 +2060,8 @@ listen("pin-tick", (event) => {
 
 pill.addEventListener("mousedown", (e) => {
 	if (e.button !== 0) return;
+	// the open hub is a panel to work in: only its head (the eyes) takes the click that closes it
+	if (currentView === "hub" && !e.target.closest("#hub-head")) return;
 	mood.wideUntil = performance.now() + 320; // boop!
 	invoke("drag_start");
 });
@@ -2256,170 +2071,6 @@ pill.addEventListener("mousedown", (e) => {
 // Hover (for pausing the idle-hide timer) is computed on the Rust side from
 // the global cursor vs. the window's own rect -- see IslandState's doc
 // comment in lib.rs for why webview mouseenter/leave aren't used for that.
-
-// -- media pill: driven by media-tick events from the Rust SMTC poll thread --
-const mediaEl = document.getElementById("media");
-const mediaArt = document.getElementById("media-art");
-const mediaTitle = document.getElementById("media-title");
-const mediaArtist = document.getElementById("media-artist");
-const mediaPlay = document.getElementById("media-play");
-const mediaPrev = document.getElementById("media-prev");
-const mediaNext = document.getElementById("media-next");
-
-mediaPrev.innerHTML = ICON.prev;
-mediaNext.innerHTML = ICON.next;
-const mediaProgress = document.getElementById("media-progress");
-const mediaProgressFill = mediaProgress.firstElementChild;
-
-let pillMediaSource = "";
-
-listen("media-tick", (event) => {
-	const list = mediaListOf(event.payload);
-	// (also when the sessions are gone: that is what hides the hub's media cards)
-	applyHubMediaList(list);
-	const m = pickPrimaryMedia(list);
-	// the pill follows one session; the hub shows them all
-	pillMediaSource = m ? m.source || "" : "";
-	if (!m) return;
-
-	setMarquee(mediaTitle, m.title || "");
-	mediaArtist.textContent = m.artist || "";
-	if (m.art) mediaArt.src = m.art;
-	mediaArt.classList.toggle("hidden", !m.art);
-	setPlayIcon(mediaPlay, m.playing);
-	mediaPrev.classList.toggle("hidden", !m.can_previous);
-	mediaNext.classList.toggle("hidden", !m.can_next);
-	// live streams report no duration -- no progress line then
-	const hasProgress = m.duration > 0;
-	mediaProgress.classList.toggle("hidden", !hasProgress);
-	if (hasProgress) {
-		mediaProgressFill.style.width = `${Math.min(100, (m.position / m.duration) * 100)}%`;
-	}
-});
-
-for (const btn of [mediaPlay, mediaPrev, mediaNext]) {
-	// stop the pill's own mousedown handler from starting a native window
-	// drag out from under the click
-	btn.addEventListener("mousedown", (e) =>
-		e.stopPropagation(),
-	);
-}
-mediaPlay.addEventListener("click", () =>
-	invoke("media_play_pause", { source: pillMediaSource }),
-);
-mediaPrev.addEventListener("click", () =>
-	invoke("media_previous", { source: pillMediaSource }),
-);
-mediaNext.addEventListener("click", () =>
-	invoke("media_next", { source: pillMediaSource }),
-);
-
-// -- game pill: driven by game-tick events from the Rust foreground-window poll --
-const gameEl = document.getElementById("game");
-const gameName = document.getElementById("game-name");
-const gameMore = document.getElementById("game-more");
-const gameIconImg = document.getElementById("game-icon-img");
-const gameIconEmoji = document.getElementById("game-icon");
-
-// the pill also shows how the game runs: FPS, then GPU / CPU / memory rings (instead of a dot)
-let gamePid = 0;
-let pillGauges = null;
-const gameFpsEl = document.getElementById("game-fps");
-
-async function pollPillGame() {
-	if (currentView !== "game" || !gamePid) return;
-	const [s] = await invoke("get_game_stats", {
-		pids: [gamePid],
-	});
-	if (!pillGauges) {
-		pillGauges = {
-			gpu: statRing("#8ADB6E"),
-			cpu: statRing("#5AC8E6"),
-			ram: statRing("#B47EE6"),
-		};
-		document
-			.getElementById("game-rings")
-			.append(
-				pillGauges.gpu.el,
-				pillGauges.cpu.el,
-				pillGauges.ram.el,
-			);
-	}
-	const hasFps = !!(s && s.fps != null);
-	gameFpsEl.hidden = !hasFps;
-	if (hasFps)
-		gameFpsEl.firstElementChild.textContent = String(
-			Math.round(s.fps),
-		);
-	pillGauges.gpu.set(
-		s ? s.gpu_pct : null,
-		s && s.gpu_pct != null
-			? `GPU \u00b7 ${Math.round(s.gpu_pct)}%`
-			: "",
-	);
-	pillGauges.cpu.set(
-		s ? s.cpu_pct : null,
-		s ? `CPU \u00b7 ${Math.round(s.cpu_pct)}%` : "",
-	);
-	pillGauges.ram.set(
-		s ? s.ram_pct : null,
-		s ? `RAM \u00b7 ${s.ram_gb.toFixed(1)} GB` : "",
-	);
-}
-if (!FLOATS) setInterval(pollPillGame, 1000);
-
-listen("game-tick", (event) => {
-	const g = event.payload;
-	gamePid = g.has_game ? g.pid || 0 : 0;
-	if (!g.has_game) return;
-	gameName.textContent = g.name || "";
-	gameMore.textContent = g.count > 1 ? `+${g.count - 1}` : "";
-	gameMore.classList.toggle("hidden", !(g.count > 1));
-	if (g.icon) {
-		gameIconImg.src = g.icon;
-		gameIconImg.classList.remove("hidden");
-		gameIconEmoji.classList.add("hidden");
-	} else {
-		gameIconImg.classList.add("hidden");
-		gameIconEmoji.classList.remove("hidden");
-	}
-});
-
-// -- work pill: driven by work-tick events from the Rust foreground-category poll --
-const WORK_GLYPH = {
-	coding: "code",
-	writing: "pen",
-	design: "sparkle",
-	communication: "mail",
-	media: "music",
-	gaming: "gamepad",
-	browsing: "globe",
-	other: "dot",
-};
-
-const workEl = document.getElementById("work");
-const workIcon = document.getElementById("work-icon");
-const workLabel = document.getElementById("work-label");
-const workApp = document.getElementById("work-app");
-const workTime = document.getElementById("work-time");
-
-listen("work-tick", (event) => {
-	const w = event.payload;
-	if (!w.has_session) return;
-	// browsing a page the island understands: it names the page (the step, the headline, the time left),
-	// and the right edge says how far down you are
-	const page = !!w.page_main;
-	workIcon.innerHTML = li(
-		page
-			? KIND_GLYPH[w.page_kind] || "globe"
-			: WORK_GLYPH[w.category] || "dot",
-	);
-	workLabel.textContent =
-		(page ? w.page_main : w.label) || "";
-	workApp.textContent =
-		(page ? w.page_sub : w.app_name) || "";
-	workTime.textContent = formatDuration(w.started_at_secs);
-});
 
 // -- notification banner: driven by notification-tick, and (for now) a
 // pushNotification() global any future subsystem can call to show one --
@@ -2469,33 +2120,34 @@ let briefCurrent = null;
 function showBrief(n) {
 	const b = n.brief;
 	briefCurrent = b;
-	briefEl.classList.toggle("brief-time", b.state === "time");
-	if (b.state === "time") {
-		// the time announcement: big light digits glowing in the theme colour, a blinking colon, nothing else
-		const m = /^(\d+):(\d+)(?:\s*(AM|PM))?$/i.exec(n.title);
-		briefTitle.replaceChildren();
-		if (m) {
-			briefTitle.append(
-				el("span", "", m[1]),
-				el("span", "time-sep", ":"),
-				el("span", "", m[2]),
-			);
-			if (m[3])
-				briefTitle.append(
-					el("small", "time-suf", m[3].toUpperCase()),
-				);
+	// a plugin's pill: its icon, what it says, and a short text at the right; "big" is only light digits, glowing
+	const plugin = b.state === "plugin";
+	const big = plugin && b.look === "big";
+	briefEl.classList.toggle("brief-time", big);
+	briefEl.classList.toggle("brief-plugin", plugin);
+	if (plugin) {
+		briefTile.removeAttribute("style");
+		briefTile.className = "pg-tile";
+		briefTile.innerHTML = li(b.host_icon || "dot");
+		const clock = big ? /^(\d+):(\d+)(?:\s*(AM|PM))?$/i.exec(n.title) : null;
+		if (clock) {
+			// the time: big light digits glowing in the theme colour, a blinking colon, nothing else
+			briefTitle.replaceChildren(el("span", "", clock[1]), el("span", "time-sep", ":"), el("span", "", clock[2]));
+			if (clock[3]) briefTitle.append(el("small", "time-suf", clock[3].toUpperCase()));
 		} else {
-			briefTitle.textContent = n.title;
+			briefTitle.textContent = whenText(n.title);
 		}
+		briefRight.replaceChildren(el("span", "pg-right", whenText(b.project || "")));
+		briefRight.classList.toggle("hidden", !b.project);
 	} else {
+		briefTile.className = "llm-tile";
+		briefRight.classList.remove("hidden");
 		briefTitle.textContent = n.title;
 		briefTile.style.setProperty("--c", LLM_COLOR.claude);
 		briefTile.innerHTML = `${LLM_LETTER.claude}<svg class="cr" viewBox="0 0 40 40"><circle class="rb" cx="20" cy="20" r="18"/><circle class="rf" cx="20" cy="20" r="18"/></svg>`;
 		const rf = briefTile.querySelector(".rf");
 		rf.style.strokeDasharray = String(LLM_RING_C);
-		rf.style.strokeDashoffset = String(
-			LLM_RING_C * (1 - b.ctx),
-		);
+		rf.style.strokeDashoffset = String(LLM_RING_C * (1 - b.ctx));
 		rf.style.stroke = llmCtxColor(b.ctx);
 		const host = el("span", "llm-host");
 		host.innerHTML = li(b.host_icon);
@@ -2515,7 +2167,7 @@ briefEl.addEventListener("mousedown", (e) =>
 );
 briefEl.addEventListener("click", () => {
 	if (!briefCurrent) return;
-	if (briefCurrent.state === "time") {
+	if (briefCurrent.state === "plugin") {
 		invoke("open_notification_action", { action: "brief" }); // just closes it
 		return;
 	}
@@ -2524,7 +2176,7 @@ briefEl.addEventListener("click", () => {
 		titleHint: briefCurrent.project,
 	});
 	if (briefCurrent.state === "finished")
-		invoke("llm_dismiss", { id: briefCurrent.id });
+		call("claude-code", "dismiss", { id: briefCurrent.id }).catch(() => {});
 	invoke("open_notification_action", { action: "brief" }); // ends the pill
 });
 
@@ -2632,145 +2284,17 @@ listen("notification-history-tick", (event) => {
 // same as the idle pill's, so they stay live (blink/gaze-track) while open.
 const hubEl = document.getElementById("hub");
 
-// -- icons on the static markup: settings sections and rows, clear buttons, the game pill --
+// -- icons on the static markup: clear buttons, and the plugin list's tools --
 (function decorate() {
-	const ROW = {
-		"set-game-detection": "gamepad",
-		"set-work-detection": "briefcase",
-		"set-download-detection": "download",
-		"set-llm-detection": "sparkle",
-		"set-page-preview": "eye",
-		"set-start-with-windows": "power",
-		"set-show-at-cursor": "cursor",
-		"set-cursor-follow": "follow",
-		"set-show-eyes": "eye",
-		"set-time-announce": "clock",
-		"set-time-interval": "follow",
-		"set-time-24h": "clock",
-		"set-accent": "palette",
-		"set-react-to-audio": "wave",
-		"set-audio-bleed": "sun",
-		"set-edge-dwell": "timer",
-		"set-fullscreen-guard": "shield",
-		"set-idle-hide-delay": "eyeoff",
-		"set-peek-duration": "hourglass",
-		"set-pin-shrink": "shrink",
-		"set-compact-width": "follow",
-		"set-hub-width": "follow",
-		"set-top-margin": "follow",
-		"set-glow": "sparkle",
-		"bg-pick-compact": "image",
-		"bg-pick-hub": "expand",
-		"set-bg-dim": "contrast",
-		"set-calendar-lead": "bell",
-	};
-	for (const [id, name] of Object.entries(ROW)) {
-		const label = document
-			.getElementById(id)
-			?.closest(".hub-row")
-			?.querySelector(":scope > span");
-		if (label) {
-			label.classList.add("hub-row-label");
-			label.insertAdjacentHTML("afterbegin", li(name));
-		}
-	}
-	const SECTION = {
-		Behavior: "sliders",
-		Island: "pillshape",
-		Background: "image",
-		Calendar: "calendar",
-	};
-	for (const t of document.querySelectorAll(
-		".hub-section-title",
-	)) {
-		const name = SECTION[t.textContent.trim()];
-		if (name) {
-			t.classList.add("with-icon");
-			t.insertAdjacentHTML("afterbegin", li(name));
-		}
-	}
-
-	// the short labels are explained by hovering them
-	const HINT = {
-		"set-game-detection": "Detect running games",
-		"set-work-detection": "Detect what you are working on",
-		"set-download-detection": "Show active downloads",
-		"set-llm-detection":
-			"Show the Claude Code sessions that are running, and drop the island down when one needs you or finishes",
-		"set-page-preview":
-			"Read the pages you have open through the browser extension: what kind each is, and what is worth knowing, with its main picture. Needs the extension (never a private window, never banking, mail or health sites)",
-		"set-start-with-windows": "Start with Windows",
-		"set-show-at-cursor": "Appear under the cursor",
-		"set-cursor-follow":
-			"Follow the cursor along the top edge",
-		"set-show-eyes":
-			"Show the eyes (the sound light stays either way)",
-		"set-time-announce":
-			"Tell the time now and then, as a pill",
-		"set-time-interval":
-			"How often the time is announced (on the clock: every 30 minutes means :00 and :30)",
-		"set-time-24h":
-			"Military time (24-hour clock: 15:30 instead of 3:30 PM)",
-		"set-accent": "Theme colour",
-		"set-react-to-audio": "Eyes react to sound",
-		"set-audio-bleed":
-			"Sound light bleeding outside the island: strength and reach (0 = off)",
-		"set-edge-dwell":
-			"How long the cursor rests at the edge before it appears",
-		"set-fullscreen-guard":
-			"Stay hidden (and let clicks through) while a fullscreen game or video is in front. The key you pick, held, lifts it for as long as it is down",
-		"set-idle-hide-delay": "How long before it hides again",
-		"set-peek-duration": "How long a status stays up",
-		"set-pin-shrink":
-			"How small the island gets while pinned and left alone (100% = never)",
-		"set-compact-width":
-			"Width of the collapsed island (the idle and game pills keep their proportions)",
-		"set-hub-width": "Width of the expanded island",
-		"set-top-margin":
-			"Distance of the island from the top edge of the screen",
-		"set-glow": "Glow around a status: strength and reach",
-		"bg-pick-compact": "Background of the island",
-		"bg-pick-hub": "Background of the expanded island",
-		"set-bg-dim": "How dark the background is",
-		"set-calendar-url":
-			"Paste the secret .ics address of a Google or Outlook calendar",
-		"set-calendar-lead":
-			"Minutes of warning before an event",
-	};
-	for (const [id, tip] of Object.entries(HINT)) {
-		const row = document
-			.getElementById(id)
-			?.closest(".hub-row");
-		if (row) row.title = tip;
-	}
-	document.querySelector(".field-icon").innerHTML =
-		li("link");
-	document.getElementById("set-calendar-clear").innerHTML =
-		li("x");
 	for (const b of document.querySelectorAll(".hub-btn-x"))
 		b.innerHTML = li("x");
-	const gameIcon = document.getElementById("game-icon");
-	if (gameIcon) gameIcon.innerHTML = li("gamepad");
+	document.getElementById("plugin-folder").innerHTML = li("folder");
+	document.getElementById("plugin-rescan").innerHTML = li("refresh");
 })();
 
 // -- hub settings: loaded fresh each time the hub opens, saved back to
 // Rust (which persists to disk and live-updates the detection threads)
 // on every change --
-const setGameDetection = document.getElementById(
-	"set-game-detection",
-);
-const setWorkDetection = document.getElementById(
-	"set-work-detection",
-);
-const setDownloadDetection = document.getElementById(
-	"set-download-detection",
-);
-const setLlmDetection = document.getElementById(
-	"set-llm-detection",
-);
-const setPagePreview = document.getElementById(
-	"set-page-preview",
-);
 const setStartWithWindows = document.getElementById(
 	"set-start-with-windows",
 );
@@ -2788,29 +2312,6 @@ const setReactToAudio = document.getElementById(
 	"set-react-to-audio",
 );
 const setShowEyes = document.getElementById("set-show-eyes");
-const setTimeAnnounce = document.getElementById(
-	"set-time-announce",
-);
-const setTimeInterval = document.getElementById(
-	"set-time-interval",
-);
-const setTimeIntervalLabel = document.getElementById(
-	"set-time-interval-label",
-);
-const setTime24h = document.getElementById("set-time-24h");
-const TIME_STEPS = [
-	"5 min",
-	"10 min",
-	"15 min",
-	"30 min",
-	"1 h",
-	"2 h",
-	"3 h",
-	"6 h",
-];
-document
-	.getElementById("time-preview")
-	.addEventListener("click", () => invoke("time_preview"));
 // the theme colour: a handful of swatches; the accent of the hub, the glow and the pills follows
 const ACCENTS = [
 	"#5ac88c",
@@ -2921,15 +2422,6 @@ for (const b of setFullscreenGuard.querySelectorAll("button"))
 	});
 const edgeDwellText = (ms) =>
 	Number(ms) === 0 ? "off" : `${ms} ms`;
-const setCalendarUrl = document.getElementById(
-	"set-calendar-url",
-);
-const setCalendarLead = document.getElementById(
-	"set-calendar-lead",
-);
-const setCalendarLeadLabel = document.getElementById(
-	"set-calendar-lead-label",
-);
 const setAudioBleed = document.getElementById(
 	"set-audio-bleed",
 );
@@ -2947,13 +2439,6 @@ let currentSettings = null;
 
 async function loadSettingsIntoForm() {
 	currentSettings = await invoke("get_settings");
-	setGameDetection.checked = currentSettings.game_detection;
-	setWorkDetection.checked = currentSettings.work_detection;
-	setDownloadDetection.checked =
-		currentSettings.download_detection;
-	setLlmDetection.checked =
-		currentSettings.llm_detection ?? true;
-	syncPageToggle();
 	setStartWithWindows.checked =
 		currentSettings.start_with_windows;
 	setIdleHideDelay.value = currentSettings.idle_hide_delay_s;
@@ -2962,12 +2447,6 @@ async function loadSettingsIntoForm() {
 	setCursorFollow.checked = currentSettings.cursor_follow;
 	setReactToAudio.checked = currentSettings.react_to_audio;
 	setShowEyes.checked = currentSettings.show_eyes ?? true;
-	setTimeAnnounce.checked =
-		currentSettings.time_announce ?? false;
-	setTimeInterval.value = currentSettings.time_interval ?? 4;
-	setTimeIntervalLabel.textContent =
-		TIME_STEPS[Number(setTimeInterval.value)];
-	setTime24h.checked = currentSettings.time_24h ?? false;
 	applyAccent(currentSettings.accent_color);
 	showEyes = setShowEyes.checked;
 	setCompactWidth.value =
@@ -2994,16 +2473,6 @@ async function loadSettingsIntoForm() {
 	);
 	setPeekDuration.value = currentSettings.peek_duration_s;
 	setPeekDurationLabel.textContent = `${currentSettings.peek_duration_s}s`;
-	setCalendarUrl.value = currentSettings.calendar_ics_url;
-	setCalendarUrl
-		.closest(".field")
-		.classList.toggle(
-			"filled",
-			setCalendarUrl.value !== "",
-		);
-	setCalendarLead.value =
-		currentSettings.calendar_reminder_lead_min;
-	setCalendarLeadLabel.textContent = `${currentSettings.calendar_reminder_lead_min}m`;
 	setAudioBleed.value = currentSettings.audio_bleed ?? 60;
 	setAudioBleedLabel.textContent = `${setAudioBleed.value}%`;
 	bleedLevel = Number(setAudioBleed.value) / 100;
@@ -3014,6 +2483,7 @@ async function loadSettingsIntoForm() {
 	setBgDimLabel.textContent = `${currentSettings.bg_dim}%`;
 	applyBackgrounds(currentSettings);
 	syncSliderResets();
+	updateSizePreview();
 }
 
 // every slider gets a small reset button that shows only while it is off its default
@@ -3027,6 +2497,13 @@ function syncSliderResets() {
 				"is-default",
 				input.value === input.dataset.default,
 			);
+		// the filled part of the track
+		const lo = Number(input.min);
+		const span = Number(input.max) - lo;
+		input.style.setProperty(
+			"--p",
+			`${(((Number(input.value) - lo) / span) * 100).toFixed(1)}%`,
+		);
 	}
 }
 for (const input of document.querySelectorAll(
@@ -3059,29 +2536,12 @@ function saveSettingsFromForm() {
 	if (!currentSettings) return;
 	currentSettings = {
 		...currentSettings,
-		game_detection: setGameDetection.checked,
-		work_detection: setWorkDetection.checked,
-		download_detection: setDownloadDetection.checked,
-		llm_detection: setLlmDetection.checked,
-		// (one switch: the sessions, and their alerts)
-		llm_brief: setLlmDetection.checked,
-		// locked (and shown off) while no extension is connected: the saved choice stays
-		page_preview: setPagePreview.disabled
-			? currentSettings.page_preview
-			: setPagePreview.checked,
-		// (one switch: reading the pages, and their pictures)
-		page_images: setPagePreview.disabled
-			? currentSettings.page_images
-			: setPagePreview.checked,
 		start_with_windows: setStartWithWindows.checked,
 		idle_hide_delay_s: Number(setIdleHideDelay.value),
 		show_at_cursor: setShowAtCursor.checked,
 		cursor_follow: setCursorFollow.checked,
 		react_to_audio: setReactToAudio.checked,
 		show_eyes: setShowEyes.checked,
-		time_announce: setTimeAnnounce.checked,
-		time_interval: Number(setTimeInterval.value),
-		time_24h: setTime24h.checked,
 		peek_duration_s: Number(setPeekDuration.value),
 		edge_dwell_ms: Number(setEdgeDwell.value),
 		fullscreen_guard: guardValue() !== "off",
@@ -3093,10 +2553,6 @@ function saveSettingsFromForm() {
 		compact_width: Number(setCompactWidth.value),
 		hub_width: Number(setHubWidth.value),
 		top_margin: Number(setTopMargin.value),
-		calendar_ics_url: setCalendarUrl.value.trim(),
-		calendar_reminder_lead_min: Number(
-			setCalendarLead.value,
-		),
 		bg_dim: Number(setBgDim.value),
 		glow_intensity: Number(setGlow.value),
 		audio_bleed: Number(setAudioBleed.value),
@@ -3108,18 +2564,11 @@ function saveSettingsFromForm() {
 }
 
 for (const el of [
-	setGameDetection,
-	setWorkDetection,
-	setDownloadDetection,
-	setLlmDetection,
-	setPagePreview,
 	setStartWithWindows,
 	setShowAtCursor,
 	setCursorFollow,
 	setReactToAudio,
 	setShowEyes,
-	setTimeAnnounce,
-	setTime24h,
 ]) {
 	el.addEventListener("change", saveSettingsFromForm);
 }
@@ -3145,50 +2594,16 @@ setTopMargin.addEventListener("input", () => {
 	setTopMarginLabel.textContent = `${setTopMargin.value}px`;
 });
 setTopMargin.addEventListener("change", saveSettingsFromForm);
-setTimeInterval.addEventListener("input", () => {
-	setTimeIntervalLabel.textContent =
-		TIME_STEPS[Number(setTimeInterval.value)];
-});
-setTimeInterval.addEventListener(
-	"change",
-	saveSettingsFromForm,
-);
-
-// ---- the settings tabs: icons only, the name on hover ----
+// ---- the settings tabs: four, each with its name ----
 const SET_TABS = [
 	{ id: "general", icon: "sliders", tip: "General" },
-	{ id: "island", icon: "island", tip: "Island" },
+	{ id: "size", icon: "expand", tip: "Size" },
 	{ id: "look", icon: "palette", tip: "Look" },
-	{ id: "background", icon: "image", tip: "Background" },
-	{ id: "time", icon: "clock", tip: "Time" },
-	{ id: "calendar", icon: "calendar", tip: "Calendar" },
+	{ id: "plugins", icon: "plug", tip: "Plugins" },
 ];
-// the browser extension: which browsers have it connected. Reading pages needs it, so the Page Reader
-// switch is locked (and shown off) until one is.
-const BROWSER_NAME = { msedge: "Edge", chrome: "Chrome", brave: "Brave", opera: "Opera", vivaldi: "Vivaldi" };
-let extConnected = false;
-function syncPageToggle() {
-	setPagePreview.disabled = !extConnected;
-	setPagePreview.checked =
-		extConnected && !!currentSettings?.page_preview;
-	const row = setPagePreview.closest(".hub-row");
-	row?.classList.toggle("locked", !extConnected);
-}
-async function refreshExtStatus() {
-	try {
-		const list = await invoke("ext_status");
-		extConnected = list.length > 0;
-		syncPageToggle();
-	} catch (_) {}
-}
-// the extension may connect or leave while the settings are open
-setInterval(() => {
-	if (setPagePreview.offsetParent) refreshExtStatus();
-}, 4000);
-refreshExtStatus();
-
 function showSettingsTab(id) {
-  if (id === "general") refreshExtStatus();
+	if (id === "plugins") renderPlugins();
+	if (id === "size") updateSizePreview();
 	for (const p of document.querySelectorAll(
 		"#pane-settings .set-tab",
 	))
@@ -3213,10 +2628,8 @@ function showSettingsTab(id) {
 		const b = document.createElement("button");
 		b.type = "button";
 		b.dataset.tab = t.id;
-		b.dataset.tip = t.tip;
 		b.setAttribute("role", "tab");
-		b.setAttribute("aria-label", t.tip);
-		b.innerHTML = li(t.icon);
+		b.innerHTML = `${li(t.icon)}<span>${t.tip}</span>`;
 		b.addEventListener("mousedown", (e) =>
 			e.stopPropagation(),
 		);
@@ -3251,32 +2664,6 @@ setPeekDuration.addEventListener(
 	"change",
 	saveSettingsFromForm,
 );
-setCalendarLead.addEventListener("input", () => {
-	setCalendarLeadLabel.textContent = `${setCalendarLead.value}m`;
-});
-setCalendarLead.addEventListener(
-	"change",
-	saveSettingsFromForm,
-);
-setCalendarUrl.addEventListener("change", saveSettingsFromForm);
-// the clear button shows only while the field holds something
-function syncCalendarField() {
-	setCalendarUrl
-		.closest(".field")
-		.classList.toggle(
-			"filled",
-			setCalendarUrl.value !== "",
-		);
-}
-setCalendarUrl.addEventListener("input", syncCalendarField);
-document
-	.getElementById("set-calendar-clear")
-	.addEventListener("click", () => {
-		setCalendarUrl.value = "";
-		syncCalendarField();
-		saveSettingsFromForm();
-		setCalendarUrl.focus();
-	});
 function applyGlow(pct) {
 	document.documentElement.style.setProperty(
 		"--gi",
@@ -3306,65 +2693,21 @@ setBgDim.addEventListener("input", () => {
 });
 setBgDim.addEventListener("change", saveSettingsFromForm);
 
-// -- hub calendar: upcoming events from the .ics feed, pushed by Rust --
-const calendarStatusEl = document.getElementById(
-	"calendar-status",
-);
-const calendarEventsEl = document.getElementById(
-	"calendar-events",
-);
-
-function formatEventTime(ev) {
-	const d = new Date(ev.start_ms);
-	const now = new Date();
-	const sameDay = d.toDateString() === now.toDateString();
-	const tomorrow =
-		new Date(now.getTime() + 86400000).toDateString() ===
-		d.toDateString();
-	const day = sameDay
-		? "Today"
-		: tomorrow
-			? "Tomorrow"
-			: d.toLocaleDateString([], {
-					weekday: "short",
-					month: "short",
-					day: "numeric",
-				});
-	if (ev.all_day) return day;
-	return `${day} ${d.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}`;
+// the Size tab's preview: the collapsed island and the expanded one behind it, at half their size
+function updateSizePreview() {
+	const k = 0.5;
+	const top = 6 + Number(setTopMargin.value) * k * 0.5;
+	const hub = document.getElementById("sp-hub");
+	const pill = document.getElementById("sp-pill");
+	hub.style.width = `${Number(setHubWidth.value) * k}px`;
+	hub.style.top = pill.style.top = `${top}px`;
+	pill.style.width = `${Number(setCompactWidth.value) * k}px`;
 }
+paneSettings.addEventListener("input", updateSizePreview);
 
+// -- the calendar (a main feature): the events come from whichever plugin brought them, pushed by Rust --
 function applyCalendar(c) {
 	calSetData(c);
-	calendarEventsEl.textContent = "";
-	calendarStatusEl.textContent = "";
-	if (!c || !c.configured) {
-		updateInfoEmpty();
-		return;
-	}
-	if (c.error) {
-		calendarStatusEl.textContent = c.error;
-		updateInfoEmpty();
-		return;
-	}
-	// the feed now carries past + recurring events for the calendar view; the
-	// info list only wants what's still ahead
-	const upcoming = c.events
-		.filter((ev) => ev.end_ms >= Date.now() - 3600000)
-		.slice(0, 20);
-	for (const ev of upcoming) {
-		const row = document.createElement("div");
-		row.className = "calendar-event spot";
-		const title = document.createElement("span");
-		title.className = "calendar-event-title";
-		title.textContent = ev.summary;
-		const time = document.createElement("span");
-		time.className = "calendar-event-time";
-		withIcon(time, "clock", formatEventTime(ev));
-		row.append(title, time);
-		calendarEventsEl.append(row);
-	}
-	updateInfoEmpty();
 }
 
 // -- hub calendar view: click the clock to swap the cards for a month grid.
@@ -3539,7 +2882,9 @@ function renderCalDay(animate) {
 	calEventsEl.textContent = "";
 	const d = cal.data;
 	if (!d || !d.configured) {
-		return; // no feed set up: just an empty day, no hint text
+		// nobody brings events: say where they come from
+		calStatusEl.textContent = "No calendar plugin is on. Switch one on in Settings > Plugins.";
+		return;
 	}
 	if (d.error) {
 		calStatusEl.textContent = d.error;
@@ -3848,85 +3193,9 @@ for (const row of document.querySelectorAll(".hub-row")) {
 	);
 }
 
-// -- hub stat rings: Claude 5h/7d usage (pushed from Rust every 2min, click
-// to refresh with a 60s cooldown enforced Rust-side) and CPU/RAM (polled
-// each second while the hub is open). Percent lives in the tooltip only. --
-const RING_R = 8;
-const RING_C = 2 * Math.PI * RING_R;
-
-const ringEls = {};
-for (const el of document.querySelectorAll(".ring-wrap")) {
-	const key = el.id.replace("ring-", "");
-	const color = el.dataset.color;
-	el.innerHTML =
-		`<svg viewBox="0 0 20 20">` +
-		`<circle class="ring-bg" cx="10" cy="10" r="${RING_R}"></circle>` +
-		`<circle class="ring-fg" cx="10" cy="10" r="${RING_R}" stroke="${color}" stroke-dasharray="0 ${RING_C}"></circle>` +
-		`</svg>`;
-	ringEls[key] = { el, fg: el.querySelector(".ring-fg") };
-	// rings sit on the click-toggles-hub pill; don't let a ring click close it
-	el.addEventListener("mousedown", (e) =>
-		e.stopPropagation(),
-	);
-}
-
-function setRing(key, pct, tooltip) {
-	const ring = ringEls[key];
-	if (!ring) return;
-	const clamped = Math.max(0, Math.min(100, pct ?? 0));
-	const len = (clamped / 100) * RING_C;
-	ring.fg.setAttribute(
-		"stroke-dasharray",
-		`${len} ${RING_C}`,
-	);
-	ring.el.dataset.tip = tooltip;
-	refreshTip(ring.el); // live-update if it is showing right now
-}
-
-function formatReset(iso) {
-	if (!iso) return "";
-	const mins = Math.max(
-		0,
-		Math.floor(
-			(new Date(iso).getTime() - Date.now()) / 60000,
-		),
-	);
-	if (mins < 60) return `${mins}m`;
-	const hours = Math.floor(mins / 60);
-	if (hours < 24) return `${hours}h ${mins % 60}m`;
-	const days = Math.floor(hours / 24);
-	return `${days}d ${hours % 24}h`;
-}
-
-function applyUsage(u) {
-	const windows = [
-		["five_hour", "5h", u?.five_hour],
-		["seven_day", "7d", u?.seven_day],
-	];
-	for (const [key, label, w] of windows) {
-		const ring = ringEls[key];
-		const visible = !!(
-			u &&
-			u.available &&
-			!u.error &&
-			w &&
-			w.pct != null
-		);
-		ring.el.classList.toggle("hidden", !visible);
-		ring.el.classList.toggle("clickable", visible);
-		if (!visible) continue;
-		const reset = formatReset(w.resets_at);
-		const tip = `Claude ${label} · ${Math.round(w.pct)}%\n${reset ? `Resets in ${reset} · ` : ""}Click to refresh`;
-		setRing(key, w.pct, tip);
-	}
-}
-
-listen("usage-tick", (event) => applyUsage(event.payload));
-for (const key of ["five_hour", "seven_day"]) {
-	ringEls[key].el.addEventListener("click", () =>
-		invoke("refresh_usage"),
-	);
-}
+// -- hub stat rings: CPU/RAM/GPU (polled each second while the hub is open); the plugins add their own. Percent
+// lives in the tooltip only. --
+for (const el of document.querySelectorAll(".ring-wrap")) ringFrom(el);
 
 async function pollSysStats() {
 	if (currentView !== "hub") return;
@@ -3956,1505 +3225,307 @@ async function pollGpu() {
 }
 if (!FLOATS) setInterval(pollGpu, 1000);
 
-async function loadUsage() {
-	applyUsage(await invoke("get_usage"));
-}
-
 // -- hub "Now" section: one media card per live session (live, from media-tick) + game / work /
 // coding cards (polled from Rust while the hub is showing the info pane) --
-const hubMediaEl = document.getElementById("hub-media");
 const nowCardsEl = document.getElementById("now-cards");
-// cards the user has opened (all start collapsed); kept by key so a re-render keeps them open
-const openCards = new Set();
-
-// the jump buttons: a circular arrow with the number inside (the forward one is the mirror image)
-const JUMP_SVG = (flip) =>
-	`<svg viewBox="0 0 16 16"><g${flip ? ' transform="translate(16 0) scale(-1 1)"' : ""}><path d="M3.2 8a4.8 4.8 0 1 1 1.4 3.4M3 4v3.2h3.2"/></g><text x="8" y="10.2" text-anchor="middle">5</text></svg>`;
-// speed: a dropdown of fixed steps from 0.1x to 16x
-const RATES = [
-	0.1, 0.25, 0.5, 0.75, 1, 1.25, 1.5, 1.75, 2, 3, 4, 8, 16,
-];
-const rateText = (r) => `${Number(r.toFixed(2))}×`;
-let hubHasMedia = false;
 let hubHasActivity = false;
-
 // (an empty list just stays empty -- no placeholder text; callers still call this)
 function updateInfoEmpty() {}
 
-// one entry per live media card; [0] wraps the static #hub-media card,
-// the rest are built to the same shape (classes, never duplicate ids)
-const hubMediaCards = [];
 
-function wrapHubMediaCard(root, index) {
-	const q = (id, cls) =>
-		root.querySelector(`#${CSS.escape(id)}, .${cls}`) ||
-		root.querySelector(`.${cls}`);
-	const card = {
-		root,
-		art: q("hub-media-art", "hub-media-art"),
-		title: q("hub-media-title", "hub-media-title"),
-		artist: q("hub-media-artist", "hub-media-artist"),
-		play: q("hub-media-play", "hub-media-play"),
-		prev: q("hub-media-prev", "hub-media-prev"),
-		next: q("hub-media-next", "hub-media-next"),
-		seek: q("hub-media-seek", "hub-media-seek"),
-		seekFill: q("hub-media-seek-fill", "hub-media-seek-fill"),
-		back: q("hub-media-back", "hub-media-back"),
-		fwd: q("hub-media-fwd", "hub-media-fwd"),
-		rate: q("hub-media-rate", "hub-media-rate"),
-		rateLabel: q("hub-media-rate-label", "hub-media-rate-label"),
-		rates: q("hub-media-rates", "hub-media-rates"),
-		extra: q("hub-media-extra", "hub-media-extra"),
-		source: "",
-		titleText: "",
-		duration: 0,
-		rateNow: 1,
-	};
-	wireHubMediaCard(card, index);
-	hubMediaCards[index] = card;
-	return card;
-}
+// ---- the plugins screen: every plugin in one list (the native ones, and the folders with a manifest)
 
-function buildHubMediaCard(index) {
-	const root = document.createElement("div");
-	root.className = "now-card spot hub-media";
-	root.innerHTML =
-		`<div class="now-row">` +
-		`<img class="now-icon hub-media-art" alt="" />` +
-		`<div class="now-text"><div class="now-title hub-media-title"></div>` +
-		`<div class="now-sub hub-media-artist"></div></div>` +
-		`<div class="now-controls">` +
-		`<button class="hub-media-prev" data-tip="Previous"></button>` +
-		`<button class="hub-media-play" data-tip="Play / Pause"></button>` +
-		`<button class="hub-media-next" data-tip="Next"></button>` +
-		`</div></div>` +
-		`<div class="media-extra hub-media-extra">` +
-		`<button class="media-jump hub-media-back" data-tip="Back 5 seconds"></button>` +
-		`<div class="now-seek hub-media-seek hidden"><div class="hub-media-seek-fill"></div></div>` +
-		`<button class="media-jump hub-media-fwd" data-tip="Forward 5 seconds"></button>` +
-		`<button class="media-rate hub-media-rate" data-tip="Playback speed">` +
-		`<span class="hub-media-rate-label">1×</span></button>` +
-		`</div><div class="rate-menu hub-media-rates hidden"></div>`;
-	if (hubMediaCards.length > 1)
-		hubMediaCards[hubMediaCards.length - 1].root.after(root);
-	else hubMediaEl.after(root);
-	return wrapHubMediaCard(root, index);
-}
-
-function wireHubMediaCard(card, index) {
-	card.prev.innerHTML = ICON.prev;
-	card.next.innerHTML = ICON.next;
-	card.back.innerHTML = JUMP_SVG(false);
-	card.fwd.innerHTML = JUMP_SVG(true);
-	for (const r of RATES) {
-		const o = el("button", "rate-opt", rateText(r));
-		o.dataset.rate = String(r);
-		o.addEventListener("click", async () => {
-			card.rates.classList.add("hidden");
-			card.rateLabel.textContent = rateText(r);
-			scheduleHubHeight();
-			await invoke("media_set_rate", {
-				rate: r,
-				source: card.source,
-			}); // the next update shows the speed the player took
-		});
-		card.rates.append(o);
-	}
-	for (const btn of [
-		card.play,
-		card.prev,
-		card.next,
-		card.seek,
-		card.back,
-		card.fwd,
-		card.rate,
-		card.rates,
-	]) {
-		btn.addEventListener("mousedown", (e) =>
-			e.stopPropagation(),
+// what a plugin asks to see, and a way to say no: shown before it is switched on
+function confirmPlugin(p, item) {
+	return new Promise((resolve) => {
+		// inline, under the plugin's row: the island's window is only as tall as the hub, so an overlay would be cropped
+		const box = el("div", "pg-dialog spot");
+		box.append(el("h4", null, `Switch on ${p.name}?`));
+		box.append(
+			el(
+				"p",
+				"pg-dialog-note",
+				p.kind === "native"
+					? "This is part of the app. To do its job it looks at this:"
+					: p.kind === "wasm"
+						? `${p.bundled ? "It ships with the app." : "It is a module: code that runs here."} It runs in a sandbox, with no network, and can only see this:`
+						: `${p.bundled ? "This ships with the app. " : ""}It can only ask the hosts listed, and draws only what it is given here:`,
+			),
 		);
-	}
-	// the art is the button that jumps to whoever is playing
-	collapsible(card.root, `media:${index}`);
-	card.root.addEventListener("mousedown", (e) =>
-		e.stopPropagation(),
-	);
-	const focus = () =>
-		invoke("focus_source", {
-			titleHint: card.titleText,
-			sourceId: card.source,
-		});
-	focusButton(card.root, focus);
-	card.play.addEventListener("click", () =>
-		invoke("media_play_pause", { source: card.source }),
-	);
-	card.prev.addEventListener("click", () =>
-		invoke("media_previous", { source: card.source }),
-	);
-	card.next.addEventListener("click", () =>
-		invoke("media_next", { source: card.source }),
-	);
-	card.back.addEventListener("click", () =>
-		invoke("media_seek_by", {
-			deltaSeconds: -5,
-			source: card.source,
-		}),
-	);
-	card.fwd.addEventListener("click", () =>
-		invoke("media_seek_by", {
-			deltaSeconds: 5,
-			source: card.source,
-		}),
-	);
-	card.rate.addEventListener("click", () => {
-		card.rates.classList.toggle("hidden");
-		scheduleHubHeight();
-	});
-	card.seek.addEventListener("click", (e) => {
-		if (!(card.duration > 0)) return;
-		const rect = card.seek.getBoundingClientRect();
-		const frac = Math.max(
-			0,
-			Math.min(1, (e.clientX - rect.left) / rect.width),
-		);
-		invoke("media_seek", {
-			positionSeconds: frac * card.duration,
-			source: card.source,
-		});
-		card.seekFill.style.width = `${frac * 100}%`;
-	});
-}
-
-function applyHubMediaCard(card, m) {
-	card.title.textContent = m.title || "";
-	card.source = m.source || "";
-	card.titleText = m.title || "";
-	card.artist.textContent = m.artist || "";
-	if (m.art) card.art.src = m.art;
-	card.art.classList.toggle("hidden", !m.art);
-	setPlayIcon(card.play, m.playing);
-	card.prev.classList.toggle("hidden", !m.can_previous);
-	card.next.classList.toggle("hidden", !m.can_next);
-	// live streams report no duration -- nothing to seek in, so no bar
-	card.duration = m.duration || 0;
-	card.seek.classList.toggle(
-		"hidden",
-		!(card.duration > 0),
-	);
-	// jump buttons need a player that takes seeks; the speed slider one that takes a speed
-	card.back.classList.toggle("hidden", !m.can_seek);
-	card.fwd.classList.toggle("hidden", !m.can_seek);
-	// the speed dropdown only exists for a player that takes a speed
-	card.rate.classList.toggle("hidden", !m.can_rate);
-	if (!m.can_rate) card.rates.classList.add("hidden");
-	card.rateNow = m.rate || 1;
-	card.rateLabel.textContent = rateText(card.rateNow);
-	for (const o of card.rates.children)
-		o.classList.toggle(
-			"on",
-			Math.abs(Number(o.dataset.rate) - card.rateNow) <
-				0.01,
-		);
-	// nothing to show in the row (no jumps, no speed, no seek bar): the row goes
-	card.extra.classList.toggle(
-		"hidden",
-		!(m.can_seek || m.can_rate || card.duration > 0),
-	);
-	if (card.duration > 0) {
-		card.seekFill.style.width = `${Math.min(100, ((m.position || 0) / card.duration) * 100)}%`;
-	}
-	card.root._syncBody?.(); // nothing to open to (no seek bar, jumps or speed): not expandable
-}
-
-function applyHubMediaList(list) {
-	const sessions = Array.isArray(list)
-		? list.filter((m) => m && m.has_session)
-		: mediaListOf(list);
-	hubHasMedia = sessions.length > 0;
-	// one card per session; surplus cards leave the DOM (card 0 wraps the
-	// static element and is kept, only hidden, so it is never wired twice)
-	while (hubMediaCards.length < sessions.length)
-		buildHubMediaCard(hubMediaCards.length);
-	while (hubMediaCards.length > Math.max(sessions.length, 1))
-		hubMediaCards.pop().root.remove();
-	sessions.forEach((m, i) => {
-		const card = hubMediaCards[i];
-		card.root.classList.remove("hidden");
-		applyHubMediaCard(card, m);
-	});
-	if (sessions.length === 0 && hubMediaCards.length > 0)
-		hubMediaCards[0].root.classList.add("hidden");
-	updateInfoEmpty();
-}
-
-// single-session callers (older harnesses) still work
-function applyHubMedia(m) {
-	applyHubMediaList(mediaListOf(m));
-}
-
-wrapHubMediaCard(hubMediaEl, 0);
-
-const WORK_CARD_LABEL = {
-	coding: "Coding",
-	writing: "Writing",
-	design: "Designing",
-	communication: "Messaging",
-	media: "Watching/Listening",
-	gaming: "Gaming",
-	browsing: "Browsing",
-};
-
-function formatDuration(secs) {
-	const s = Math.max(0, Math.floor(secs));
-	const h = Math.floor(s / 3600);
-	const m = Math.floor((s % 3600) / 60);
-	if (h > 0) return `${h}h ${m}m`;
-	if (m > 0) return `${m}m`;
-	return "<1m";
-}
-
-function el(tag, cls, text) {
-	const e = document.createElement(tag);
-	if (cls) e.className = cls;
-	if (text != null) e.textContent = text;
-	return e;
-}
-
-function iconEl(icon, glyph) {
-	if (icon) {
-		const img = el("img", "now-icon");
-		img.src = icon;
-		img.alt = "";
-		return img;
-	}
-	const box = el("div", "now-icon glyph");
-	box.innerHTML = li(glyph);
-	return box;
-}
-
-// `v` is a string, or { icon, text } for a short text that an icon explains
-function line(cls, v) {
-	const node = el("div", cls);
-	if (v && typeof v === "object")
-		withIcon(node, v.icon, v.text);
-	else node.textContent = v;
-	return node;
-}
-
-function textCol(title, sub) {
-	const col = el("div", "now-text");
-	col.append(line("now-title", title), line("now-sub", sub));
-	return col;
-}
-
-// how long something has been going: a stopwatch and the time, no words
-const going = (secs) => ({
-	icon: "timer",
-	text: formatDuration(secs),
-});
-
-// Every card has a collapsed state (the default): its header only. A chevron opens it to show
-// the rest. Call this once the card is fully built; `key` identifies it across refreshes.
-function collapsible(card, key) {
-	// the signature that decides whether the list must be rebuilt ignores the open/closed state
-	if (card._sig === undefined) card._sig = card.outerHTML;
-	card._key = key;
-	card.classList.add("collapsible");
-	if (openCards.has(key)) card.classList.add("open");
-	const btn = el("button", "card-toggle");
-	btn.innerHTML = li("chevron");
-	const sync = () => {
-		btn.title = card.classList.contains("open")
-			? "Collapse"
-			: "Expand";
-	};
-	sync();
-	// the whole header toggles it (the chevron only shows the state); the header's own
-	// buttons (media controls) keep doing their own thing
-	const row = card.querySelector(".now-row") || card;
-	row.classList.add("toggles");
-	// the header is the row plus the card's padding around it: no dead spots
-	card._inHeader = (e) => {
-		if (
-			e.target.closest(
-				"button:not(.card-toggle), .now-seek, .media-extra, .rate-menu, .work-body, .dl-list",
-			)
-		)
-			return false;
-		const r = row.getBoundingClientRect();
-		return e.clientY <= r.bottom + 12;
-	};
-	// a card with nothing more to show when opened (no body, no seek bar...) is not expandable: no
-	// chevron, and its header goes to the app like the rest of the card (see .flat-card)
-	card._syncBody = () => {
-		const bodies = [
-			...card.querySelectorAll(".work-body"),
-		].some(
-			(b) =>
-				b.children.length > 0 || b.textContent.trim(),
-		);
-		const more =
-			bodies ||
-			card.querySelector(
-				".dl-list, .now-seek:not(.hidden), .media-extra:not(.hidden)",
-			);
-		card.classList.toggle("flat-card", !more);
-		if (!more) card.classList.remove("open");
-	};
-	card._syncBody();
-	card.addEventListener("click", (e) => {
-		// a press on the icon went to the app (see focusButton): it does not also open the card
-		if (card._iconPress) {
-			card._iconPress = false;
-			e.stopImmediatePropagation();
-			return;
-		}
-		if (e.target.closest(".gd")) return;
-		if (
-			card.classList.contains("flat-card") ||
-			!card._inHeader(e)
-		)
-			return;
-		e.stopImmediatePropagation(); // not "go to the app"
-		const open = card.classList.toggle("open");
-		if (open) openCards.add(key);
-		else openCards.delete(key);
-		sync();
-		scheduleHubHeight();
-	});
-	row.append(btn);
-	if (!FLOATS) dragOut(card, row, key);
-	return card;
-}
-
-// Cards that float on the screen by themselves (floating cards, see floats.rs): the island leaves them out of
-// its list. A card is dragged out by its header; the other window takes it over from there.
-let floatKeys = new Set();
-function dragOut(card, row, key) {
-	row.addEventListener("pointerdown", (e) => {
-		if (
-			e.button !== 0 ||
-			e.target.closest(
-				"button:not(.card-toggle), input, .now-seek, .rate-menu",
-			)
-		)
-			return;
-		const sx = e.clientX;
-		const sy = e.clientY;
-		const onIcon = !!e.target.closest(".now-focus");
-		card._iconPress = onIcon;
-		row.setPointerCapture(e.pointerId);
-		const done = () => {
-			row.removeEventListener("pointermove", move);
-			row.removeEventListener("pointerup", up);
-			row.removeEventListener("pointercancel", done);
-		};
-		// let go without having moved: on the icon, that is a press of the focus button
-		const up = () => {
-			done();
-			if (onIcon && card._focus) card._focus();
-		};
-		const move = async (ev) => {
-			if (Math.hypot(ev.clientX - sx, ev.clientY - sy) < 6) return;
-			done();
-			const r = card.getBoundingClientRect();
-			floatKeys.add(key);
-			card.classList.add("leaving");
-			const ok = await invoke("float_begin", {
-				key,
-				x: r.left,
-				y: r.top,
-				w: r.width,
-				h: r.height,
-				grabX: sx - r.left,
-				grabY: sy - r.top,
-			});
-			if (ok) {
-				card.remove();
-				lastActivitySignature = "";
-				scheduleHubHeight();
-			} else {
-				floatKeys.delete(key);
-				card.classList.remove("leaving");
-			}
-		};
-		row.addEventListener("pointermove", move);
-		row.addEventListener("pointerup", up);
-		row.addEventListener("pointercancel", done);
-	});
-}
-
-// What a collapsed card still says at the right of its header (the sub-line is hidden then);
-// `v` is a string or { icon, text } like `line`. Call before `collapsible`.
-function peek(card, v) {
-	const row = card.querySelector(".now-row");
-	if (row && v) row.append(line("now-peek", v));
-	return card;
-}
-
-// a card that jumps to its source app when clicked (mousedown must not reach
-// #pill, whose handler would read the click as "toggle the hub")
-function focusable(
-	card,
-	args,
-	go = () => invoke("focus_source", args),
-) {
-	card.addEventListener("mousedown", (e) =>
-		e.stopPropagation(),
-	);
-	// the header opens/closes the card (see collapsible); going to the app is the icon's job
-	focusButton(card, go);
-	return card;
-}
-
-// The card's icon is the button that goes to the app the card is about: on hover it shows a focus mark. The
-// press itself is taken by the header's pointer handlers (they hold the pointer for dragging, so the icon would
-// never see a click): they call `card._focus` for a press that did not move.
-function focusButton(card, go) {
-	const icon = card.querySelector(".now-row .now-icon") || card.querySelector(".now-icon");
-	if (!icon || icon.parentElement.classList.contains("now-focus")) return;
-	const wrap = el("span", "now-focus");
-	wrap.title = "Go to it";
-	icon.replaceWith(wrap);
-	const mark = el("span", "now-focus-i");
-	mark.innerHTML = li("focus");
-	wrap.append(icon, mark);
-	card._focus = go;
-}
-
-// What each running game uses (CPU, memory, GPU, video memory), by pid; filled by refreshActivity
-const gameStats = new Map();
-
-// a small progress ring like the ones at the top right of the hub
-function statRing(color) {
-	const el = document.createElement("span");
-	el.className = "ring-wrap hidden";
-	el.innerHTML = `<svg viewBox="0 0 20 20"><circle class="ring-bg" cx="10" cy="10" r="${RING_R}"></circle><circle class="ring-fg" cx="10" cy="10" r="${RING_R}" stroke="${color}" stroke-dasharray="0 ${RING_C}"></circle></svg>`;
-	const fg = el.querySelector(".ring-fg");
-	return {
-		el,
-		set(pct, tip) {
-			if (pct == null) {
-				el.classList.add("hidden");
-				return;
-			}
-			el.classList.remove("hidden");
-			fg.setAttribute(
-				"stroke-dasharray",
-				`${(Math.max(0, Math.min(100, pct)) / 100) * RING_C} ${RING_C}`,
-			);
-			el.dataset.tip = tip;
-			refreshTip(el);
-		},
-	};
-}
-
-// frame times (ms, newest last) as a line: the 60 fps (16.7 ms) and 30 fps (33.3 ms) levels are marked,
-// and the scale is fixed at 50 ms so a hitch is a visible spike
-function frameGraph(ms) {
-	if (!ms || ms.length < 2) return "";
-	const max = 50;
-	const pts = ms.map((v, i) => [
-		(i / (ms.length - 1)) * 120,
-		52 - Math.min(v / max, 1) * 50,
-	]);
-	const line = pts
-		.map(
-			(p, i) =>
-				`${i ? "L" : "M"}${p[0].toFixed(1)} ${p[1].toFixed(1)}`,
-		)
-		.join(" ");
-	const y = (v) => (52 - (v / max) * 50).toFixed(1);
-	return `<svg viewBox="0 0 120 54" preserveAspectRatio="none"><line class="g" x1="0" x2="120" y1="${y(16.7)}" y2="${y(16.7)}"/><line class="g" x1="0" x2="120" y1="${y(33.3)}" y2="${y(33.3)}"/><path class="a" d="${line} L120 54 L0 54 Z"/><path class="l" d="${line}"/></svg>`;
-}
-
-// Game: collapsed it is the name and three rings (GPU, CPU, memory -- the game's own share, in the
-// colours of the hub's rings); opened it adds the meters and the time played.
-function gameCard(g) {
-	const card = el("div", "now-card spot");
-	const row = el("div", "now-row");
-	row.append(
-		iconEl(g.icon, "gamepad"),
-		textCol(g.name, going(g.playtime_secs)),
-	);
-	const rings = el("div", "g-rings");
-	const gpu = statRing("#8ADB6E");
-	const cpu = statRing("#5AC8E6");
-	const ram = statRing("#B47EE6");
-	// frames per second, when they can be counted: the number leads, the rings follow
-	const fpsEl = el("span", "g-fps");
-	fpsEl.hidden = true;
-	const fpsNum = el("b");
-	fpsEl.append(fpsNum, el("small", "", "FPS"));
-	rings.append(fpsEl, gpu.el, cpu.el, ram.el);
-	row.append(rings);
-	card.append(row);
-
-	// opened: FPS, 1% low and frame time, the frame-time graph, then the meters
-	const vitals = el("div", "work-body g-vitals");
-	vitals.hidden = true;
-	const stat = (label) => {
-		const box = el("div", "g-stat");
-		const num = el("b");
-		box.append(num, el("span", "", label));
-		return { box, num };
-	};
-	const sFps = stat("FPS");
-	const sLow = stat("1% low");
-	const sMs = stat("Frame time");
-	const statsRow = el("div", "g-stats");
-	statsRow.append(sFps.box, sLow.box, sMs.box);
-	const graph = el("div", "g-graph");
-	vitals.append(statsRow, graph);
-	card.append(vitals);
-
-	const body = el("div", "work-body g-meters");
-	const meters = {};
-	for (const [key, label, color] of [
-		["gpu", "GPU", "#8ADB6E"],
-		["vram", "VRAM", "#8ADB6E"],
-		["cpu", "CPU", "#5AC8E6"],
-		["ram", "RAM", "#B47EE6"],
-	]) {
-		const m = el("div", "g-meter");
-		const bar = el("i");
-		bar.style.setProperty("--c", color);
-		const val = el("em");
-		m.append(el("span", "", label), bar, val);
-		body.append(m);
-		meters[key] = { m, bar, val };
-	}
-	card.append(body);
-
-	const update = (data) => {
-		const s = gameStats.get(data.pid);
-		const sub = card.querySelector(".now-sub");
-		if (sub)
-			withIcon(
-				sub,
-				"timer",
-				formatDuration(data.playtime_secs),
-			);
-		const put = (key, pct, text, tip) => {
-			const mt = meters[key];
-			mt.m.hidden = pct == null;
-			mt.bar.style.setProperty(
-				"--v",
-				`${Math.max(0, Math.min(100, pct ?? 0))}%`,
-			);
-			mt.val.textContent = text;
-		};
-		const hasFps = !!(s && s.fps != null);
-		fpsEl.hidden = !hasFps;
-		vitals.hidden = !hasFps;
-		if (hasFps) {
-			fpsNum.textContent = String(Math.round(s.fps));
-			sFps.num.textContent = String(Math.round(s.fps));
-			sLow.num.textContent = String(
-				Math.round(s.low_fps),
-			);
-			sMs.num.textContent = `${(1000 / Math.max(s.fps, 1)).toFixed(1)} ms`;
-			graph.innerHTML = frameGraph(s.frame_ms);
-		}
-		gpu.set(
-			s ? s.gpu_pct : null,
-			s && s.gpu_pct != null
-				? `GPU \u00b7 ${Math.round(s.gpu_pct)}%`
-				: "",
-		);
-		cpu.set(
-			s ? s.cpu_pct : null,
-			s ? `CPU \u00b7 ${Math.round(s.cpu_pct)}%` : "",
-		);
-		ram.set(
-			s ? s.ram_pct : null,
-			s ? `RAM \u00b7 ${s.ram_gb.toFixed(1)} GB` : "",
-		);
-		put(
-			"gpu",
-			s ? s.gpu_pct : null,
-			s && s.gpu_pct != null
-				? `${Math.round(s.gpu_pct)}%`
-				: "",
-		);
-		put(
-			"vram",
-			s && s.vram_gb != null
-				? Math.min(100, (s.vram_gb / 12) * 100)
-				: null,
-			s && s.vram_gb != null
-				? `${s.vram_gb.toFixed(1)} GB`
-				: "",
-		);
-		put(
-			"cpu",
-			s ? s.cpu_pct : null,
-			s ? `${Math.round(s.cpu_pct)}%` : "",
-		);
-		put(
-			"ram",
-			s ? s.ram_pct : null,
-			s ? `${s.ram_gb.toFixed(1)} GB` : "",
-		);
-	};
-	update(g);
-	// rebuilt only when the game itself changes; the numbers update in place
-	card._sig = `game:${g.pid}:${g.exe_path}`;
-	card._data = g;
-	card._update = update;
-	return focusable(
-		collapsible(card, `game:${g.exe_path || g.name}`),
-		{ exePath: g.exe_path },
-	);
-}
-
-function workCard(w) {
-	if (w.category === "browsing" && w.browse)
-		return browsingCard(w);
-	const card = el("div", "now-card spot");
-	const row = el("div", "now-row");
-	const label = WORK_CARD_LABEL[w.category] || "Working";
-	row.append(
-		iconEl(w.icon, WORK_GLYPH[w.category] || "dot"),
-		textCol(
-			{
-				icon: WORK_GLYPH[w.category] || "dot",
-				text: w.app_name || label,
-			},
-			going(w.going_secs),
-		),
-	);
-	card.append(row);
-	return focusable(
-		collapsible(
-			peek(card, going(w.going_secs)),
-			`work:${w.category}`,
-		),
-		{ exePath: w.exe_path },
-	);
-}
-
-// A shortcut to a button of the page in front of you: the click is delivered to
-// the browser window, so it works without leaving the island.
-function pageButton(b) {
-	const btn = el("button", "page-btn", b.label);
-	const stop = (e) => e.stopPropagation();
-	btn.addEventListener("mousedown", stop);
-	btn.addEventListener("click", async (e) => {
-		e.stopPropagation(); // not "go to the browser"
-		btn.disabled = true;
-		const ok = await invoke("click_page_button", {
-			label: b.label,
-		});
-		btn.classList.add(ok ? "done" : "fail");
-		setTimeout(
-			() => btn.classList.remove("done", "fail"),
-			900,
-		);
-		btn.disabled = false;
-	});
-	return btn;
-}
-
-// The bytes of a page's picture come once per picture (the card only holds its id); the hub keeps the last few.
-const pageImages = new Map();
-async function showPageImage(img, id) {
-	let src = pageImages.get(id);
-	if (src === undefined) {
-		try {
-			src = (await invoke("page_image", { id })) || null;
-		} catch (_) {
-			src = null;
-		}
-		pageImages.set(id, src);
-		if (pageImages.size > 12)
-			pageImages.delete(pageImages.keys().next().value);
-	}
-	// (the card may have moved on to another picture while this was fetched)
-	if (img.dataset.id !== String(id)) return;
-	if (src) {
-		img.src = src;
-		img.classList.add("ready");
-	} else {
-		img.classList.remove("ready");
-	}
-	scheduleHubHeight();
-}
-
-// ---- a post and its comments, read-only (see pagekind::Thread) ----
-function threadHead(t) {
-	const frag = document.createDocumentFragment();
-	const by = el("div", "th-by");
-	if (t.who) by.append(el("span", "th-who", t.who));
-	if (t.handle) by.append(el("span", "th-dim", t.handle));
-	if (t.ago) by.append(el("span", "th-dim", "\u00b7"), el("span", "th-dim", t.ago));
-	if (t.chip) by.append(el("span", "th-chip", t.chip));
-	if (by.childElementCount) frag.append(by);
-	if (t.lead) frag.append(el("div", "th-lead", t.lead));
-	return frag;
-}
-
-function threadTail(t) {
-	const frag = document.createDocumentFragment();
-	if (t.stats.length) {
-		const row = el("div", "th-stats");
-		for (const s of t.stats) {
-			const n = el("span", "th-stat");
-			n.innerHTML = li(s.icon);
-			n.append(el("b", null, s.value));
-			row.append(n);
-		}
-		frag.append(row);
-	}
-	if (t.comments.length) {
-		const head = el("div", "th-head");
-		head.append(el("span", "th-h", "Comments"));
-		if (t.sort) head.append(el("span", "th-dim", t.sort));
-		frag.append(head);
-		const list = el("div", "th-list");
-		for (const c of t.comments) {
-			const n = el("div", "th-c");
-			n.dataset.d = String(c.depth);
-			n.style.setProperty("--d", String(c.depth));
-			const m = el("div", "th-m");
-			m.append(el("span", "th-a", c.who));
-			if (c.op) m.append(el("span", "th-op", "OP"));
-			if (c.score) {
-				const sc = el("span", "th-sc");
-				sc.innerHTML = li(c.heart ? "heart" : "up");
-				sc.append(document.createTextNode(c.score));
-				m.append(sc);
-			}
-			if (c.ago) m.append(el("span", null, c.ago));
-			n.append(m, el("div", "th-tx", c.text));
-			list.append(n);
-		}
-		frag.append(list);
-		if (t.total && t.total > t.comments.length)
-			frag.append(el("div", "th-fold", `${t.comments.length} of ${t.total} comments loaded on the page`));
-	}
-	return frag;
-}
-
-// what makes the thread a different card: its words and numbers (not the time that passes)
-function threadSig(t) {
-	return [
-		t.who,
-		t.lead,
-		t.stats.map((s) => s.value).join(","),
-		t.comments.map((c) => `${c.depth}${c.who}${c.text.length}${c.score}`).join(";"),
-	].join("|");
-}
-
-// the kind's own summary line is a better lead than the page's first paragraph
-function hasSummaryOf(b) {
-	return (
-		!!b.kind &&
-		b.kind.fields.some(
-			(f) => f.key === "Summary" || f.key === "Gist",
-		)
-	);
-}
-
-// Browsing: the page in front of you and what is in it, read from the page. When the island knows what kind
-// of page it is (a walkthrough, an article, a video...) the card lists what is worth knowing about that kind.
-function browsingCard(w) {
-	const b = w.browse;
-	const k = b.kind;
-	const pv = b.preview;
-	const card = el("div", "now-card spot");
-	const row = el("div", "now-row");
-	if (k) {
-		const tile = el("div", "now-icon tile");
-		tile.innerHTML = li(KIND_GLYPH[k.id] || "globe");
-		row.append(tile);
-	} else {
-		row.append(iconEl(w.icon, "globe"));
-	}
-	// the two lines that change as you read: the sub-line, and what the collapsed card says at its right
-	const subOf = (w) => {
-		const b = w.browse;
-		const k = b.kind;
-		return k
-			? b.domain
-				? `${k.label} \u00b7 ${b.domain}`
-				: k.label
-			: b.domain || going(w.going_secs);
-	};
-	const peekOf = (w) => {
-		const b = w.browse;
-		const k = b.kind;
-		if (k && k.peek) return k.peek;
-		return b.domain || going(w.going_secs);
-	};
-	row.append(
-		textCol(w.page || w.app_name || "Browsing", subOf(w)),
-	);
-	card.append(row);
-
-	const body = el("div", "work-body");
-	const th = k && k.thread;
-	const guide = k && k.guide;
-	// one card per recently focused page: per-page key keeps expand state separate,
-	// titleHint focuses the right browser window (chrome vs edge, window vs window)
-	const pageKey = `web:${w.exe_path || ""}:${w.page || ""}`;
-	if (th) body.append(threadHead(th));
-	let pic = null;
-	if (b.image != null) {
-		// the page's main picture: fetched once per picture (the id changes only when the picture does)
-		pic = el("img", "pk-img");
-		pic.alt = "";
-		pic.draggable = false;
-		pic.dataset.id = String(b.image);
-		showPageImage(pic, b.image);
-		// (a guide places it itself: see guide.js)
-		if (!guide) body.append(pic);
-	}
-	if (th) body.append(threadTail(th));
-	// a guide: laid out to be read, with the sections around it (see guide.js)
-	if (guide)
-		body.append(
-			guideReader({
-				el,
-				li,
-				invoke,
-				key: guide.key,
-				exe: w.exe_path,
-				page: w.page,
-				pageKey,
-				image: pic,
-				onSize: scheduleHubHeight,
-				onMoved: () => refreshActivity(),
-				onTyping: FLOATS ? (on) => invoke("float_typing", { on }) : null,
-			}),
-		);
-	if (k && k.fields.length && !th && !guide) {
-		const list = el("div", "pk-fields");
-		for (const f of k.fields) {
-			const r = el("div", "pk-row");
-			const v = el(
-				"span",
-				f.rough ? "pk-v rough" : "pk-v",
-				f.value,
-			);
-			r.append(el("span", "pk-k", f.key), v);
+		const list = el("div", "pg-dialog-perms");
+		for (const x of p.permissions) {
+			const r = el("div", "pg-dialog-perm");
+			r.append(el("b", null, permName(x)), el("span", null, x.why));
 			list.append(r);
 		}
-		body.append(list);
-	}
-	if (pv && !guide) {
-		// (the kind's own summary line is the better lead)
-		if (pv.lead && !hasSummaryOf(b) && !th)
-			body.append(el("div", "work-desc", pv.lead));
-		if (pv.buttons.length) {
-			const btns = el("div", "page-btns");
-			for (const b of pv.buttons)
-				btns.append(pageButton(b));
-			body.append(btns);
-		}
-	}
-	if (body.childElementCount) card.append(body);
-	// wide enough, the picture moves to the side (see .wide in hub.css)
-	if (b.image != null)
-		new ResizeObserver(() =>
-			card.classList.toggle("wide", card.clientWidth >= 520),
-		).observe(card);
-	const peekText = peekOf(w);
-	// Rebuilt only when the card's shape changes (another kind, other fields, other buttons); the values that
-	// move while you read (scroll, the video's clock) are written in place, so an open card does not replay
-	// its entrance animation every time you scroll.
-	card._sig = `${pageKey}:${b.image != null ? "img" : ""}:${guide ? guide.key : ""}:${th ? threadSig(th) : ""}:${k ? `${k.id}:${k.fields.map((f) => f.key).join("|")}` : ""}:${pv && pv.lead && !hasSummaryOf(b) ? "lead" : ""}:${pv ? pv.buttons.map((x) => x.label).join("|") : ""}`;
-	card._data = w;
-	card._update = (w) => {
-		const b = w.browse;
-		const k = b.kind;
-		const sub = card.querySelector(".now-sub");
-		const nextSub = line("now-sub", subOf(w));
-		if (sub && sub.textContent !== nextSub.textContent) sub.replaceWith(nextSub);
-		const pk = card.querySelector(".now-peek");
-		const nextPeek = line("now-peek", peekOf(w));
-		if (pk && pk.textContent !== nextPeek.textContent) pk.replaceWith(nextPeek);
-		if (k) {
-			const vals = card.querySelectorAll(".pk-v");
-			k.fields.forEach((f, i) => {
-				const v = vals[i];
-				if (!v) return;
-				if (v.textContent !== f.value) v.textContent = f.value;
-				v.classList.toggle("rough", !!f.rough);
-			});
-		}
-		const pic = card.querySelector(".pk-img");
-		if (pic && b.image != null && pic.dataset.id !== String(b.image)) {
-			pic.dataset.id = String(b.image);
-			showPageImage(pic, b.image);
-		}
-		const lead = card.querySelector(".work-desc");
-		if (lead && b.preview && lead.textContent !== b.preview.lead)
-			lead.textContent = b.preview.lead;
-	};
-	return focusable(
-		collapsible(peek(card, peekText), pageKey),
-		{ exePath: w.exe_path, titleHint: w.page },
-	);
-}
-
-function chip(text, cls) {
-	return el("span", cls ? `chip ${cls}` : "chip", text);
-}
-
-// What you're working on: the project (with its git branch), the file in front
-// of you and the uncommitted changes, summed up at the right edge.
-const BRANCH_ICON =
-	'<svg viewBox="0 0 16 16" width="10" height="10" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"><circle cx="4.5" cy="3.5" r="1.7"/><circle cx="4.5" cy="12.5" r="1.7"/><circle cx="11.5" cy="5.5" r="1.7"/><path d="M4.5 5.2v5.6M11.5 7.2c0 3-4.5 2-7 4"/></svg>';
-
-function codingCard(c) {
-	const p =
-		c.project_info && c.project_info.branch
-			? c.project_info
-			: null;
-	const card = el("div", "now-card spot");
-	const row = el("div", "now-row");
-	const tile = el("div", "now-icon tile");
-	tile.innerHTML = li("code");
-	row.append(tile);
-
-	// the icon says it: a pen while editing a file, a slashed eye when nothing is going on
-	// (the file itself is on its own line below)
-	const status = c.active
-		? { icon: c.file ? "pen" : "code", text: "" }
-		: { icon: "eyeoff", text: "" };
-	const col = el("div", "now-text");
-	const head = el("div", "work-head");
-	head.append(el("span", "now-title", c.project || "Coding"));
-	if (p) {
-		const branch = chip("", "branch");
-		branch.innerHTML = BRANCH_ICON;
-		branch.append(document.createTextNode(` ${p.branch}`));
-		head.append(branch);
-	}
-	col.append(head, line("now-sub", status));
-	row.append(col);
-
-	const total = el("div", "now-total");
-	if (p && p.changed) {
-		const nums = el("div", "now-total-value diff-sum");
-		nums.append(
-			el("span", "add", `+${p.added.toLocaleString()}`),
-			el(
-				"span",
-				"del",
-				`\u2212${p.deleted.toLocaleString()}`,
-			),
-		);
-		const files = el("div", "now-total-label");
-		withIcon(files, "file", String(p.changed));
-		total.append(nums, files);
-	} else if (p) {
-		const ok = el("div", "now-total-value");
-		ok.innerHTML = li("check");
-		ok.title = "No changes";
-		total.append(ok);
-	} else {
-		// not a git project: fall back to the time spent
-		const today = el("div", "now-total-label");
-		today.innerHTML = li("clock");
-		today.title = "Today";
-		total.append(
-			el(
-				"div",
-				"now-total-value",
-				formatDuration(c.today_secs),
-			),
-			today,
-		);
-	}
-	row.append(total);
-	card.append(row);
-
-	const body = el("div", "work-body");
-	if (c.file) {
-		const line = el("div", "work-line");
-		if (c.language) {
-			const dot = el("span", "lang-dot");
-			dot.style.background =
-				c.language_color || "#8a8a92";
-			line.append(
-				dot,
-				el("span", "work-lang", c.language),
-			);
-		}
-		line.append(el("span", "work-file", c.file));
-		if (c.unsaved) {
-			const dot = chip("", "warn");
-			dot.innerHTML = li("dot");
-			dot.title = "Unsaved";
-			line.append(dot);
-		}
-		body.append(line);
-	}
-	if (p && p.files.length) {
-		const peak = Math.max(
-			1,
-			...p.files.map((f) => f.added + f.deleted),
-		);
-		const list = el("div", "diff-list");
-		for (const f of p.files) {
-			const fileRow = el("div", "diff-row");
-			fileRow.title = f.path;
-			const st = el("span", `diff-st st-${f.status}`);
-			st.innerHTML = li(
-				{ A: "plus", D: "minus" }[f.status] || "pen",
-			);
-			st.title =
-				{ A: "Added", D: "Deleted" }[f.status] ||
-				"Modified";
-			fileRow.append(st, el("span", "diff-name", f.name));
-			const bar = el("span", "diff-bar");
-			const sum = f.added + f.deleted;
-			if (sum) {
-				bar.style.width = `${Math.max(12, Math.round((sum / peak) * 100))}%`;
-				const add = el("i", "add");
-				add.style.flex = String(f.added);
-				const del = el("i", "del");
-				del.style.flex = String(f.deleted);
-				bar.append(add, del);
-			}
-			const barBox = el("span", "diff-barbox");
-			barBox.append(bar);
-			fileRow.append(
-				barBox,
-				el(
-					"span",
-					"diff-num",
-					sum
-						? `+${f.added} \u2212${f.deleted}`
-						: "\u2014",
-				),
-			);
-			list.append(fileRow);
-		}
-		if (p.changed > p.files.length)
-			list.append(
-				el(
-					"div",
-					"diff-more",
-					`+${p.changed - p.files.length} more`,
-				),
-			);
-		body.append(list);
-	}
-	if (body.childElementCount) card.append(body);
-	// the editor window for the active project (falls back to any editor window)
-	return focusable(collapsible(card, "code"), {
-		exePath: c.exe_path,
-		titleHint: c.project,
+		if (!p.permissions.length) list.append(el("div", "pg-dialog-perm", "Nothing but a card of its own."));
+		box.append(list);
+		const buttons = el("div", "pg-dialog-buttons");
+		const no = el("button", "set-btn", "Cancel");
+		const yes = el("button", "set-btn go", "Switch on");
+		for (const b of [no, yes]) b.type = "button";
+		const done = (v) => {
+			box.remove();
+			scheduleHubHeight();
+			resolve(v);
+		};
+		no.addEventListener("click", () => done(false));
+		yes.addEventListener("click", () => done(true));
+		buttons.append(no, yes);
+		box.append(buttons);
+		item.append(box);
+		scheduleHubHeight();
+		box.scrollIntoView({ block: "nearest" });
+		yes.focus({ preventScroll: true });
 	});
 }
 
-// ---- downloads: one card per source, up to three downloads on each ----
-function formatBytes(n) {
-	if (n < 1024) return `${Math.round(n)} B`;
-	const units = ["KB", "MB", "GB", "TB"];
-	let v = n / 1024;
-	let u = 0;
-	while (v >= 1024 && u < units.length - 1) {
-		v /= 1024;
-		u++;
+// a permission as a badge reads it: what, and (when there is one) of what
+const permName = (x) => (x.detail ? `${x.name} · ${x.detail}` : x.name);
+
+// a plugin's tile: its first letter, in a colour its id picks
+const PLUGIN_TINTS = ["#7fd1a0", "#8fb6f0", "#e6b070", "#b79af0", "#7fd1d1", "#d98fa8", "#c9c9d0"];
+function tintOf(id) {
+	let h = 0;
+	for (const c of id) h = (h * 31 + c.charCodeAt(0)) >>> 0;
+	return PLUGIN_TINTS[h % PLUGIN_TINTS.length];
+}
+// the plugins whose row is open stay open when the list is drawn again
+const openPlugins = new Set();
+
+// one plugin: a row (its name, one line about it, its switch) that opens to its settings and what it can see
+function pluginItem(p, reload) {
+	const item = el("div", `pl${p.enabled ? "" : " off"}`);
+	const row = el("div", "prow");
+	const open = openPlugins.has(p.id);
+	const main = el("button", "pmain");
+	main.type = "button";
+	main.setAttribute("aria-expanded", String(open));
+	const tile = el("span", "tile", (p.name || "?").trim().charAt(0).toUpperCase());
+	tile.style.background = tintOf(p.id);
+	const text = el("span", "ptext");
+	const name = el("span", "pname", p.name);
+	if (!p.bundled) name.append(el("span", "pg-tag", p.kind));
+	// one line: what is wrong, else what it says of itself, else what it is
+	const line = p.error || p.note || p.description || "";
+	text.append(name, el("span", `pdesc${p.error ? " pg-err" : ""}`, line));
+	const chev = el("span", `chev${open ? " open" : ""}`);
+	chev.innerHTML = li("chevron");
+	main.append(tile, text, chev);
+	const cb = document.createElement("input");
+	cb.type = "checkbox";
+	cb.checked = p.enabled;
+	cb.disabled = !!p.error && !p.enabled;
+	cb.setAttribute("aria-label", p.name);
+	cb.addEventListener("change", async () => {
+		if (cb.checked) {
+			// (the switch stays off until the answer is yes)
+			cb.checked = false;
+			if (!(await confirmPlugin(p, item))) return;
+			cb.checked = true;
+		}
+		await invoke("plugin_set", { id: p.id, on: cb.checked });
+		refreshActivity();
+		reload();
+	});
+	row.append(main, cb);
+	item.append(row);
+
+	// what it says, what it can see, and (while it is on) what the user can set and its banners
+	const more = el("div", "pg-more");
+	more.hidden = !open;
+	main.addEventListener("click", () => {
+		const now = more.hidden;
+		more.hidden = !now;
+		main.setAttribute("aria-expanded", String(now));
+		chev.classList.toggle("open", now);
+		if (now) openPlugins.add(p.id);
+		else openPlugins.delete(p.id);
+		scheduleHubHeight();
+	});
+	if (p.description) more.append(el("div", "pg-about", p.description));
+	if (p.error) more.append(el("div", "pg-about pg-err", p.error));
+	// what it may do: a badge each, and the words of the question before it is switched on in a tooltip
+	if (p.permissions.length) {
+		const perms = el("div", "pg-perms");
+		perms.append(el("span", "pg-perms-title", "Permissions"));
+		for (const x of p.permissions) {
+			const badge = el("span", "perm-badge", permName(x));
+			badge.dataset.tip = x.why;
+			perms.append(badge);
+		}
+		more.append(perms);
 	}
-	return `${v >= 100 ? Math.round(v) : v.toFixed(1)} ${units[u]}`;
-}
-
-// small line icons: a folder (a browser download opens its folder) and a package (the
-// delivery arrived: click to put it away)
-const DL_ICON_FOLDER =
-	'<svg viewBox="0 0 16 16" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round" stroke-linecap="round"><path d="M1.8 4.6c0-.7.5-1.2 1.2-1.2h3l1.4 1.6h5.6c.7 0 1.2.5 1.2 1.2v5.4c0 .7-.5 1.2-1.2 1.2H3c-.7 0-1.2-.5-1.2-1.2z"/></svg>';
-const DL_ICON_PACKAGE =
-	'<svg viewBox="0 0 16 16" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round" stroke-linecap="round"><path d="M8 1.6l5.6 2.9v6.9L8 14.3l-5.6-2.9V4.5z"/><path d="M2.6 4.7L8 7.5l5.4-2.8M8 7.5v6.6"/><path d="M5.2 3l5.4 2.8"/></svg>';
-
-function downloadMeta(it) {
-	if (it.done) return "";
-	const speed =
-		it.speed > 1024 ? ` · ${formatBytes(it.speed)}/s` : "";
-	// Steam shows no progress anywhere, so neither does the island: size and bandwidth only
-	if (it.kind === "steam")
-		return (
-			[
-				it.total ? formatBytes(it.total) : null,
-				speed ? speed.slice(3) : null,
-			]
-				.filter(Boolean)
-				.join(" \u00b7 ") || "Downloading"
-		);
-	if (it.total)
-		return `${Math.min(100, Math.floor((it.received / it.total) * 100))}%${speed}`;
-	return `${formatBytes(it.received)}${speed}`;
-}
-
-// ---- LLM sessions (Claude Code): one card per session. Needs you > finished > the others. ----
-const LLM_COLOR = { claude: "#e08a5a" };
-const LLM_LETTER = { claude: "C" };
-const LLM_RING_C = 2 * Math.PI * 18;
-const llmCtxColor = (p) =>
-	p > 0.85 ? "#e87a7a" : p > 0.65 ? "#e8b04a" : "#5ac88c";
-const LLM_STATE_TIP = {
-	waiting: "Waiting for you",
-	finished: "Finished",
-	working: "Working",
-	idle: "Idle",
-};
-// the state as one icon: a ringing phone, a check, a spinner, a moon
-function llmStateIcon(state) {
-	const box = el("span", `llm-ico ${state}`);
-	box.dataset.tip = LLM_STATE_TIP[state] || state;
-	if (state === "working") box.append(el("span", "llm-spin"));
-	else
-		box.innerHTML = li(
-			{
-				waiting: "phone",
-				finished: "check",
-				idle: "moon",
-			}[state] || "moon",
-		);
-	return box;
-}
-const formatTokens = (n) =>
-	n >= 1e6
-		? `${(n / 1e6).toFixed(1)}M`
-		: `${Math.round(n / 1000)}k`;
-
-function llmCard(c) {
-	const card = el("div", "now-card spot llm-card");
-	const row = el("div", "now-row");
-	const tile = el("div", "llm-tile");
-	tile.style.setProperty(
-		"--c",
-		LLM_COLOR[c.provider] || "#888",
-	);
-	tile.innerHTML = `${LLM_LETTER[c.provider] || "?"}<svg class="cr" viewBox="0 0 40 40"><circle class="rb" cx="20" cy="20" r="18"/><circle class="rf" cx="20" cy="20" r="18"/></svg>`;
-	const rf = tile.querySelector(".rf");
-	rf.style.strokeDasharray = String(LLM_RING_C);
-	const col = el("div", "now-text");
-	const title = el("div", "now-title");
-	const liveLine = el("div", "llm-live");
-	col.append(title, liveLine);
-	const right = el("div", "llm-right");
-	row.append(tile, col, right);
-	card.append(row);
-
-	// opened: the prompt, the latest tool calls, the context window, the numbers
-	const body = el("div", "work-body llm-body");
-	const prompt = el("p", "llm-prompt");
-	const feed = el("div", "llm-feed");
-	const ctx = el("div", "llm-ctx");
-	const ctxBar = el("i");
-	const ctxVal = el("em");
-	ctx.append(el("span", "", "Context"), ctxBar, ctxVal);
-	const stat = (label) => {
-		const box = el("div", "llm-stat");
-		const num = el("b");
-		box.append(num, el("span", "", label));
-		return { box, num };
-	};
-	const sRun = stat("Running");
-	const sCost = stat("Cost");
-	const sLines = stat("Lines");
-	const sModel = stat("Model");
-	const stats = el("div", "llm-stats");
-	stats.append(sRun.box, sCost.box, sLines.box, sModel.box);
-	const focus = el("button", "llm-focus", "Focus");
-	focus.addEventListener("mousedown", (e) =>
-		e.stopPropagation(),
-	);
-	body.append(prompt, feed, ctx, stats, focus);
-	card.append(body);
-
-	let lastState = "";
-	const update = (d) => {
-		title.textContent = d.title;
-		card.classList.toggle(
-			"llm-waiting",
-			d.state === "waiting",
-		);
-		liveLine.className = `llm-live ${d.state}`;
-		liveLine.innerHTML = li(d.activity.icon);
-		liveLine.append(el("span", "", d.activity.text));
-		// the host (VS Code, a terminal) as a small icon, its name on hover
-		if (d.state !== lastState || !right.firstChild) {
-			lastState = d.state;
-			right.replaceChildren();
-			const host = el("span", "llm-host");
-			host.innerHTML = li(d.host_icon);
-			host.dataset.tip = `${d.host}\n${d.project}`;
-			right.append(host, llmStateIcon(d.state));
-		}
-		const frac = d.context_limit
-			? Math.min(1, d.context_tokens / d.context_limit)
-			: 0;
-		rf.style.stroke = llmCtxColor(frac);
-		rf.style.strokeDashoffset = String(
-			LLM_RING_C * (1 - frac),
-		);
-		prompt.replaceChildren();
-		if (d.prompt) {
-			prompt.append(
-				el("b", "", "Prompt"),
-				document.createTextNode(d.prompt),
-			);
-		}
-		prompt.hidden = !d.prompt;
-		feed.replaceChildren();
-		const rows =
-			d.state === "working"
-				? [d.activity, ...d.feed.slice(0, 2)]
-				: d.feed.slice(0, 3);
-		rows.forEach((f, i) => {
-			const r = el(
-				"div",
-				i === 0 && d.state === "working"
-					? "llm-fr now"
-					: "llm-fr",
-			);
-			r.innerHTML = li(f.icon);
-			r.append(el("span", "", f.text));
-			feed.append(r);
-		});
-		ctxBar.style.setProperty("--v", `${frac * 100}%`);
-		ctxBar.style.setProperty("--c", llmCtxColor(frac));
-		ctxVal.textContent = `${formatTokens(d.context_tokens)} / ${formatTokens(d.context_limit)}`;
-		sRun.num.textContent = formatDuration(d.running_secs);
-		sCost.num.textContent = `$${d.cost_usd.toFixed(2)}`;
-		sLines.num.textContent = `+${d.lines_added} \u2212${d.lines_removed}`;
-		sModel.num.textContent = d.model || "\u2014";
-		focus.hidden =
-			d.state !== "waiting" && d.state !== "finished";
-	};
-	update(c);
-	const args = () => ({
-		exePath: c.host_exe,
-		titleHint: c.project,
-	});
-	// to the host window; a finished session has been looked at then, so its card goes
-	const go = () => {
-		invoke("focus_source", args());
-		if (lastState === "finished") {
-			invoke("llm_dismiss", { id: c.id }).then(() =>
-				refreshActivity(),
-			);
-		}
-	};
-	focus.addEventListener("click", (e) => {
-		e.stopPropagation();
-		go();
-	});
-	card._sig = `llm:${c.id}`;
-	card._data = c;
-	card._update = update;
-	return focusable(
-		collapsible(card, `llm:${c.id}`),
-		args(),
-		go,
-	);
-}
-
-const DL_RING_C = 2 * Math.PI * 15; // circumference of the progress ring (r = 15 in a 36 box)
-
-// the combined download speed, one sample per refresh (about a second): the last half minute
-const dlSpeedHistory = Array.from({ length: 30 }, () => 0);
-function sparkSvg() {
-	const h = dlSpeedHistory;
-	// adaptive: the lowest and highest speed of the window are the bottom and top of the graph, so
-	// the line always uses its whole height. A nearly flat stretch is not blown up into noise: the
-	// range is at least 10% of the top speed (or 50 KB/s), and sits centred around it.
-	const hi = Math.max(...h);
-	const lo = Math.min(...h);
-	const span = Math.max(hi - lo, hi * 0.1, 50_000);
-	const base =
-		hi === 0
-			? 0
-			: hi - lo >= span
-				? lo
-				: (hi + lo) / 2 - span / 2;
-	const pts = h.map((v, i) => [
-		(i / (h.length - 1)) * 120,
-		25 - Math.max(0, Math.min(1, (v - base) / span)) * 22,
-	]);
-	const line = pts
-		.map(
-			(p, i) =>
-				`${i ? "L" : "M"}${p[0].toFixed(1)} ${p[1].toFixed(1)}`,
-		)
-		.join(" ");
-	return `<svg viewBox="0 0 120 28" preserveAspectRatio="none"><path d="${line} L120 28 L0 28 Z" class="a"/><path d="${line}" class="l"/></svg>`;
-}
-
-function downloadCard(d) {
-	const card = el("div", "now-card spot dl-card");
-	// header: a ring of overall progress around the download icon (the count on its corner), a trace
-	// of the combined speed over the last half minute, and the speed (a package when all are done)
-	const head = el("div", "now-row");
-	const ring = el("div", "dl-ring");
-	ring.innerHTML = `<svg class="r" viewBox="0 0 36 36"><circle class="rb" cx="18" cy="18" r="15"/><circle class="rf" cx="18" cy="18" r="15"/></svg>${li("download")}<b class="dl-badge"></b>`;
-	const ringFill = ring.querySelector(".rf");
-	const badge = ring.querySelector(".dl-badge");
-	const spark = el("div", "dl-spark");
-	const headRight = el("div", "now-total-label dl-total");
-	head.append(ring, spark, headRight);
-	card.append(head);
-	const list = el("div", "dl-list");
-	const refs = [];
-	for (const it of d.items) {
-		const item = el(
-			"div",
-			`dl-item ${it.done ? "done" : "focus"}${it.kind === "steam" ? " nobar" : ""}`,
-		);
-		item.title = it.name;
-		const bar = el("i", "dl-fill");
-		const track = el("span", "dl-bar");
-		track.append(bar);
-		const meta = el("span", "dl-meta");
-		const name = el("span", "dl-name");
-		if (it.icon) {
-			const app = el("img", "dl-app");
-			app.src = it.icon;
-			app.alt = "";
-			app.title = it.source;
-			name.append(app);
-		} else {
-			name.append(el("b", "dl-src", it.source));
-		}
-		name.append(document.createTextNode(it.name));
-		item.append(name, meta, track);
-		item.addEventListener("mousedown", (e) =>
-			e.stopPropagation(),
-		);
-		item.addEventListener("click", async (e) => {
-			e.stopPropagation();
-			if (it.done) {
-				// dismisses it (a browser download also opens its folder)
-				await invoke("download_item_click", {
-					id: it.id,
+	if (p.enabled) {
+		for (const s of p.settings) {
+			const f = el("label", "pg-field");
+			f.append(el("span", null, s.label));
+			if (s.type === "choice") {
+				// one of a few: the island's button group
+				const group = el("span", "opt-group pg-choice");
+				group.setAttribute("role", "group");
+				const buttons = s.options.map((o) => {
+					const b = el("button", null, o.label);
+					b.type = "button";
+					b.setAttribute("aria-pressed", String(o.value === s.value));
+					b.addEventListener("click", async (e) => {
+						e.preventDefault();
+						for (const x of buttons) x.setAttribute("aria-pressed", String(x === b));
+						await invoke("plugin_value", { id: p.id, key: s.key, value: o.value });
+					});
+					group.append(b);
+					return b;
 				});
-				refreshActivity();
-			} else if (it.exe_path) {
-				invoke("focus_source", {
-					exePath: it.exe_path,
-				}); // bring the app up
+				f.append(group);
+				more.append(f);
+				continue;
 			}
-		});
-		list.append(item);
-		refs.push({ bar, meta });
-	}
-	card.append(list);
-
-	const update = (data) => {
-		const live = data.items.filter((it) => !it.done);
-		badge.textContent = String(data.items.length);
-		// overall: what the items that report a size have got of it; none do (Steam) -> a turning sliver
-		const sized = live.filter((it) => it.total);
-		const total = sized.reduce((s, it) => s + it.total, 0);
-		const got = sized.reduce(
-			(s, it) => s + Math.min(it.received, it.total),
-			0,
-		);
-		const overall =
-			live.length === 0
-				? 100
-				: total
-					? (got / total) * 100
-					: null;
-		ring.classList.toggle("busy", overall == null);
-		ringFill.style.strokeDashoffset = String(
-			DL_RING_C *
-				(1 - (overall == null ? 0.28 : overall / 100)),
-		);
-		spark.innerHTML = sparkSvg();
-		if (live.length) {
-			const speed = live.reduce(
-				(s, it) => s + (it.speed || 0),
-				0,
-			);
-			headRight.classList.remove("dl-done-icon");
-			headRight.textContent =
-				speed > 1024 ? `${formatBytes(speed)}/s` : "";
-		} else {
-			headRight.classList.add("dl-done-icon");
-			headRight.innerHTML = DL_ICON_PACKAGE;
-		}
-		data.items.forEach((it, i) => {
-			const r = refs[i];
-			if (!r) return;
-			if (it.done) {
-				// no words: a folder for a browser download (opens it), a package otherwise
-				r.meta.innerHTML =
-					it.kind === "browser"
-						? DL_ICON_FOLDER
-						: DL_ICON_PACKAGE;
-				r.meta.title =
-					it.kind === "browser"
-						? "Open Folder"
-						: "Put Away";
-				r.meta.classList.add("dl-done-icon");
+			const inp = document.createElement("input");
+			if (s.type === "toggle") {
+				inp.type = "checkbox";
+				inp.checked = !!s.value;
 			} else {
-				r.meta.textContent = downloadMeta(it);
-				r.meta.classList.remove("dl-done-icon");
+				inp.type = s.type === "number" ? "number" : "text";
+				if (s.type === "number") inp.step = "any";
+				inp.value = s.value ?? "";
+				inp.spellcheck = false;
 			}
-			const pct = it.done
-				? 100
-				: it.total
-					? Math.min(
-							100,
-							(it.received / it.total) * 100,
-						)
-					: null;
-			r.bar.classList.toggle("busy", pct == null);
-			r.bar.style.width = pct == null ? "" : `${pct}%`;
-		});
-	};
-	update(d);
-	card._sig = `dl:${d.items.map((i) => i.id + (i.done ? "!" : "")).join(",")}`;
-	card._data = d;
-	card._update = update;
-	card.addEventListener("mousedown", (e) =>
-		e.stopPropagation(),
-	); // not "toggle the hub"
-	return collapsible(card, "dl");
+			inp.addEventListener("keydown", (e) => e.stopPropagation());
+			inp.addEventListener("change", async () => {
+				const v = s.type === "toggle" ? inp.checked : s.type === "number" ? Number(inp.value) : inp.value;
+				await invoke("plugin_value", { id: p.id, key: s.key, value: v });
+			});
+			f.append(inp);
+			more.append(f);
+		}
+		const foot = el("div", "pg-foot");
+		// An action may need a word from the user (a code to paste): its field is always there, and what is put in it is kept
+		// by itself (a pasted code, or Enter, or leaving the field); emptying the field takes it back. It is a secret, so its
+		// letters are dots, and a field that holds something kept shows a row of dots.
+		const asking = (p.actions || []).find((a) => a.ask);
+		const ask = el("div", "pg-ask");
+		const askErr = el("div", "pg-err");
+		if (asking) {
+			const SECRET = "•".repeat(12);
+			let kept = asking.filled ? SECRET : "";
+			const row = el("div", "pg-ask-row");
+			const input = document.createElement("input");
+			input.type = "password";
+			input.autocomplete = "off";
+			input.spellcheck = false;
+			input.placeholder = asking.ask;
+			input.setAttribute("aria-label", asking.ask);
+			input.value = kept;
+			const keep = async (text) => {
+				if (text === kept) return;
+				if (/^•+$/.test(text)) {
+					input.value = kept; // (a dot or two deleted from the dots: nothing new)
+					return;
+				}
+				askErr.textContent = "";
+				try {
+					await invoke("plugin_call", { id: p.id, cmd: asking.then, args: { text } });
+				} catch (e) {
+					askErr.textContent = String(e);
+					return;
+				}
+				kept = text ? SECRET : "";
+				input.value = kept;
+				setTimeout(reload, 1500);
+			};
+			input.addEventListener("focus", () => {
+				if (input.value === SECRET) input.select();
+			});
+			input.addEventListener("keydown", (e) => e.stopPropagation());
+			input.addEventListener("paste", (e) => {
+				const text = (e.clipboardData?.getData("text") || "").trim();
+				if (!text) return;
+				e.preventDefault();
+				input.value = text;
+				keep(text);
+			});
+			input.addEventListener("change", () => keep(input.value.trim()));
+			const go = el("button", "set-btn", asking.label);
+			go.type = "button";
+			go.addEventListener("click", async () => {
+				askErr.textContent = "";
+				try {
+					await invoke("plugin_call", { id: p.id, cmd: asking.id, args: null });
+				} catch (e) {
+					askErr.textContent = String(e);
+					return;
+				}
+				input.focus();
+			});
+			row.append(input, go);
+			ask.append(row, askErr);
+		}
+		for (const a of p.actions || []) {
+			if (a.ask) continue; // (its button is by its field)
+			const b = el("button", "set-btn", a.label);
+			b.type = "button";
+			b.addEventListener("click", async () => {
+				try {
+					await invoke("plugin_call", { id: p.id, cmd: a.id, args: null });
+				} catch (e) {
+					askErr.textContent = String(e);
+					return;
+				}
+				setTimeout(reload, 1500);
+			});
+			foot.append(b);
+		}
+		if (p.banners) {
+			// (a switch like the plugin's own settings: it is on or off)
+			const f = el("label", "pg-field");
+			f.append(el("span", null, "Mute banners"));
+			const mute = document.createElement("input");
+			mute.type = "checkbox";
+			mute.checked = !!p.muted;
+			mute.addEventListener("change", async () => {
+				await invoke("plugin_mute", { id: p.id, muted: mute.checked });
+				reload();
+			});
+			f.append(mute);
+			more.append(f);
+		}
+		if (p.cost) foot.append(el("span", "pg-cost", p.cost));
+		if (foot.childElementCount) more.append(foot);
+		if (asking) more.append(ask);
+	}
+	item.append(more);
+	return item;
 }
+
+async function renderPlugins() {
+	let listing = { plugins: [], dnd: false };
+	try {
+		listing = (await invoke("plugin_list")) || listing;
+	} catch (_) {}
+	document.getElementById("plugin-dnd").checked = !!listing.dnd;
+	document.getElementById("plugin-count").textContent = `Plugins · ${listing.plugins.length}`;
+	// one list: the ones that ship with the app come first (the host orders them), then the folders
+	document.getElementById("plugin-list").replaceChildren(...listing.plugins.map((p) => pluginItem(p, renderPlugins)));
+	scheduleHubHeight();
+}
+document.getElementById("plugin-dnd").addEventListener("change", (e) => invoke("plugin_dnd", { on: e.target.checked }));
+document.getElementById("plugin-folder").addEventListener("click", () => invoke("plugin_folder"));
+document.getElementById("plugin-rescan").addEventListener("click", async () => {
+	try {
+		await invoke("plugin_rescan");
+	} catch (_) {}
+	renderPlugins();
+});
 
 let lastActivitySignature = "";
 // All the cards of the moment, built: what the hub lists and what the floating cards are made from.
 async function fetchCards() {
 	const a = await invoke("get_activity");
-	// what the running games use (empty list: nothing to measure, the counters are let go)
-	for (const s of await invoke("get_game_stats", {
-		pids: a.games.map((g) => g.pid),
-	}))
-		gameStats.set(s.pid, s);
 	const cards = [];
-	// sessions that need you lead, then the finished ones (see llm.rs); the rest follow the downloads
-	const llm = a.llm.map(llmCard);
-	const leading = llm.filter(
-		(c) =>
-			c._data.state === "waiting" ||
-			c._data.state === "finished",
-	);
-	cards.push(...leading);
-	for (const g of a.games) cards.push(gameCard(g));
-	// (before the cards are built: they draw the trace)
-	const dlSpeed = a.downloads.reduce(
-		(s, d) =>
-			s +
-			d.items.reduce(
-				(t, it) => t + (it.done ? 0 : it.speed || 0),
-				0,
-			),
-		0,
-	);
-	dlSpeedHistory.push(dlSpeed);
-	dlSpeedHistory.shift();
-	for (const d of a.downloads) cards.push(downloadCard(d));
-	cards.push(...llm.filter((c) => !leading.includes(c)));
-	if (a.coding) cards.push(codingCard(a.coding));
-	for (const w of a.work) cards.push(workCard(w));
+	for (const p of plugins) if (a.cards?.[p.id]) cards.push(...(await p.cards(a.cards[p.id])));
+	for (const p of a.plugins || []) cards.push(pluginCard(p));
+	// (a stable sort: cards of one rank keep the order their plugin gave them)
+	cards.sort((x, y) => (x._rank ?? 50) - (y._rank ?? 50));
 	return { a, cards };
 }
 
@@ -5467,10 +3538,10 @@ async function refreshActivity() {
 		return;
 	const built = await fetchCards();
 	const a = built.a;
+	setRings(a.rings || {});
 	// the cards that float on the screen are not listed here
-	floatKeys = new Set(
-		(await invoke("float_list")).map((i) => i.key),
-	);
+	floatKeys.clear();
+	for (const i of await invoke("float_list")) floatKeys.add(i.key);
 	const cards = built.cards.filter((c) => !floatKeys.has(c._key));
 	const signature = cards
 		.map((c) => c._sig ?? c.outerHTML)
@@ -5600,3 +3671,12 @@ new MutationObserver((muts) => {
 	attributes: true,
 	attributeFilter: ["title"],
 });
+
+// what only this page can do, for the plugins' files (see kit.js)
+host.scheduleHubHeight = scheduleHubHeight;
+host.refreshTip = refreshTip;
+host.invalidate = () => (lastActivitySignature = "");
+host.refresh = () => refreshActivity();
+host.enter = playEnter;
+for (const p of plugins) p.init?.();
+initPluginUi();

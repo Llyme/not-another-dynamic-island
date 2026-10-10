@@ -22,9 +22,8 @@ pub fn new_system() -> System {
     sys
 }
 
-#[tauri::command]
-pub fn get_sys_stats(window: WebviewWindow) -> SysStats {
-    let state = window.state::<Arc<IslandState>>();
+/// How busy the CPU and the memory are now.
+pub fn read(state: &IslandState) -> SysStats {
     let mut sys = state.sys.lock().unwrap();
     sys.refresh_cpu_usage();
     sys.refresh_memory();
@@ -37,4 +36,9 @@ pub fn get_sys_stats(window: WebviewWindow) -> SysStats {
         ram_used_gb: used / gb,
         ram_total_gb: total / gb,
     }
+}
+
+#[tauri::command]
+pub fn get_sys_stats(window: WebviewWindow) -> SysStats {
+    read(&window.state::<Arc<IslandState>>())
 }

@@ -303,8 +303,9 @@
 
   // ---------------------------------------------------------------- Claude usage (the hub's two rings and the peek)
   const usage = (W.usage = { five: 38, seven: 61 });
+  W.usageRings = true;
   const usageSnap = () => ({
-    available: true,
+    available: !!S().llm_detection && W.usageRings,
     error: null,
     five_hour: { pct: usage.five, resets_at: new Date(Date.now() + 2.2 * 3600e3).toISOString() },
     seven_day: { pct: usage.seven, resets_at: new Date(Date.now() + 3.2 * 86400e3).toISOString() },
@@ -360,7 +361,7 @@
       ? `${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`
       : `${d.getHours() % 12 || 12}:${String(d.getMinutes()).padStart(2, "0")} ${d.getHours() < 12 ? "AM" : "PM"}`;
     const date = d.toLocaleDateString("en-US", { weekday: "short", month: "short", day: "numeric" }).replace(/^(\w+)\s/, "$1, ");
-    notif.pushBrief(time, { id: "time", state: "time", host_icon: "clock", host_exe: null, project: date, ctx: 0 });
+    notif.pushBrief(time, { id: "plugin:time", state: "plugin", host_icon: "clock", host_exe: null, project: date, ctx: 0, look: "big", dwell_ms: 4000 });
   }
   C.time_preview = () => clockPush(S().time_24h);
   W.clockPush = clockPush;
@@ -628,7 +629,7 @@
   W.pageKind = () => (S().page_preview && !blockedPage() ? pageKind() : null);
 
   C.get_activity = () => {
-    const snap = { games: [], downloads: [], llm: [], work: [], coding: null };
+    const snap = { games: [], downloads: [], llm: [], work: [], coding: null, plugins: [] };
     if (game.running) snap.games.push({ pid: game.pid, name: "Starfall", exe_path: APPS.game.exe, icon: ICONS.game, playtime_secs: now() - game.since });
     if (S().llm_detection) snap.llm = llmCards();
     if (S().download_detection) snap.downloads = downloadCards();
@@ -675,6 +676,116 @@
       }
     }
     return snap;
+  };
+
+  // ---------------------------------------------------------------- the plugins (the native ones, see src/builtin)
+  // The demo keeps what each switch means in the old settings, so the world above stays as it was.
+  const legacyActivity = C.get_activity;
+  const local = (W.pluginOn = { "now-playing": true, toasts: true, agenda: true });
+  const patch = (o) => C.save_settings({ settings: { ...S(), ...o } });
+  // what each permission grants: the app's words, the same for every plugin that asks (see src/permissions.rs)
+  const GRANTS = {
+    windows: ["See which programs have a window open, which one is in front, and what the windows are titled."],
+    performance: ["Read how much CPU, memory and GPU each program uses, from Windows."],
+    "idle time": ["Know how long it has been since the keyboard or mouse was last used (never what was typed)."],
+    "read files and folders": ["Read files and folders on this PC."],
+    network: ["Reach the internet, and only the addresses the plugin names.", "Reach the internet, and only these addresses: {}."],
+    "use CLI": ["Run command-line programs on this PC.", "Run a command-line program on this PC: {}."],
+    notifications: ["Read the notifications that other apps show (their title and text)."],
+    "browser extension": ["Receive what the NADI browser extension sends about your open tabs."],
+    media: ["See what is playing: the title, the artist and how far along it is."],
+    "media pictures": ["See the cover picture of what is playing."],
+    "media control": ["Press play, pause, next and previous for the player."],
+    calendar: ["Read the events of the island's calendar (whichever plugin brought them)."],
+    clock: ["Know the date and the time."],
+  };
+  const grants = (name, detail) => { const g = GRANTS[name] || [""]; return detail && g[1] ? g[1].replace("{}", detail) : g[0]; };
+  const BUILT_IN = [
+    { id: "games", name: "Games", description: "The game you are playing, for how long, and how it runs.", sees: [["windows"], ["performance"]], on: () => S().game_detection, set: (v) => patch({ game_detection: v }) },
+    { id: "work", name: "Work", description: "What you work on: your editor, your hours, and a pill for the session you are in.", sees: [["windows"], ["idle time"], ["use CLI", "git"]], on: () => S().work_detection, set: (v) => patch({ work_detection: v }) },
+    { id: "page-reader", name: "Page Reader", description: "A card for each page you have open, and what the page in front of you says (needs the NADI browser extension).", sees: [["windows"], ["browser extension"]], on: () => S().page_preview, set: (v) => patch({ page_preview: v }), note: () => (S().page_preview ? "Reading pages in Edge." : null), settings: [{ key: "images", label: "Show the page's main picture", type: "toggle", get: () => S().page_images, set: (v) => patch({ page_images: v }) }] },
+    { id: "downloads", name: "Downloads", description: "What your browsers, Steam and qBittorrent are downloading right now.", sees: [["read files and folders"]], on: () => S().download_detection, set: (v) => patch({ download_detection: v }) },
+    { id: "claude-code", name: "Claude Code", description: "Your Claude Code sessions as cards, a pill when one needs you or has finished, and how much of your Claude 5-hour and 7-day limits you have used.", sees: [["read files and folders"], ["windows"], ["network", "api.anthropic.com, console.anthropic.com"]], on: () => S().llm_detection, set: (v) => { patch({ llm_detection: v }); NADI.emit("usage-tick", usageSnap()); }, actions: [{ id: "usage_login", label: "Sign In", ask: "Paste the code the Claude page shows", then: "usage_finish" }], settings: [{ key: "alerts", label: "Pill when a session needs me or finishes", type: "toggle", get: () => S().llm_brief, set: (v) => patch({ llm_brief: v }) }, { key: "usage", label: "Rings for how much of my limits is used", type: "toggle", get: () => W.usageRings, set: (v) => { W.usageRings = v; NADI.emit("usage-tick", usageSnap()); } }] },
+    { id: "now-playing", name: "Now playing", description: "A pill and a card for what is playing, with play, skip, seek and speed.", sees: [["media"], ["media pictures"], ["media control"]] },
+    { id: "toasts", name: "Notification mirror", description: "Shows the notifications of other apps (Discord, Viber, ...) on the island.", sees: [["notifications"], ["windows"]] },
+    { id: "time", kind: "wasm", name: "Time", description: "The island says what time it is now and then, in a small pill.", sees: [["clock"]], on: () => S().time_announce, set: (v) => patch({ time_announce: v }), settings: [{ key: "every", label: "Every", type: "choice", options: INTERVALS.map((m, i) => ({ value: i, label: m < 60 ? `${m} minutes` : m === 60 ? "Hour" : `${m / 60} hours` })), get: () => S().time_interval, set: (v) => patch({ time_interval: v }) }, { key: "h24", label: "24-hour clock", type: "toggle", get: () => S().time_24h, set: (v) => patch({ time_24h: v }) }], actions: [{ id: "preview", label: "Show it now" }] },
+    { id: "ics-calendar", kind: "declarative", name: "ICS calendar", description: "Brings the events of a calendar link (.ics) to the island's calendar.", sees: [["network", "the address you give it (\"Calendar link (.ics)\")"]], on: () => !!S().calendar_ics_url, set: (v) => patch({ calendar_ics_url: v ? "https://calendar.google.com/calendar/ical/you%40example.com/private-demo/basic.ics" : "" }), settings: [{ key: "url", label: "Calendar link (.ics)", type: "text", get: () => S().calendar_ics_url, set: (v) => patch({ calendar_ics_url: v }) }], note: () => (S().calendar_ics_url ? `${cal.length} events read.` : "Paste the link of a calendar (.ics) in the setting below.") },
+    { id: "agenda", kind: "wasm", name: "Agenda", description: "A card with the next events of the calendar, and a banner shortly before one starts.", sees: [["calendar"]], settings: [{ key: "lead_min", label: "How long before (minutes)", type: "number", get: () => S().calendar_reminder_lead_min, set: (v) => patch({ calendar_reminder_lead_min: v }) }] },
+  ];
+  const info = (id) => BUILT_IN.find((p) => p.id === id);
+  const isOn = (id) => (info(id)?.on ? !!info(id).on() : local[id] !== false);
+  C.plugin_list = () => ({
+    dnd: false,
+    plugins: BUILT_IN.map((p) => ({
+      id: p.id,
+      name: p.name,
+      description: p.description,
+      version: "1.0.0",
+      kind: p.kind || "native",
+      bundled: true,
+      enabled: isOn(p.id),
+      muted: false,
+      permissions: p.sees.map(([name, detail]) => ({ name, detail: detail || "", why: grants(name, detail || "") })),
+      settings: (p.settings || []).map((x) => ({ key: x.key, label: x.label, type: x.type, value: x.get(), options: x.options || [] })),
+      actions: p.actions || [],
+      cost: null,
+      error: null,
+      note: p.note ? p.note() : null,
+    })),
+  });
+  C.plugin_rescan = () => C.plugin_list();
+  C.plugin_pills = () => ({ pills: [], rings: {} });
+  C.plugin_set = ({ id, on }) => {
+    const p = info(id);
+    if (p?.set) p.set(on);
+    else local[id] = on;
+  };
+  C.plugin_value = ({ id, key, value }) => info(id)?.settings?.find((x) => x.key === key)?.set(value);
+  C.plugin_mute = () => {};
+  C.plugin_dnd = () => {};
+  C.plugin_folder = () => {};
+  C.plugin_call = ({ id, cmd, args }) => {
+    const a = args || {};
+    switch (`${id}.${cmd}`) {
+      case "games.stats": return C.get_game_stats({ pids: a.pids });
+      case "downloads.click": return C.download_item_click({ id: a.id });
+      case "claude-code.dismiss": return C.llm_dismiss({ id: a.id });
+      case "page-reader.press": return C.click_page_button({ label: a.label });
+      case "page-reader.image": return C.page_image({ id: a.id });
+      case "now-playing.play_pause": return C.media_play_pause({ source: a.source });
+      case "now-playing.next": return C.media_next({ source: a.source });
+      case "now-playing.previous": return C.media_previous({ source: a.source });
+      case "now-playing.seek": return C.media_seek({ positionSeconds: a.position_seconds, source: a.source });
+      case "now-playing.seek_by": return C.media_seek_by({ deltaSeconds: a.delta_seconds, source: a.source });
+      case "now-playing.set_rate": return C.media_set_rate({ rate: a.rate, source: a.source });
+      case "claude-code.usage_login": return true;
+      case "claude-code.usage_finish": return true;
+      case "claude-code.usage_state": return C.get_usage();
+      case "claude-code.usage_refresh": C.refresh_usage(); return true;
+      case "time.preview": return C.time_preview();
+      default: return null;
+    }
+  };
+  // what the hub and the floating cards draw: the cards of each plugin that is on, by plugin id
+  C.get_activity = () => {
+    const a = legacyActivity();
+    const cards = {};
+    if (isOn("games") && a.games.length) cards.games = a.games;
+    if (isOn("downloads") && a.downloads.length) cards.downloads = a.downloads;
+    if (isOn("claude-code") && a.llm.length) cards["claude-code"] = a.llm;
+    if (isOn("work")) cards.work = { coding: a.coding, work: a.work.filter((w) => w.category !== "browsing") };
+    const pages = a.work.filter((w) => w.category === "browsing" && w.browse);
+    if (isOn("page-reader") && pages.length) cards["page-reader"] = pages;
+    const plugins = [];
+    if (isOn("agenda") && S().calendar_ics_url) {
+      const events = cal.filter((e) => e.end_ms >= Date.now() - 3600e3).slice(0, 6);
+      const when = (e) => `{when:${e.start_ms}${e.all_day ? ":day" : ""}}`;
+      if (events.length) {
+        const [first, ...rest] = events;
+        plugins.push({ plugin: "agenda", name: "Agenda", icon: "calendar", rank: 45, title: first.summary, sub: when(first), peek: "", body: rest.length ? [{ kind: "list", rows: rest.map((e) => ({ title: e.summary, sub: when(e), progress: null })) }] : [] });
+      }
+    }
+    return { plugins, cards, rings: {}, pills: [] };
   };
 
   // ---------------------------------------------------------------- windows: which app a card or pill takes you to

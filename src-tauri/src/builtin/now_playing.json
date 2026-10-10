@@ -1,0 +1,15 @@
+{
+  "id": "now-playing",
+  "name": "Now playing",
+  "description": "A pill and a card for what is playing, with play, skip, seek and speed.",
+  "version": "1.0.0",
+  "default_on": true,
+  "permissions": {
+    "sees": [
+      { "name": "media" },
+      { "name": "media pictures" },
+      { "name": "media control" }
+    ]
+  },
+  "pills": [{ "id": "media", "w": 260, "h": 40, "rank": 30 }]
+}

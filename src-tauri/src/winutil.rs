@@ -3,7 +3,8 @@
 //! which Tauri/webview mouse events don't give you) and the geometry of
 //! whichever monitor the cursor is currently on.
 
-use windows::Win32::Foundation::{HWND, POINT, RECT};
+use windows::Win32::Foundation::{CloseHandle, HWND, POINT, RECT};
+use windows::Win32::System::Threading::{GetExitCodeProcess, OpenProcess, QueryFullProcessImageNameW, PROCESS_NAME_WIN32, PROCESS_QUERY_LIMITED_INFORMATION};
 use windows::Win32::Media::timeBeginPeriod;
 use windows::Win32::Graphics::Gdi::{
     GetMonitorInfoW, MonitorFromPoint, HMONITOR, MONITORINFO, MONITOR_DEFAULTTONEAREST,
@@ -300,4 +301,80 @@ pub fn no_activate(hwnd: isize) {
             SetWindowLongPtrW(h, GWL_EXSTYLE, want);
         }
     }
+}
+
+// ---- which program a process is, and whether it still runs ----
+
+pub fn exe_path_for_pid(pid: u32) -> Option<String> {
+    unsafe {
+        let hproc = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, pid).ok()?;
+        let mut buf = [0u16; 260];
+        let mut size = buf.len() as u32;
+        let ok = QueryFullProcessImageNameW(
+            hproc,
+            PROCESS_NAME_WIN32,
+            windows::core::PWSTR(buf.as_mut_ptr()),
+            &mut size,
+        );
+        let _ = CloseHandle(hproc);
+        if ok.is_err() {
+            return None;
+        }
+        Some(String::from_utf16_lossy(&buf[..size as usize]))
+    }
+}
+
+/// Whether a process is still running (STILL_ACTIVE == 259).
+pub fn pid_alive(pid: u32) -> bool {
+    unsafe {
+        let Ok(h) = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, pid) else {
+            return false;
+        };
+        let mut code = 0u32;
+        let ok = GetExitCodeProcess(h, &mut code).is_ok();
+        let _ = CloseHandle(h);
+        ok && code == 259
+    }
+}
+
+
+/// (pid, exe path, window title) of whatever has focus.
+pub fn foreground_info() -> Option<(u32, Option<String>, String)> {
+    use windows::Win32::UI::WindowsAndMessaging::{GetWindowTextLengthW, GetWindowTextW, GetWindowThreadProcessId};
+    let hwnd: HWND = unsafe { GetForegroundWindow() };
+    if hwnd.is_invalid() {
+        return None;
+    }
+    let len = unsafe { GetWindowTextLengthW(hwnd) };
+    let title = if len > 0 {
+        let mut buf = vec![0u16; len as usize + 1];
+        let written = unsafe { GetWindowTextW(hwnd, &mut buf) };
+        String::from_utf16_lossy(&buf[..written.max(0) as usize])
+    } else {
+        String::new()
+    };
+    let mut pid: u32 = 0;
+    unsafe { GetWindowThreadProcessId(hwnd, Some(&mut pid)) };
+    if pid == 0 {
+        return None;
+    }
+    Some((pid, exe_path_for_pid(pid), title))
+}
+
+/// Seconds since the last key or mouse input.
+pub fn idle_seconds() -> Option<f64> {
+    use windows::Win32::System::SystemInformation::GetTickCount;
+    use windows::Win32::UI::Input::KeyboardAndMouse::{GetLastInputInfo, LASTINPUTINFO};
+    let mut lii = LASTINPUTINFO { cbSize: std::mem::size_of::<LASTINPUTINFO>() as u32, ..Default::default() };
+    if !unsafe { GetLastInputInfo(&mut lii) }.as_bool() {
+        return None;
+    }
+    let tick = unsafe { GetTickCount() };
+    Some((tick.wrapping_sub(lii.dwTime) as f64 / 1000.0).max(0.0))
+}
+
+/// "chrome" for `C:\...\chrome.exe`: a program's name for people
+pub fn exe_stem(path: &str) -> String {
+    let file = path.rsplit(['\\', '/']).next().unwrap_or(path);
+    file.strip_suffix(".exe").or(file.strip_suffix(".EXE")).unwrap_or(file).to_string()
 }

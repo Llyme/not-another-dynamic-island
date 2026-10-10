@@ -1,0 +1,44 @@
+{
+  "id": "claude-code",
+  "name": "Claude Code",
+  "description": "Your Claude Code sessions as cards, a pill when one needs you or has finished, and how much of your Claude 5-hour and 7-day limits you have used.",
+  "version": "1.1.0",
+  "banners": true,
+  "default_on": true,
+  "permissions": {
+    "sees": [
+      { "name": "read files and folders" },
+      { "name": "windows" },
+      { "name": "network", "detail": "api.anthropic.com, console.anthropic.com" }
+    ]
+  },
+  "actions": [
+    {
+      "id": "usage_login",
+      "label": "Sign In",
+      "ask": "Paste the code the Claude page shows",
+      "then": "usage_finish"
+    }
+  ],
+  "settings": {
+    "alerts": {
+      "label": "Pill when a session needs me or finishes",
+      "type": "toggle",
+      "default": true
+    },
+    "usage": {
+      "label": "Rings for how much of my limits is used",
+      "type": "toggle",
+      "default": true
+    }
+  },
+  "pills": [
+    {
+      "id": "usage_peek",
+      "w": 240,
+      "h": 78,
+      "rank": 100,
+      "brief": true
+    }
+  ]
+}

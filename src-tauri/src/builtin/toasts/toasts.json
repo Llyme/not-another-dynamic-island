@@ -1,0 +1,17 @@
+{
+  "id": "toasts",
+  "name": "Notification mirror",
+  "description": "Shows the notifications of other apps (Discord, Viber, ...) on the island.",
+  "version": "1.0.0",
+  "banners": true,
+  "default_on": true,
+  "permissions": {
+    "sees": [
+      { "name": "notifications" },
+      { "name": "windows" }
+    ]
+  },
+  "settings": {
+    "viber": { "label": "Notice Viber's popup", "type": "toggle", "default": true }
+  }
+}

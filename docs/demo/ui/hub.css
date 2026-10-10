@@ -626,7 +626,8 @@
   color: var(--fg-dim);
 }
 
-.hub-row input[type="checkbox"] {
+.hub-row input[type="checkbox"],
+.pg-field input[type="checkbox"] {
   appearance: none;
   position: relative;
   flex: none;
@@ -638,7 +639,8 @@
   transition: background 0.25s;
 }
 
-.hub-row input[type="checkbox"]::after {
+.hub-row input[type="checkbox"]::after,
+.pg-field input[type="checkbox"]::after {
   content: "";
   position: absolute;
   top: 3px;
@@ -650,20 +652,24 @@
   transition: transform 0.5s var(--spring), width 0.25s var(--spring), background 0.25s;
 }
 
-.hub-row input[type="checkbox"]:active::after {
+.hub-row input[type="checkbox"]:active::after,
+.pg-field input[type="checkbox"]:active::after {
   width: 18px;
 }
 
-.hub-row input[type="checkbox"]:checked {
+.hub-row input[type="checkbox"]:checked,
+.pg-field input[type="checkbox"]:checked {
   background: var(--accent);
 }
 
-.hub-row input[type="checkbox"]:checked::after {
+.hub-row input[type="checkbox"]:checked::after,
+.pg-field input[type="checkbox"]:checked::after {
   transform: translateX(14px);
   background: #0e0e10;
 }
 
-.hub-row input[type="checkbox"]:checked:active::after {
+.hub-row input[type="checkbox"]:checked:active::after,
+.pg-field input[type="checkbox"]:checked:active::after {
   transform: translateX(10px);
 }
 
@@ -2708,43 +2714,6 @@ svg.li {
   box-shadow: 0 0 0 2px #0b0b0d, 0 0 0 3.5px rgba(255, 255, 255, 0.55);
 }
 
-/* ---- the settings tabs: a row of icons ---- */
-#set-tabs {
-  display: flex;
-  justify-content: center;
-  gap: 4px;
-  margin: 2px 0 4px;
-}
-
-#set-tabs button {
-  display: grid;
-  place-items: center;
-  width: 34px;
-  height: 30px;
-  padding: 0;
-  border: 0;
-  border-radius: 10px;
-  background: transparent;
-  color: var(--fg-mute);
-  cursor: pointer;
-  transition: color 0.15s ease, background 0.2s ease, transform 0.3s var(--spring);
-}
-
-#set-tabs button .li {
-  width: 16px;
-  height: 16px;
-}
-
-#set-tabs button:hover {
-  color: var(--fg);
-  transform: translateY(-1px);
-}
-
-#set-tabs button.on {
-  color: var(--accent);
-  background: rgba(var(--accent-rgb), 0.12);
-}
-
 .set-tab.hidden {
   display: none;
 }
@@ -2802,6 +2771,328 @@ svg.li {
   grid-row: 1 / span 40;
   max-height: 380px;
   margin-bottom: 0;
+}
+
+/* ---- plugin cards: drawn by the core from what a plugin hands it ---- */
+.pg-body {
+  display: grid;
+  gap: 8px;
+}
+
+.pg-bar {
+  height: 4px;
+  border-radius: 3px;
+  background: rgba(255, 255, 255, 0.1);
+  overflow: hidden;
+}
+
+.pg-bar i {
+  display: block;
+  height: 100%;
+  width: 0;
+  border-radius: 3px;
+  background: var(--accent, #fff);
+  transition: width 0.6s ease-out;
+}
+
+.pg-text {
+  font-size: 12px;
+  color: var(--fg-dim);
+  overflow-wrap: anywhere;
+}
+
+.pg-badge {
+  justify-self: start;
+  font-size: 11px;
+  padding: 1px 9px;
+  border-radius: 99px;
+  background: rgba(255, 255, 255, 0.09);
+  color: var(--fg);
+}
+
+.pg-bars {
+  display: flex;
+  align-items: flex-end;
+  gap: 3px;
+  height: 46px;
+}
+
+.pg-bars i {
+  flex: 1;
+  height: 6%;
+  min-height: 3px;
+  border-radius: 2px;
+  background: var(--accent, #fff);
+  opacity: 0.9;
+  transition: height 0.07s linear;
+}
+
+.pg-list {
+  display: grid;
+  gap: 7px;
+}
+
+.pg-li {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 3px 10px;
+  font-size: 12px;
+}
+
+.pg-li-t {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.pg-li-s {
+  color: var(--fg-dim);
+  font-size: 11px;
+  white-space: nowrap;
+}
+
+.pg-li .pg-bar {
+  grid-column: 1 / -1;
+}
+
+/* buttons and a picture a plugin asks for */
+.pg-buttons {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.pg-b {
+  font: inherit;
+  font-size: 11.5px;
+  color: var(--fg);
+  background: rgba(255, 255, 255, 0.07);
+  border: 0;
+  border-radius: 9px;
+  padding: 5px 11px;
+  cursor: pointer;
+  transition: background 0.15s, transform 0.2s var(--spring);
+}
+
+.pg-b:hover {
+  background: rgba(255, 255, 255, 0.13);
+}
+
+.pg-b:active {
+  transform: scale(0.95);
+}
+
+.pg-b.icon {
+  display: grid;
+  place-items: center;
+  width: 30px;
+  height: 28px;
+  padding: 0;
+}
+
+.pg-b .li {
+  width: 15px;
+  height: 15px;
+  stroke-width: 1.8;
+}
+
+.pg-img {
+  display: block;
+  max-width: 100%;
+  max-height: 220px;
+  border-radius: 10px;
+  object-fit: contain;
+}
+
+/* ---- the plugins screen ---- */
+.pg-row {
+  align-items: flex-start;
+}
+
+.pg-row input[type="checkbox"] {
+  flex: none;
+  margin-top: 2px;
+}
+
+.pg-main {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
+.pg-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 8px;
+}
+
+.pg-head b {
+  font-weight: 600;
+}
+
+.pg-tag {
+  font-size: 9.5px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  padding: 0 7px;
+  border-radius: 99px;
+  color: var(--fg-dim);
+  border: 1px solid rgba(255, 255, 255, 0.14);
+}
+
+.pg-main small {
+  font-size: 11px;
+  color: var(--fg-dim);
+  overflow-wrap: anywhere;
+}
+
+.pg-perm {
+  font-family: "Cascadia Code", Consolas, monospace;
+  font-size: 10.5px !important;
+}
+
+.pg-err {
+  color: #f08a99 !important;
+}
+
+.pg-none {
+  color: var(--fg-dim);
+  cursor: default;
+}
+
+.pg-item {
+  border-bottom: 1px solid rgba(255, 255, 255, 0.045);
+}
+
+.pg-item:last-child {
+  border-bottom: none;
+}
+
+.pg-item .pg-row {
+  border-bottom: none;
+}
+
+.pg-more {
+  display: grid;
+  gap: 8px;
+  padding: 0 0 12px;
+}
+
+.pg-field {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1.2fr);
+  gap: 10px;
+  align-items: center;
+  font-size: 11.5px;
+  color: var(--fg-dim);
+}
+
+.pg-field input[type="text"],
+.pg-field input[type="number"] {
+  font: inherit;
+  font-size: 12px;
+  color: var(--fg);
+  background: rgba(255, 255, 255, 0.06);
+  border: 1px solid transparent;
+  border-radius: 8px;
+  padding: 5px 9px;
+  min-width: 0;
+  outline: none;
+}
+
+.pg-field input[type="text"]:focus,
+.pg-field input[type="number"]:focus {
+  border-color: color-mix(in srgb, var(--accent) 45%, transparent);
+}
+
+.pg-foot {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.pg-cost {
+  font-family: "Cascadia Code", Consolas, monospace;
+  font-size: 10.5px;
+  color: var(--fg-dim);
+}
+
+.pg-btn-on {
+  background: color-mix(in srgb, var(--accent) 22%, transparent);
+  color: var(--accent);
+}
+
+/* the question before a plugin is switched on: a card like the others, under the plugin's row */
+.pg-dialog {
+  margin: 2px 0 12px;
+  padding: 12px 14px 8px;
+  font-size: 12px;
+  color: var(--fg);
+}
+
+.pg-dialog h4 {
+  margin: 0;
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.pg-dialog-note {
+  margin: 3px 0 6px;
+  font-size: 11px;
+  color: var(--fg-dim);
+}
+
+.pg-dialog-perms {
+  display: grid;
+}
+
+.pg-dialog-perm {
+  display: grid;
+  gap: 1px;
+  padding: 8px 0;
+  border-top: 1px solid rgba(255, 255, 255, 0.045);
+}
+
+.pg-dialog-perm b {
+  font-family: "Cascadia Code", Consolas, monospace;
+  font-size: 10.5px;
+  font-weight: 500;
+  color: var(--accent);
+}
+
+.pg-dialog-perm span {
+  color: var(--fg-dim);
+  font-size: 11px;
+}
+
+.pg-dialog-buttons {
+  display: flex;
+  justify-content: flex-end;
+  gap: 4px;
+  padding-top: 4px;
+  border-top: 1px solid rgba(255, 255, 255, 0.045);
+}
+
+.pg-actions {
+  gap: 8px;
+  justify-content: flex-start;
+  cursor: default;
+}
+
+.pg-btn {
+  font: inherit;
+  font-size: 11.5px;
+  color: var(--fg);
+  background: rgba(255, 255, 255, 0.07);
+  border: 0;
+  border-radius: 9px;
+  padding: 6px 12px;
+  cursor: pointer;
+}
+
+.pg-btn:hover {
+  background: rgba(255, 255, 255, 0.13);
 }
 
 /* ---- a post and its comments, read-only ---- */
@@ -3841,4 +4132,613 @@ html.floats #float-layer {
   flex: 1;
   min-height: 0;
   max-height: none;
+}
+
+/* a choice among a few (a plugin's setting) wraps under its label rather than overflow the hub */
+.pg-field:has(.pg-choice) {
+  grid-template-columns: 1fr;
+  gap: 6px;
+}
+
+.pg-choice {
+  flex-wrap: wrap;
+}
+
+.pg-note {
+  color: var(--accent) !important;
+}
+
+/* ---- the settings page: four named tabs, one steady height; each tab scrolls inside it ---- */
+/* (the hub is at most 520 px: its head is 76, the body keeps 2 above and 20 below) */
+#pane-settings {
+  display: flex;
+  flex-direction: column;
+  height: 422px;
+}
+
+#pane-settings.hidden {
+  display: none;
+}
+
+#set-tabs {
+  flex: none;
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 3px;
+  padding: 3px;
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.05);
+}
+
+#set-tabs button {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  height: 34px;
+  padding: 0;
+  border: 0;
+  border-radius: 11px;
+  background: transparent;
+  color: var(--fg-mute);
+  font: inherit;
+  font-size: 12px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: color 0.15s ease, background 0.2s ease;
+}
+
+#set-tabs button .li {
+  flex: none;
+  width: 16px;
+  height: 16px;
+}
+
+#set-tabs button:hover {
+  color: var(--fg);
+}
+
+#set-tabs button.on {
+  color: #f2f2f4;
+  background: rgba(255, 255, 255, 0.1);
+}
+
+#pane-settings button:focus-visible,
+#pane-settings input:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+.set-tab {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  scrollbar-width: none;
+  padding: 12px 0 14px;
+  -webkit-mask-image: linear-gradient(to bottom, #000 calc(100% - 14px), transparent);
+  mask-image: linear-gradient(to bottom, #000 calc(100% - 14px), transparent);
+}
+
+.set-tab::-webkit-scrollbar {
+  display: none;
+}
+
+/* the Size tab fits whole: its preview takes what the rows leave */
+.set-tab[data-tab="size"]:not(.hidden) {
+  display: flex;
+  flex-direction: column;
+  -webkit-mask-image: none;
+  mask-image: none;
+  padding-bottom: 0;
+}
+
+.set-title {
+  flex: none;
+  margin: 14px 4px 8px;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--fg-mute);
+}
+
+.set-tab > .set-title:first-child {
+  margin-top: 2px;
+}
+
+.set-title-split {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.set-tools {
+  display: flex;
+  gap: 2px;
+  letter-spacing: 0;
+  text-transform: none;
+}
+
+.set-card {
+  flex: none;
+  padding: 0 14px;
+  border-radius: 16px;
+  background: rgba(255, 255, 255, 0.045);
+}
+
+.set-row {
+  position: relative;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 196px;
+  align-items: center;
+  gap: 12px;
+  min-height: 42px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+  font-size: 12.5px;
+  color: #dcdce0;
+  cursor: default;
+}
+
+.set-row:last-child {
+  border-bottom: 0;
+}
+
+/* a control that is its own width (the choice of a key, a picture, the swatches) */
+.set-row-auto,
+.set-row:has(.set-bg),
+.set-row:has(.swatches) {
+  grid-template-columns: minmax(0, 1fr) auto;
+}
+
+label.set-row {
+  cursor: pointer;
+}
+
+.set-end {
+  justify-self: end;
+}
+
+/* the label of a setting that a hover explains */
+.tipped {
+  text-decoration: underline dotted rgba(255, 255, 255, 0.28);
+  text-underline-offset: 4px;
+}
+
+/* a slider: its reset (it keeps its room, so nothing moves), the track, the value */
+.set-sl {
+  display: grid;
+  grid-template-columns: 20px minmax(0, 1fr) 50px;
+  gap: 8px;
+  align-items: center;
+}
+
+.set-sl .slider-reset.is-default {
+  width: 20px;
+  margin-right: 0;
+  opacity: 0;
+  visibility: hidden;
+}
+
+.set-val {
+  text-align: right;
+  font-size: 11.5px;
+  color: var(--fg-dim);
+  font-variant-numeric: tabular-nums;
+}
+
+#pane-settings input[type="range"] {
+  appearance: none;
+  -webkit-appearance: none;
+  width: 100%;
+  height: 4px;
+  margin: 0;
+  border-radius: 2px;
+  background: linear-gradient(to right, var(--accent) var(--p, 0%), #34343a var(--p, 0%));
+  cursor: pointer;
+}
+
+#pane-settings input[type="range"]::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: #f2f2f4;
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.5);
+  cursor: pointer;
+  transition: transform 0.4s var(--spring);
+}
+
+#pane-settings input[type="range"]::-webkit-slider-thumb:hover {
+  transform: scale(1.2);
+}
+
+#pane-settings input[type="range"]:active::-webkit-slider-thumb {
+  transform: scale(0.92);
+}
+
+#pane-settings input[type="checkbox"] {
+  appearance: none;
+  -webkit-appearance: none;
+  position: relative;
+  flex: none;
+  width: 36px;
+  height: 22px;
+  margin: 0;
+  border-radius: 11px;
+  background: #34343a;
+  cursor: pointer;
+  transition: background 0.25s;
+}
+
+#pane-settings input[type="checkbox"]::after {
+  content: "";
+  position: absolute;
+  top: 3px;
+  left: 3px;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: #d8d8dc;
+  transition: transform 0.5s var(--spring), width 0.25s var(--spring), background 0.25s;
+}
+
+#pane-settings input[type="checkbox"]:active::after {
+  width: 20px;
+}
+
+#pane-settings input[type="checkbox"]:checked {
+  background: var(--accent);
+}
+
+#pane-settings input[type="checkbox"]:checked::after {
+  transform: translateX(14px);
+  background: #0e0e10;
+}
+
+#pane-settings input[type="checkbox"]:checked:active::after {
+  transform: translateX(10px);
+}
+
+#pane-settings .swatches {
+  gap: 5px;
+}
+
+#pane-settings .swatch {
+  width: 15px;
+  height: 15px;
+  opacity: 0.85;
+}
+
+#pane-settings .swatch.on {
+  opacity: 1;
+  box-shadow: 0 0 0 2px #17171a, 0 0 0 3.5px rgba(255, 255, 255, 0.6);
+}
+
+.set-bg {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.set-bg .bg-name {
+  max-width: 80px;
+  font-size: 11.5px;
+  color: var(--fg-mute);
+}
+
+.set-btn {
+  font: inherit;
+  font-size: 12px;
+  color: #e6e6ea;
+  background: rgba(255, 255, 255, 0.09);
+  border: 0;
+  border-radius: 9px;
+  padding: 5px 13px;
+  cursor: pointer;
+  transition: background 0.15s ease;
+}
+
+.set-btn:hover {
+  background: rgba(255, 255, 255, 0.14);
+}
+
+.set-btn.on {
+  background: rgba(255, 255, 255, 0.16);
+}
+
+.set-btn.go {
+  background: var(--accent);
+  color: #0e0e10;
+  font-weight: 600;
+}
+
+.set-ibtn {
+  display: grid;
+  place-items: center;
+  width: 26px;
+  height: 26px;
+  padding: 0;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--fg-mute);
+  cursor: pointer;
+}
+
+.set-ibtn:hover {
+  background: rgba(255, 255, 255, 0.07);
+  color: #e6e6ea;
+}
+
+.set-ibtn .li {
+  width: 15px;
+  height: 15px;
+}
+
+.set-ibtn.hidden {
+  display: none;
+}
+
+.set-card .hub-row-note {
+  padding-bottom: 10px;
+}
+
+/* the Size tab's preview */
+.set-prev {
+  position: relative;
+  flex: 1 1 auto;
+  min-height: 118px;
+  border-radius: 16px;
+  background: linear-gradient(160deg, #1d2430, #14171d 60%, #17141c);
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  overflow: hidden;
+}
+
+.sp-hub,
+.sp-pill {
+  position: absolute;
+  left: 50%;
+  top: 6px;
+  transform: translateX(-50%);
+  transition: width 0.12s ease, top 0.12s ease;
+}
+
+.sp-hub {
+  width: 210px;
+  bottom: 30px;
+  border-radius: 16px;
+  border: 1px dashed rgba(255, 255, 255, 0.22);
+}
+
+.sp-pill {
+  width: 130px;
+  height: 22px;
+  border-radius: 11px;
+  background: #f2f2f4;
+  opacity: 0.92;
+}
+
+.sp-cap {
+  position: absolute;
+  left: 12px;
+  bottom: 8px;
+  font-size: 10.5px;
+  color: var(--fg-mute);
+}
+
+.sp-cap-r {
+  left: auto;
+  right: 12px;
+}
+
+/* ---- the plugin list: a row each, opened for its settings ---- */
+.pl {
+  border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+}
+
+.pl:last-child {
+  border-bottom: 0;
+}
+
+.prow {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 10px;
+  min-height: 54px;
+}
+
+.pmain {
+  display: grid;
+  grid-template-columns: 32px minmax(0, 1fr) 14px;
+  align-items: center;
+  gap: 11px;
+  min-width: 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.tile {
+  display: grid;
+  place-items: center;
+  width: 32px;
+  height: 32px;
+  border-radius: 10px;
+  font-size: 12px;
+  font-weight: 600;
+  color: #0e0e10;
+}
+
+.pl.off .tile {
+  background: #3a3a40 !important;
+  color: var(--fg-dim);
+}
+
+.ptext {
+  min-width: 0;
+}
+
+.pname {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  font-size: 12.5px;
+  font-weight: 600;
+  color: #ececf0;
+}
+
+.pl.off .pname {
+  color: #a8a8b0;
+}
+
+.pdesc {
+  display: block;
+  margin-top: 1px;
+  overflow: hidden;
+  font-size: 11px;
+  color: var(--fg-mute);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.pmain .chev {
+  color: #5e5e66;
+  transform: rotate(-90deg);
+  transition: transform 0.3s var(--spring), color 0.15s ease;
+}
+
+.pmain .chev.open {
+  color: var(--fg-dim);
+  transform: none;
+}
+
+.pmain .chev .li {
+  width: 14px;
+  height: 14px;
+}
+
+.pg-more {
+  display: grid;
+  gap: 10px;
+  padding: 2px 0 14px 43px;
+}
+
+.pg-more[hidden] {
+  display: none;
+}
+
+.pg-about {
+  font-size: 11.5px;
+  line-height: 1.45;
+  color: var(--fg-dim);
+}
+
+.pg-more .pg-perm {
+  font-family: inherit;
+  font-size: 11px !important;
+  line-height: 1.45;
+  color: #8a8a92;
+}
+
+/* the question before a plugin is switched on, under its row */
+.pg-dialog {
+  margin: 2px 0 14px 43px;
+  padding: 12px 14px;
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.06);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.pg-dialog-buttons {
+  padding-top: 10px;
+  gap: 6px;
+}
+
+/* a plugin's on/off setting: the label stretches and the switch sits at the far right, under the plugin's own */
+.pg-field:has(> input[type="checkbox"]) {
+  grid-template-columns: minmax(0, 1fr) auto;
+}
+
+.pg-field > input[type="checkbox"] {
+  justify-self: end;
+}
+
+/* an action that needs a word from the user (a code to paste): its field, under the plugin's buttons */
+.pg-foot {
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.pg-ask {
+  display: grid;
+  gap: 6px;
+}
+
+.pg-ask-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 6px;
+}
+
+.pg-ask input {
+  font: inherit;
+  font-size: 12px;
+  color: var(--fg);
+  background: rgba(255, 255, 255, 0.07);
+  border: 1px solid transparent;
+  border-radius: 8px;
+  padding: 6px 9px;
+  min-width: 0;
+  outline: none;
+}
+
+.pg-ask input::placeholder {
+  color: var(--fg-mute);
+}
+
+.pg-ask input:focus {
+  border-color: color-mix(in srgb, var(--accent) 45%, transparent);
+}
+
+.pg-ask .pg-err:empty {
+  display: none;
+}
+
+/* what a plugin may do: a badge each, the words in a tooltip */
+.pg-perms {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+}
+
+.pg-perms-title {
+  width: 100%;
+  font-size: 10.5px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--fg-mute);
+}
+
+.perm-badge {
+  padding: 2px 9px;
+  border-radius: 99px;
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  background: rgba(255, 255, 255, 0.04);
+  font-size: 11px;
+  color: var(--fg-dim);
+  cursor: help;
+}
+
+.perm-badge:hover {
+  border-color: rgba(255, 255, 255, 0.28);
+  color: var(--fg);
 }

@@ -32,15 +32,19 @@ windows = { version = "0.58", features = [
     "Win32_UI_Shell",
     "Win32_System_Com", "Win32_System_Performance", "Win32_Storage_FileSystem", "Win32_Media", "Win32_Media_Audio", "Win32_System_Diagnostics_Etw", "Win32_System_Time", "Win32_UI_Controls_Dialogs",
     "UI_Notifications", "UI_Notifications_Management", "ApplicationModel", "Foundation_Collections",
+    "Win32_Security", "Win32_Security_Cryptography",
 ] }
 sysinfo = "0.32"
 base64 = "0.22"
+sha2 = "0.10"
+getrandom = "0.2"
 png = "0.17"
 winreg = "0.52"
 ureq = { version = "2", features = ["json"] }
 tungstenite = { version = "0.24", default-features = false, features = ["handshake"] }
 rusqlite = { version = "0.32", features = ["bundled"] }
 chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
+wasmi = "2"
 
 [profile.release]
 opt-level = "s"

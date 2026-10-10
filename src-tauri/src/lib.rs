@@ -1,32 +1,24 @@
-mod activity;
-mod ext;
+mod browsers;
+mod bundled;
 mod audio;
 mod background;
 mod calendar;
 mod exeinfo;
 mod floats;
 mod focus;
-mod game;
+mod formats;
 mod gpu;
 mod media;
-mod clock;
 mod notify;
-mod browse;
-mod downloads;
-mod fps;
-mod gamestats;
-mod llm;
-mod pagekind;
-mod pagetext;
-mod page;
-mod project;
+mod builtin;
+mod native;
+mod permissions;
+mod plugins;
+mod pluginwasm;
 mod scan;
-mod notify_listener;
 mod settings;
 mod stats;
-mod usage;
 mod winutil;
-mod work;
 
 use serde::Serialize;
 use std::sync::atomic::{AtomicBool, AtomicI32, AtomicU32, AtomicU64, Ordering};
@@ -58,15 +50,10 @@ const REVEAL_SECS: f64 = 0.6;
 /// the width of the standard collapsed island (the media and work pills) before the setting
 const COMPACT_BASE: f64 = 260.0;
 const IDLE_SIZE: (f64, f64) = (140.0, 28.0);
-const MEDIA_COMPACT_SIZE: (f64, f64) = (260.0, 40.0);
-const GAME_SIZE: (f64, f64) = (320.0, 40.0);
-const WORK_SIZE: (f64, f64) = (260.0, 40.0);
 // the notification banner and the session pill take the width of the collapsed island they drop over
 const NOTIF_SIZE: (f64, f64) = (IDLE_SIZE.0, 72.0); // (the width follows the collapsed view, see view_size)
-const USAGE_PEEK_SIZE: (f64, f64) = (240.0, 78.0);
 const BRIEF_SIZE: (f64, f64) = (IDLE_SIZE.0, 40.0);
 // settle (bars sit at the old value) + fill animation + hold, ms
-pub(crate) const USAGE_PEEK_TOTAL_MS: u64 = 500 + 1400 + 2500;
 // the hub is as tall as its content, between the two heights, and as wide as the setting says
 // (this is only the default)
 const HUB_WIDTH: f64 = 420.0;
@@ -77,11 +64,9 @@ const HUB_SIZE: (f64, f64) = (HUB_WIDTH, HUB_MAX_H);
 #[derive(PartialEq, Clone, Copy)]
 enum PillView {
     Idle,
-    Media,
-    Game,
-    Work,
+    /// a pill a plugin offers (see native.rs): its name for the page, and its size at the standard width
+    Plugin(&'static str, f64, f64, bool),
     Notification,
-    UsagePeek,
     /// a Claude Code session that needs you or finished: a compact pill from the notification queue
     Brief,
     Hub,
@@ -100,15 +85,24 @@ fn view_size(view: PillView, width: u64, hub_w: f64) -> (f64, f64) {
     }
 }
 
+/// a pill's name, kept for as long as the app runs (the view is `Copy`)
+pub(crate) fn intern(name: &str) -> &'static str {
+    static NAMES: std::sync::Mutex<Vec<&'static str>> = std::sync::Mutex::new(Vec::new());
+    let mut names = NAMES.lock().unwrap();
+    if let Some(n) = names.iter().find(|n| **n == name) {
+        return n;
+    }
+    let n: &'static str = Box::leak(name.to_string().into_boxed_str());
+    names.push(n);
+    n
+}
+
 impl PillView {
     fn size(self) -> (f64, f64) {
         match self {
             PillView::Idle => IDLE_SIZE,
-            PillView::Media => MEDIA_COMPACT_SIZE,
-            PillView::Game => GAME_SIZE,
-            PillView::Work => WORK_SIZE,
+            PillView::Plugin(_, w, h, _) => (w, h),
             PillView::Notification => NOTIF_SIZE,
-            PillView::UsagePeek => USAGE_PEEK_SIZE,
             PillView::Brief => BRIEF_SIZE,
             PillView::Hub => HUB_SIZE,
         }
@@ -117,11 +111,8 @@ impl PillView {
     fn js_name(self) -> &'static str {
         match self {
             PillView::Idle => "idle",
-            PillView::Media => "media",
-            PillView::Game => "game",
-            PillView::Work => "work",
+            PillView::Plugin(name, _, _, _) => name,
             PillView::Notification => "notification",
-            PillView::UsagePeek => "usage_peek",
             PillView::Brief => "brief",
             PillView::Hub => "hub",
         }
@@ -166,9 +157,12 @@ pub(crate) struct IslandState {
     dragging: AtomicBool,
     shown: AtomicBool,
     pub(crate) has_media: AtomicBool,
-    pub(crate) has_game: AtomicBool,
-    pub(crate) has_work: AtomicBool,
+    /// what is playing, as a module may see it (no pictures), and a count that moves when it changes
+    pub(crate) media_seen: std::sync::Mutex<serde_json::Value>,
+    pub(crate) media_seq: std::sync::atomic::AtomicU64,
     pub(crate) notif: std::sync::Mutex<notify::NotifState>,
+    /// the plugins (see plugins.rs)
+    pub(crate) plugins: plugins::Host,
     /// The pill is expanded into the hub panel -- toggled by clicking the
     /// pill, outranks every other view while true (matches the Qt version's
     /// `open_hub`/`close_hub`).
@@ -189,23 +183,14 @@ pub(crate) struct IslandState {
     /// progress) -- physical pixels.
     center_x: AtomicI32,
     pub(crate) settings: std::sync::Mutex<settings::Settings>,
-    pub(crate) usage: usage::UsageState,
     pub(crate) calendar: calendar::CalendarState,
-    pub(crate) activity: activity::ActivityState,
-    /// the browser extension's connection and what it has said about the pages
-    pub(crate) ext: ext::ExtState,
     /// the cards dragged out of the island
     pub(crate) floats: floats::FloatState,
     pub(crate) gpu: gpu::GpuState,
-    pub(crate) game_meter: std::sync::Mutex<gamestats::GameMeter>,
     pub(crate) sys: std::sync::Mutex<sysinfo::System>,
-    pub(crate) game_detection_enabled: AtomicBool,
-    pub(crate) work_detection_enabled: AtomicBool,
     /// live-editable copy of IDLE_HIDE_MS -- settings can change this
     /// without a restart
     idle_hide_ms: AtomicU64,
-    /// while in the future, the "Claude usage changed" peek is showing
-    pub(crate) usage_peek_until: std::sync::Mutex<Option<Instant>>,
     /// how long a media/game/work view stays up before sliding away again
     peek_ms: AtomicU64,
     /// how long the cursor must rest at the top edge before the island appears (0 = at once)
@@ -253,24 +238,19 @@ impl Default for IslandState {
             dragging: AtomicBool::new(false),
             shown: AtomicBool::new(false),
             has_media: AtomicBool::new(false),
-            has_game: AtomicBool::new(false),
-            has_work: AtomicBool::new(false),
+            media_seen: std::sync::Mutex::new(serde_json::Value::Null),
+            media_seq: std::sync::atomic::AtomicU64::new(0),
             notif: std::sync::Mutex::new(notify::NotifState::default()),
+            plugins: plugins::Host::default(),
             hub_open: AtomicBool::new(false),
             hub_height: AtomicU32::new(HUB_MAX_H as u32),
             drag_start_pos: std::sync::Mutex::new(None),
             drag_grab_dx: AtomicI32::new(0),
             center_x: AtomicI32::new(0),
-            usage: usage::UsageState::default(),
             calendar: calendar::CalendarState::default(),
-            activity: activity::ActivityState::default(),
-            ext: ext::ExtState::default(),
             floats: floats::FloatState::default(),
             gpu: gpu::GpuState::default(),
-            game_meter: std::sync::Mutex::new(gamestats::GameMeter::default()),
             sys: std::sync::Mutex::new(stats::new_system()),
-            game_detection_enabled: AtomicBool::new(loaded.game_detection),
-            work_detection_enabled: AtomicBool::new(loaded.work_detection),
             idle_hide_ms: AtomicU64::new(loaded.idle_hide_delay_s.max(1) * 1000),
             peek_ms: AtomicU64::new(loaded.peek_duration_s.max(1) * 1000),
             edge_dwell_ms: AtomicU64::new(loaded.edge_dwell_ms),
@@ -285,7 +265,6 @@ impl Default for IslandState {
             pinned: AtomicBool::new(false),
             audio_enabled: AtomicBool::new(loaded.react_to_audio),
             cursor_follow: AtomicBool::new(loaded.cursor_follow),
-            usage_peek_until: std::sync::Mutex::new(None),
             settings: std::sync::Mutex::new(loaded),
         }
     }
@@ -348,7 +327,7 @@ fn push_notification(window: WebviewWindow, title: String, body: String) {
 #[tauri::command]
 fn open_notification_action(window: WebviewWindow, action: String) {
     match action.as_str() {
-        "viber" => notify_listener::open_viber(),
+        "viber" => builtin::toasts::open_viber(),
         "discord" => focus::focus_or_open("discord.exe", windows::core::w!("discord://")),
         _ => {}
     }
@@ -672,19 +651,8 @@ fn spawn_edge_poll(window: WebviewWindow) {
                 } else {
                     PillView::Notification
                 }
-            } else if state
-                .usage_peek_until
-                .lock()
-                .unwrap()
-                .map_or(false, |t| Instant::now() < t)
-            {
-                PillView::UsagePeek
-            } else if state.has_media.load(Ordering::Relaxed) {
-                PillView::Media
-            } else if state.has_game.load(Ordering::Relaxed) {
-                PillView::Game
-            } else if state.has_work.load(Ordering::Relaxed) {
-                PillView::Work
+            } else if let Some(o) = state.plugins.pill() {
+                PillView::Plugin(intern(&o.id), o.w, o.h, o.brief)
             } else {
                 PillView::Idle
             };
@@ -758,7 +726,7 @@ fn spawn_edge_poll(window: WebviewWindow) {
 
             // fresh track etc. -- re-present for another peek
             if state.peek_request.swap(false, Ordering::Relaxed)
-                && matches!(current_view, PillView::Media | PillView::Game | PillView::Work)
+                && matches!(current_view, PillView::Plugin(_, _, _, false))
             {
                 state.shown.store(true, Ordering::Relaxed);
                 edge_revealed = false;
@@ -859,7 +827,7 @@ fn spawn_edge_poll(window: WebviewWindow) {
                 && (cy as f64) < pos_y + win_h;
             // pinned and left alone for the hide delay: it shrinks (and grows back when touched)
             // (a notification banner, a session pill or the usage peek counts as being looked at: it never shrinks)
-            let brief_up = matches!(current_view, PillView::Notification | PillView::Brief | PillView::UsagePeek);
+            let brief_up = matches!(current_view, PillView::Notification | PillView::Brief | PillView::Plugin(_, _, _, true));
             if user_pin && !hovering && !dragging && !brief_up {
                 pin_idle_ticks += (real_dt / dt).round().max(1.0) as u64;
             } else {
@@ -943,7 +911,7 @@ fn spawn_edge_poll(window: WebviewWindow) {
                 // slides away like the idle one (edge-hover brings it back)
                 let pinned = matches!(
                     current_view,
-                    PillView::Hub | PillView::Notification | PillView::UsagePeek | PillView::Brief
+                    PillView::Hub | PillView::Notification | PillView::Brief | PillView::Plugin(_, _, _, true)
                 );
                 if shown {
                     // any status view (media/game/work/notification/hub/usage)
@@ -1116,11 +1084,15 @@ pub fn run() {
     tauri::Builder::default()
         .manage(Arc::new(IslandState::default()))
         .invoke_handler(tauri::generate_handler![
-            browse::click_page_button,
-            browse::guide_go,
-            ext::page_guide,
-            ext::page_guide_image,
-            downloads::download_item_click,
+            plugins::plugin_list,
+            plugins::plugin_set,
+            native::plugin_call,
+            native::plugin_pills,
+            plugins::plugin_value,
+            plugins::plugin_mute,
+            plugins::plugin_dnd,
+            plugins::plugin_rescan,
+            plugins::plugin_folder,
             drag_start,
             push_notification,
             get_notification_history,
@@ -1130,8 +1102,6 @@ pub fn run() {
             open_notification_action,
             dismiss_notification,
             click_notification,
-            ext::ext_status,
-            ext::page_image,
             floats::float_begin,
             floats::float_ready,
             floats::float_list,
@@ -1144,21 +1114,10 @@ pub fn run() {
             floats::float_backdrop,
             focus::focus_source,
             toggle_pin,
-            media::media_play_pause,
-            media::media_next,
-            media::media_previous,
-            media::media_seek,
-            media::media_seek_by,
-            media::media_set_rate,
             settings::get_settings,
             calendar::get_calendar,
-            activity::get_activity,
+            native::get_activity,
             gpu::get_gpu_pct,
-            gamestats::get_game_stats,
-            llm::llm_dismiss,
-            clock::time_preview,
-            usage::get_usage,
-            usage::refresh_usage,
             stats::get_sys_stats,
             settings::save_settings,
             background::pick_background,
@@ -1208,16 +1167,9 @@ pub fn run() {
 
             spawn_edge_poll(window.clone());
             media::spawn(app.handle().clone(), window.state::<Arc<IslandState>>().inner().clone());
-            game::spawn(app.handle().clone(), window.state::<Arc<IslandState>>().inner().clone());
-            work::spawn(app.handle().clone(), window.state::<Arc<IslandState>>().inner().clone());
-            usage::spawn(app.handle().clone(), window.state::<Arc<IslandState>>().inner().clone());
-            calendar::spawn(app.handle().clone(), window.state::<Arc<IslandState>>().inner().clone());
             audio::spawn(app.handle().clone(), window.state::<Arc<IslandState>>().inner().clone());
-            project::spawn(window.state::<Arc<IslandState>>().inner().clone());
-    browse::spawn(app.handle().clone(), window.state::<Arc<IslandState>>().inner().clone());
-    ext::spawn(window.state::<Arc<IslandState>>().inner().clone());
     floats::spawn(app.handle().clone(), window.state::<Arc<IslandState>>().inner().clone());
-    downloads::spawn(window.state::<Arc<IslandState>>().inner().clone());
+    plugins::spawn(app.handle().clone(), window.state::<Arc<IslandState>>().inner().clone());
     // screenshot aid: `DI_OPEN_SETTINGS=1` opens the hub on its settings pane shortly after launch
     if std::env::var_os("DI_OPEN_SETTINGS").is_some() {
         let w = window.clone();
@@ -1229,10 +1181,6 @@ pub fn run() {
             state.shown.store(true, Ordering::Relaxed);
         });
     }
-            llm::spawn(app.handle().clone(), window.state::<Arc<IslandState>>().inner().clone());
-            clock::spawn(window.state::<Arc<IslandState>>().inner().clone());
-            notify_listener::spawn(app.handle().clone(), window.state::<Arc<IslandState>>().inner().clone());
-            notify_listener::spawn_viber(app.handle().clone(), window.state::<Arc<IslandState>>().inner().clone());
 
             #[cfg(debug_assertions)]
             tauri::Listener::listen(&window, "js-error", |e| eprintln!("js-error: {}", e.payload()));
@@ -1261,10 +1209,10 @@ pub fn run() {
                     std::thread::sleep(Duration::from_secs(5));
                     let state = w.state::<Arc<IslandState>>();
                     if std::env::var_os("DI_DEMO_TIME").is_some() {
-                        clock::push(&state, false);
+                        let _ = state.plugins.act("time", "preview", serde_json::Value::Null);
                         return;
                     }
-                    let b = |id: &str, state: &'static str, ctx: f64| notify::Brief { id: id.into(), state, host_icon: "code", host_exe: None, project: "demo".into(), ctx };
+                    let b = |id: &str, state: &'static str, ctx: f64| notify::Brief { id: id.into(), state, host_icon: "code".into(), host_exe: None, project: "demo".into(), ctx, ..Default::default() };
                     let mut n = state.notif.lock().unwrap();
                     n.push_brief("Brief-show island queue".into(), b("a", "finished", 0.26));
                     n.push_brief("Settings redesign needs a decision".into(), b("b", "waiting", 0.7));

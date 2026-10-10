@@ -17,18 +17,23 @@ const HISTORY_CAP: usize = 50;
 /// shown as one "N new messages" instead
 const GROUP_AFTER: u32 = 3;
 
-/// a Claude Code session that needs you, or finished: shown as a compact pill, not a banner
-#[derive(Clone, Serialize)]
+/// a compact pill that comes by itself, in line with the banners: a Claude Code session that needs you or finished, or what
+/// a plugin said with a pill (the time). Not part of the scrollback.
+#[derive(Clone, Serialize, Default)]
 pub struct Brief {
     /// the session id
     pub id: String,
     /// waiting | finished
     pub state: &'static str,
-    pub host_icon: &'static str,
+    pub host_icon: String,
     pub host_exe: Option<String>,
     pub project: String,
     /// how full the context window is, 0..1
     pub ctx: f64,
+    /// a plugin's pill ("plugin" state): "" or "big"
+    pub look: &'static str,
+    /// how long it stays, ms (0 for the usual for its kind)
+    pub dwell_ms: u64,
 }
 
 #[derive(Clone, Serialize)]
@@ -41,14 +46,21 @@ pub struct Notification {
     pub action: Option<String>,
     /// set for a session brief-show (title is the session's title); not part of the scrollback
     pub brief: Option<Brief>,
+    /// who goes first when several wait: a plugin's banner says how much it matters (0 for the rest, a session that
+    /// needs you is 90); the same number keeps the order they came in
+    #[serde(skip)]
+    pub prio: i32,
 }
 
 impl Notification {
     /// how long it stays: a session that needs you stays longer than a banner
     fn dwell(&self) -> Duration {
+        let custom = self.brief.as_ref().map_or(0, |b| b.dwell_ms);
+        if custom > 0 {
+            return Duration::from_millis(custom.clamp(1500, 12_000));
+        }
         Duration::from_millis(match self.brief.as_ref().map(|b| b.state) {
             Some("waiting") => 8000,
-            Some("time") => 4000,
             Some(_) => 5000,
             None => NOTIF_MS,
         })
@@ -113,7 +125,22 @@ impl NotifState {
             count,
         });
         self.history.truncate(HISTORY_CAP);
-        self.queue.push_back(Notification { id: self.next_id, title, body, action, brief: None });
+        self.queue.push_back(Notification { id: self.next_id, title, body, action, brief: None, prio: 0 });
+    }
+
+    /// A banner from a plugin: it waits behind what matters more, and ahead of what matters less.
+    /// `silent`: it goes to the scrollback and does not ring (do not disturb).
+    pub fn push_priority(&mut self, title: String, body: String, prio: i32, silent: bool) {
+        self.push_action(title, body, None);
+        if silent {
+            self.queue.pop_back();
+            return;
+        }
+        if let Some(mut n) = self.queue.pop_back() {
+            n.prio = prio;
+            let at = self.queue.iter().position(|q| q.prio < prio).unwrap_or(self.queue.len());
+            self.queue.insert(at, n);
+        }
     }
 
     /// queue a session brief-show. One at a time, in line with the banners: a session that needs
@@ -121,13 +148,22 @@ impl NotifState {
     /// its turn. Never part of the scrollback.
     pub fn push_brief(&mut self, title: String, brief: Brief) {
         self.queue.retain(|n| n.brief.as_ref().map_or(true, |b| b.id != brief.id));
-        let n = Notification { id: 0, title, body: String::new(), action: None, brief: Some(brief) };
+        let prio = if brief.state == "waiting" { 90 } else { 0 };
+        let n = Notification { id: 0, title, body: String::new(), action: None, brief: Some(brief), prio };
         if n.brief.as_ref().map_or(false, |b| b.state == "waiting") {
             let at = self.queue.iter().position(|q| q.brief.as_ref().map_or(true, |b| b.state != "waiting")).unwrap_or(self.queue.len());
             self.queue.insert(at, n);
         } else {
             self.queue.push_back(n);
         }
+    }
+
+    /// A plugin's pill: it waits behind what matters more, and ahead of what matters less (like `push_priority`).
+    pub fn push_brief_priority(&mut self, title: String, brief: Brief, prio: i32) {
+        self.queue.retain(|n| n.brief.as_ref().map_or(true, |b| b.id != brief.id));
+        let n = Notification { id: 0, title, body: String::new(), action: None, brief: Some(brief), prio };
+        let at = self.queue.iter().position(|q| q.prio < prio).unwrap_or(self.queue.len());
+        self.queue.insert(at, n);
     }
 
     /// the session does not need you any more (you answered): its brief goes away
@@ -204,7 +240,7 @@ mod tests {
 
     #[test]
     fn a_session_that_needs_you_jumps_the_queue() {
-        let b = |id: &str, state: &'static str| Brief { id: id.into(), state, host_icon: "code", host_exe: None, project: "p".into(), ctx: 0.1 };
+        let b = |id: &str, state: &'static str| Brief { id: id.into(), state, host_icon: "code".into(), host_exe: None, project: "p".into(), ctx: 0.1, ..Default::default() };
         let mut n = NotifState::default();
         n.push("Mail".into(), "Hello".into());
         n.push_brief("done".into(), b("a", "finished"));
@@ -219,6 +255,26 @@ mod tests {
         assert_eq!(order, ["asks too", "Mail", "done again"]);
         // briefs never reach the scrollback
         assert_eq!(n.history().len(), 1);
+    }
+
+    #[test]
+    fn a_plugin_banner_waits_by_how_much_it_matters() {
+        let mut n = NotifState::default();
+        n.push("Mail".into(), "Hello".into());
+        n.push_priority("Downloads".into(), "Finished: a".into(), 50, false);
+        n.push_priority("Calendar".into(), "Sync in 5 min".into(), 60, false);
+        n.push_priority("Downloads".into(), "Finished: b".into(), 50, false);
+        n.push("Chat".into(), "Hi".into());
+        let order: Vec<_> = n.queue.iter().map(|q| q.body.clone()).collect();
+        assert_eq!(order, ["Sync in 5 min", "Finished: a", "Finished: b", "Hello", "Hi"]);
+        // do not disturb: it is in the scrollback, and rings for no one
+        n.push_priority("Downloads".into(), "Finished: c".into(), 50, true);
+        assert_eq!(n.queue.len(), 5);
+        assert_eq!(n.history()[0].body, "Finished: c");
+        // a session that needs you still goes before them all
+        let b = Brief { id: "s".into(), state: "waiting", host_icon: "code".into(), host_exe: None, project: "p".into(), ctx: 0.1, ..Default::default() };
+        n.push_brief("asks".into(), b);
+        assert_eq!(n.queue.front().unwrap().title, "asks");
     }
 
     #[test]

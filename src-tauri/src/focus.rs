@@ -2,7 +2,7 @@
 //! front (the player for a media card, the game, the editor/browser for a
 //! work card, Discord/Viber for a notification).
 
-use crate::game::exe_path_for_pid;
+use crate::winutil::exe_path_for_pid;
 use std::collections::HashMap;
 use windows::core::w;
 use windows::Win32::Foundation::{BOOL, HWND, LPARAM};

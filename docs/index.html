@@ -242,7 +242,7 @@ const FEATS = [
   ['lock', 'Pin and shrink', 'Right-click pins it in place with a small lock. A pinned island you leave alone shrinks to a size you choose.'],
   ['sun', 'Glow with a reason', 'The glow only shows when something happened by itself: a notification, a session pill, the time. Never when you call it.'],
   ['shield', 'Locked down', 'No browser shortcuts, no refresh, no devtools, no zoom, no drag and drop. It is an island, not a web page.'],
-  ['sliders', 'Everything adjustable', 'Settings in a row of icon tabs: theme colour, widths in pixels, distance from the edge, hover delay, glow, sound light. Every slider has a reset.'],
+  ['sliders', 'Everything adjustable', 'Settings in a row of icon tabs: theme colour, widths in pixels, distance from the edge, hover delay, glow, sound light. Every slider has a reset. Every feature is a plugin you can switch off.'],
 ];
 $('#grid').innerHTML = FEATS.map(([i, t, d]) => `<article class="feat"><div class="mark">${li(i)}</div><h3>${t}</h3><p>${d}</p></article>`).join('');
 $('#sessions').innerHTML = `

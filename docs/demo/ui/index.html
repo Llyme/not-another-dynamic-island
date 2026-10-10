@@ -33,35 +33,6 @@
       <div id="lock-badge" aria-hidden="true"></div>
       <canvas id="viz"></canvas>
       <canvas id="face"></canvas>
-      <div id="media" class="hidden">
-        <img id="media-art" alt="" />
-        <div class="text-col">
-          <div id="media-title" class="line-main"></div>
-          <div id="media-artist" class="line-sub"></div>
-        </div>
-        <div id="media-controls">
-          <button id="media-prev"></button>
-          <button id="media-play"></button>
-          <button id="media-next"></button>
-        </div>
-        <div id="media-progress" class="hidden"><div></div></div>
-      </div>
-      <div id="game" class="hidden">
-        <div id="game-icon">ðŸŽ®</div>
-        <img id="game-icon-img" class="hidden" alt="" />
-        <div id="game-name"></div>
-        <span id="game-more" class="hidden"></span>
-        <span class="g-fps" id="game-fps" hidden><b></b><small>FPS</small></span>
-        <div class="g-rings" id="game-rings"></div>
-      </div>
-      <div id="work" class="hidden">
-        <div id="work-icon"></div>
-        <div class="text-col">
-          <div id="work-label" class="line-main"></div>
-          <div id="work-app" class="line-sub"></div>
-        </div>
-        <span id="work-time"></span>
-      </div>
       <div id="notification" class="hidden">
         <div id="notif-icon"></div>
         <div class="text-col">
@@ -75,17 +46,11 @@
         <div id="brief-title"></div>
         <div id="brief-right" class="llm-right"></div>
       </div>
-      <div id="usage-peek" class="hidden">
-        <div class="peek-row"><span class="peek-label">5h</span><div class="peek-track"><div class="peek-fill" id="peek-fill-five_hour"></div></div><span class="peek-pct" id="peek-pct-five_hour"></span></div>
-        <div class="peek-row"><span class="peek-label">7d</span><div class="peek-track"><div class="peek-fill" id="peek-fill-seven_day"></div></div><span class="peek-pct" id="peek-pct-seven_day"></span></div>
-      </div>
       <div id="hub" class="hidden">
         <div id="hub-head">
           <canvas id="hub-eyes"></canvas>
           <div id="hub-clock" data-tip="Calendar"><span id="hub-time"></span><span id="hub-date"></span></div>
           <div id="hub-rings">
-            <span class="ring-wrap hidden" id="ring-five_hour" data-color="#E8963C"></span>
-            <span class="ring-wrap hidden" id="ring-seven_day" data-color="#E8963C"></span>
             <span class="ring-wrap" id="ring-cpu" data-color="#5AC8E6"></span>
             <span class="ring-wrap" id="ring-ram" data-color="#B47EE6"></span>
             <span class="ring-wrap hidden" id="ring-gpu" data-color="#8ADB6E"></span>
@@ -93,238 +58,178 @@
         </div>
         <div id="hub-body">
           <div id="pane-settings" class="hidden">
-            <div id="set-tabs" role="tablist"></div>
-            <div class="set-tab hidden" data-tab="general">
-            <div class="hub-section-title">Behavior</div>
-            <div class="hub-group spot">
-              <label class="hub-row">
-                <span>Games</span>
-                <input type="checkbox" id="set-game-detection" />
-              </label>
-              <label class="hub-row">
-                <span>Work</span>
-                <input type="checkbox" id="set-work-detection" />
-              </label>
-              <label class="hub-row">
-                <span>Downloads</span>
-                <input type="checkbox" id="set-download-detection" />
-              </label>
-              <label class="hub-row">
-                <span>LLM</span>
-                <input type="checkbox" id="set-llm-detection" />
-              </label>
-              <label class="hub-row">
-                <span>Page Reader</span>
-                <input type="checkbox" id="set-page-preview" />
-              </label>
-              <label class="hub-row">
-                <span>Autostart</span>
-                <input type="checkbox" id="set-start-with-windows" />
-              </label>
-            </div>
-            </div>
-            <div class="set-tab hidden" data-tab="island">
-            <div class="hub-section-title">Island</div>
-            <div class="hub-group spot">
-              <label class="hub-row">
-                <span>At Cursor</span>
-                <input type="checkbox" id="set-show-at-cursor" />
-              </label>
-              <label class="hub-row">
-                <span>Follow Cursor</span>
-                <input type="checkbox" id="set-cursor-follow" />
-              </label>
-              <label class="hub-row">
-                <span>Hover Delay</span>
-                <span class="hub-row-value">
-                  <input type="range" id="set-edge-dwell" data-default="300" min="0" max="1000" step="50" />
-                  <span id="set-edge-dwell-label"></span>
-                </span>
-              </label>
-              <div class="hub-row hub-row-stack">
-                <span>Fullscreen Guard</span>
-                <span class="opt-group" id="set-fullscreen-guard" role="group" aria-label="Fullscreen Guard">
-                  <button type="button" data-v="off" aria-pressed="false">No</button>
-                  <button type="button" data-v="alt" aria-pressed="true">Alt</button>
-                  <button type="button" data-v="ctrl" aria-pressed="false">Ctrl</button>
-                </span>
-              </div>
-              <label class="hub-row">
-                <span>Hide Delay</span>
-                <span class="hub-row-value">
-                  <input type="range" id="set-idle-hide-delay" data-default="1" min="1" max="15" step="1" />
-                  <span id="set-idle-hide-delay-label"></span>
-                </span>
-              </label>
-              <label class="hub-row">
-                <span>Width</span>
-                <span class="hub-row-value">
-                  <input type="range" id="set-compact-width" data-default="260" min="180" max="560" step="10" />
-                  <span id="set-compact-width-label"></span>
-                </span>
-              </label>
-              <label class="hub-row">
-                <span>Hub Width</span>
-                <span class="hub-row-value">
-                  <input type="range" id="set-hub-width" data-default="420" min="340" max="640" step="10" />
-                  <span id="set-hub-width-label"></span>
-                </span>
-              </label>
-              <label class="hub-row">
-                <span>Top Distance</span>
-                <span class="hub-row-value">
-                  <input type="range" id="set-top-margin" data-default="4" min="0" max="80" step="2" />
-                  <span id="set-top-margin-label"></span>
-                </span>
-              </label>
-              <label class="hub-row">
-                <span>Pinned Size</span>
-                <span class="hub-row-value">
-                  <input type="range" id="set-pin-shrink" data-default="75" min="40" max="100" step="5" />
-                  <span id="set-pin-shrink-label"></span>
-                </span>
-              </label>
-              <label class="hub-row">
-                <span>Peek</span>
-                <span class="hub-row-value">
-                  <input type="range" id="set-peek-duration" data-default="3" min="1" max="15" step="1" />
-                  <span id="set-peek-duration-label"></span>
-                </span>
-              </label>
-            </div>
-            </div>
-            <div class="set-tab hidden" data-tab="look">
-            <div class="hub-section-title">Look</div>
-            <div class="hub-group spot">
-              <div class="hub-row">
-                <span>Theme</span>
-                <span class="hub-row-value swatches" id="set-accent"></span>
-              </div>
-              <label class="hub-row">
-                <span>Eyes</span>
-                <input type="checkbox" id="set-show-eyes" />
-              </label>
-              <label class="hub-row">
-                <span>Sound</span>
-                <input type="checkbox" id="set-react-to-audio" />
-              </label>
-              <label class="hub-row">
-                <span>Ambient</span>
-                <span class="hub-row-value">
-                  <input type="range" id="set-audio-bleed" data-default="60" min="0" max="100" step="5" />
-                  <span id="set-audio-bleed-label"></span>
-                </span>
-              </label>
-              <label class="hub-row">
-                <span>Glow</span>
-                <span class="hub-row-value">
-                  <input type="range" id="set-glow" data-default="70" min="0" max="100" step="5" />
-                  <span id="set-glow-label"></span>
-                </span>
-              </label>
-            </div>
-            </div>
-            <div class="set-tab hidden" data-tab="background">
-            <div class="hub-section-title">Background</div>
-            <div class="hub-group spot">
-              <div class="hub-row">
-                <span>Island</span>
-                <span class="hub-row-value">
-                  <span class="bg-name" id="bg-name-compact"></span>
-                  <button class="hub-btn" id="bg-pick-compact">Choose</button>
-                  <button class="hub-btn hub-btn-x hidden" id="bg-clear-compact" data-tip="Remove">âœ•</button>
-                </span>
-              </div>
-              <div class="hub-row">
-                <span>Expanded</span>
-                <span class="hub-row-value">
-                  <span class="bg-name" id="bg-name-hub"></span>
-                  <button class="hub-btn" id="bg-pick-hub">Choose</button>
-                  <button class="hub-btn hub-btn-x hidden" id="bg-clear-hub" data-tip="Remove">âœ•</button>
-                </span>
-              </div>
-              <label class="hub-row">
-                <span>Dim</span>
-                <span class="hub-row-value">
-                  <input type="range" id="set-bg-dim" data-default="50" min="0" max="90" step="5" />
-                  <span id="set-bg-dim-label"></span>
-                </span>
-              </label>
-              <div class="hub-row hub-row-note" id="bg-error"></div>
-            </div>
-            </div>
-            <div class="set-tab hidden" data-tab="time">
-            <div class="hub-section-title">Time</div>
-            <div class="hub-group spot">
-              <label class="hub-row">
-                <span>Announce</span>
-                <input type="checkbox" id="set-time-announce" />
-              </label>
-              <label class="hub-row">
-                <span>Every</span>
-                <span class="hub-row-value">
-                  <input type="range" id="set-time-interval" data-default="4" min="0" max="7" step="1" />
-                  <span id="set-time-interval-label"></span>
-                </span>
-              </label>
-              <label class="hub-row">
-                <span>Military</span>
-                <input type="checkbox" id="set-time-24h" />
-              </label>
-              <div class="hub-row">
-                <span>Preview</span>
-                <span class="hub-row-value">
-                  <button class="hub-btn" id="time-preview" type="button">Show now</button>
-                </span>
-              </div>
-            </div>
-            </div>
-            <div class="set-tab hidden" data-tab="calendar">
-            <div class="hub-section-title">Calendar</div>
-            <div class="hub-group spot">
-              <div class="hub-row hub-row-stack">
-                <label class="field">
-                  <span class="field-icon" aria-hidden="true"></span>
-                  <input type="text" id="set-calendar-url" placeholder="Calendar link (.ics)" spellcheck="false" autocomplete="off" />
-                  <button class="field-clear" id="set-calendar-clear" type="button" tabindex="-1" aria-label="Clear"></button>
+            <div id="set-tabs" role="tablist" aria-label="Settings"></div>
+
+            <div class="set-tab hidden" data-tab="general" role="tabpanel">
+              <div class="set-title">Startup</div>
+              <div class="set-card">
+                <label class="set-row">
+                  <span class="set-lab">Start with Windows</span>
+                  <input class="set-end" type="checkbox" id="set-start-with-windows" />
                 </label>
               </div>
-              <label class="hub-row">
-                <span>Remind</span>
-                <span class="hub-row-value">
-                  <input type="range" id="set-calendar-lead" data-default="15" min="1" max="60" step="1" />
-                  <span id="set-calendar-lead-label"></span>
-                </span>
-              </label>
+              <div class="set-title">Showing the island</div>
+              <div class="set-card">
+                <label class="set-row">
+                  <span class="set-lab tipped" data-tip="Appear under the cursor, not in the middle of the screen">Appear at the cursor</span>
+                  <input class="set-end" type="checkbox" id="set-show-at-cursor" />
+                </label>
+                <label class="set-row">
+                  <span class="set-lab tipped" data-tip="Glide along the top edge with the cursor">Follow the cursor</span>
+                  <input class="set-end" type="checkbox" id="set-cursor-follow" />
+                </label>
+                <label class="set-row">
+                  <span class="set-lab tipped" data-tip="How long the cursor rests at the edge before the island appears">Hover delay</span>
+                  <span class="set-sl">
+                    <input type="range" id="set-edge-dwell" data-default="300" min="0" max="1000" step="50" />
+                    <span class="set-val" id="set-edge-dwell-label"></span>
+                  </span>
+                </label>
+                <label class="set-row">
+                  <span class="set-lab tipped" data-tip="How long before it hides again">Hide delay</span>
+                  <span class="set-sl">
+                    <input type="range" id="set-idle-hide-delay" data-default="1" min="1" max="15" step="1" />
+                    <span class="set-val" id="set-idle-hide-delay-label"></span>
+                  </span>
+                </label>
+                <label class="set-row">
+                  <span class="set-lab tipped" data-tip="How long a status stays up">Peek length</span>
+                  <span class="set-sl">
+                    <input type="range" id="set-peek-duration" data-default="3" min="1" max="15" step="1" />
+                    <span class="set-val" id="set-peek-duration-label"></span>
+                  </span>
+                </label>
+                <div class="set-row set-row-auto">
+                  <span class="set-lab tipped" data-tip="Stay hidden (and let clicks through) while a fullscreen game or video is in front. The key you pick, held, lifts it for as long as it is down">Hide over full-screen apps</span>
+                  <span class="opt-group" id="set-fullscreen-guard" role="group" aria-label="Hide over full-screen apps">
+                    <button type="button" data-v="off" aria-pressed="false">Off</button>
+                    <button type="button" data-v="alt" aria-pressed="true">Alt</button>
+                    <button type="button" data-v="ctrl" aria-pressed="false">Ctrl</button>
+                  </span>
+                </div>
+              </div>
             </div>
+
+            <div class="set-tab hidden" data-tab="size" role="tabpanel">
+              <div class="set-title">Preview</div>
+              <div class="set-prev" id="size-preview" role="img" aria-label="The island at the top of the screen: the collapsed width, and the wider expanded panel behind it">
+                <span class="sp-hub" id="sp-hub"></span>
+                <span class="sp-pill" id="sp-pill"></span>
+                <span class="sp-cap">Solid: collapsed</span>
+                <span class="sp-cap sp-cap-r">Dashed: expanded</span>
+              </div>
+              <div class="set-title">Dimensions</div>
+              <div class="set-card">
+                <label class="set-row">
+                  <span class="set-lab tipped" data-tip="Width of the collapsed island (the idle and game pills keep their proportions)">Collapsed width</span>
+                  <span class="set-sl">
+                    <input type="range" id="set-compact-width" data-default="260" min="180" max="560" step="10" />
+                    <span class="set-val" id="set-compact-width-label"></span>
+                  </span>
+                </label>
+                <label class="set-row">
+                  <span class="set-lab tipped" data-tip="Width of the expanded island">Expanded width</span>
+                  <span class="set-sl">
+                    <input type="range" id="set-hub-width" data-default="420" min="340" max="640" step="10" />
+                    <span class="set-val" id="set-hub-width-label"></span>
+                  </span>
+                </label>
+                <label class="set-row">
+                  <span class="set-lab tipped" data-tip="Distance of the island from the top edge of the screen">Distance from the top</span>
+                  <span class="set-sl">
+                    <input type="range" id="set-top-margin" data-default="4" min="0" max="80" step="2" />
+                    <span class="set-val" id="set-top-margin-label"></span>
+                  </span>
+                </label>
+                <label class="set-row">
+                  <span class="set-lab tipped" data-tip="How small the island gets while pinned and left alone (100% = never)">Pinned size</span>
+                  <span class="set-sl">
+                    <input type="range" id="set-pin-shrink" data-default="75" min="40" max="100" step="5" />
+                    <span class="set-val" id="set-pin-shrink-label"></span>
+                  </span>
+                </label>
+              </div>
+            </div>
+
+            <div class="set-tab hidden" data-tab="look" role="tabpanel">
+              <div class="set-title">Appearance</div>
+              <div class="set-card">
+                <div class="set-row">
+                  <span class="set-lab">Accent color</span>
+                  <span class="swatches" id="set-accent" role="group" aria-label="Accent color"></span>
+                </div>
+                <label class="set-row">
+                  <span class="set-lab tipped" data-tip="Show the eyes (the sound light stays either way)">Show the eyes</span>
+                  <input class="set-end" type="checkbox" id="set-show-eyes" />
+                </label>
+                <label class="set-row">
+                  <span class="set-lab tipped" data-tip="The eyes and the lights move with the sound that plays">React to sound</span>
+                  <input class="set-end" type="checkbox" id="set-react-to-audio" />
+                </label>
+                <label class="set-row">
+                  <span class="set-lab tipped" data-tip="Sound light bleeding outside the island: strength and reach (0 = off)">Ambient light</span>
+                  <span class="set-sl">
+                    <input type="range" id="set-audio-bleed" data-default="60" min="0" max="100" step="5" />
+                    <span class="set-val" id="set-audio-bleed-label"></span>
+                  </span>
+                </label>
+                <label class="set-row">
+                  <span class="set-lab tipped" data-tip="Glow around a status: strength and reach">Glow</span>
+                  <span class="set-sl">
+                    <input type="range" id="set-glow" data-default="70" min="0" max="100" step="5" />
+                    <span class="set-val" id="set-glow-label"></span>
+                  </span>
+                </label>
+              </div>
+              <div class="set-title">Background</div>
+              <div class="set-card">
+                <div class="set-row">
+                  <span class="set-lab tipped" data-tip="Background of the collapsed island">Collapsed island</span>
+                  <span class="set-bg">
+                    <span class="bg-name" id="bg-name-compact"></span>
+                    <button class="set-btn" type="button" id="bg-pick-compact">Choose</button>
+                    <button class="set-ibtn hub-btn-x hidden" type="button" id="bg-clear-compact" data-tip="Remove" aria-label="Remove the collapsed background"></button>
+                  </span>
+                </div>
+                <div class="set-row">
+                  <span class="set-lab tipped" data-tip="Background of the expanded island">Expanded island</span>
+                  <span class="set-bg">
+                    <span class="bg-name" id="bg-name-hub"></span>
+                    <button class="set-btn" type="button" id="bg-pick-hub">Choose</button>
+                    <button class="set-ibtn hub-btn-x hidden" type="button" id="bg-clear-hub" data-tip="Remove" aria-label="Remove the expanded background"></button>
+                  </span>
+                </div>
+                <label class="set-row">
+                  <span class="set-lab tipped" data-tip="How dark the background is">Dim the picture</span>
+                  <span class="set-sl">
+                    <input type="range" id="set-bg-dim" data-default="50" min="0" max="90" step="5" />
+                    <span class="set-val" id="set-bg-dim-label"></span>
+                  </span>
+                </label>
+                <div class="hub-row-note" id="bg-error"></div>
+              </div>
+            </div>
+
+            <div class="set-tab hidden" data-tab="plugins" role="tabpanel">
+              <div class="set-card">
+                <label class="set-row">
+                  <span class="set-lab tipped" data-tip="Only a plugin banner of priority 90 or more rings. The rest waits in the notification list.">Do not disturb</span>
+                  <input class="set-end" type="checkbox" id="plugin-dnd" />
+                </label>
+              </div>
+              <div class="set-title set-title-split">
+                <span id="plugin-count">Plugins</span>
+                <span class="set-tools">
+                  <button type="button" class="set-ibtn" id="plugin-folder" data-tip="Open the plugins folder" aria-label="Open the plugins folder"></button>
+                  <button type="button" class="set-ibtn" id="plugin-rescan" data-tip="Look for new plugins" aria-label="Look for new plugins"></button>
+                </span>
+              </div>
+              <div class="set-card" id="plugin-list"></div>
             </div>
           </div>
 
           <div id="pane-info">
-            <div id="hub-media" class="now-card spot hub-media hidden">
-              <div class="now-row">
-                <img id="hub-media-art" class="now-icon hub-media-art" alt="" />
-                <div class="now-text">
-                  <div id="hub-media-title" class="now-title hub-media-title"></div>
-                  <div id="hub-media-artist" class="now-sub hub-media-artist"></div>
-                </div>
-                <div class="now-controls">
-                  <button id="hub-media-prev" class="hub-media-prev" data-tip="Previous">â®</button>
-                  <button id="hub-media-play" class="hub-media-play" data-tip="Play / Pause">â–¶</button>
-                  <button id="hub-media-next" class="hub-media-next" data-tip="Next">â­</button>
-                </div>
-              </div>
-              <div id="hub-media-extra" class="media-extra hub-media-extra">
-                <button id="hub-media-back" class="media-jump hub-media-back" data-tip="Back 5 seconds"></button>
-                <div id="hub-media-seek" class="now-seek hub-media-seek hidden"><div id="hub-media-seek-fill" class="hub-media-seek-fill"></div></div>
-                <button id="hub-media-fwd" class="media-jump hub-media-fwd" data-tip="Forward 5 seconds"></button>
-                <button id="hub-media-rate" class="media-rate hub-media-rate" data-tip="Playback speed"><span id="hub-media-rate-label" class="hub-media-rate-label">1Ã—</span></button>
-              </div>
-              <div id="hub-media-rates" class="rate-menu hub-media-rates hidden"></div>
-            </div>
             <div id="now-cards" class="flat"></div>
-            <div id="calendar-status" class="notif-history-empty"></div>
-            <div id="calendar-events" class="flat"></div>
             <div id="notif-history" class="flat"></div>
           </div>
 

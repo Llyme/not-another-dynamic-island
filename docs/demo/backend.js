@@ -126,7 +126,7 @@
     }
     dwell(n) {
       const s = n.brief && n.brief.state;
-      return (s === "waiting" ? 8000 : s === "time" ? 4000 : s ? 5000 : NOTIF_MS) / 1000;
+      return ((n.brief && n.brief.dwell_ms) || (s === "waiting" ? 8000 : s ? 5000 : NOTIF_MS)) / 1000;
     }
     push(title, body) {
       this.pushAction(title, body, null);

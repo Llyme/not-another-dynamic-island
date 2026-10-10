@@ -77,6 +77,11 @@ impl FloatState {
 
     fn save(&self) {}
 
+    /// at least one card floats on the screen
+    pub fn any(&self) -> bool {
+        !self.items.lock().unwrap().is_empty()
+    }
+
     fn list(&self) -> Vec<FloatItem> {
         self.load();
         self.items.lock().unwrap().clone()

@@ -32,6 +32,7 @@ body {
 #pill[data-view="media"],
 #pill[data-view="game"],
 #pill[data-view="work"],
+#pill[data-view="page"],
 #pill[data-view="brief"] {
   border-radius: 20px;
 }
@@ -65,7 +66,8 @@ body {
 
 body[data-view="media"],
 body[data-view="game"],
-body[data-view="work"] {
+body[data-view="work"],
+body[data-view="page"] {
   --r: 20px;
 }
 
@@ -86,7 +88,8 @@ body[data-view="game"] {
   --glow: 124, 140, 255;
 }
 
-body[data-view="work"] {
+body[data-view="work"],
+body[data-view="page"] {
   --glow: 79, 195, 247;
 }
 
@@ -197,6 +200,8 @@ body.big #viz-bleed {
 #media,
 #game,
 #work,
+#page,
+.pg-pill,
 #notification {
   position: absolute;
   inset: 0;
@@ -211,8 +216,10 @@ body.big #viz-bleed {
 #media.hidden,
 #game.hidden,
 #work.hidden,
+#page.hidden,
+.pg-pill.hidden,
 #notification.hidden,
-#usage-peek.hidden {
+#usage_peek.hidden {
   display: none;
 }
 
@@ -431,7 +438,8 @@ body.big #viz-bleed {
 }
 
 /* ---- work ---- */
-#work-icon {
+#work-icon,
+#page-icon {
   flex: none;
   display: grid;
   place-items: center;
@@ -444,7 +452,8 @@ body.big #viz-bleed {
   font-weight: 800;
 }
 
-#work-time {
+#work-time,
+#page-time {
   flex: none;
   padding: 3px 8px;
   border-radius: 10px;
@@ -453,6 +462,146 @@ body.big #viz-bleed {
   font-size: 10px;
   font-weight: 600;
   font-variant-numeric: tabular-nums;
+}
+
+/* ---- a plugin's pill (a module or a declarative plugin hands the island what to say: see pluginui.js) ---- */
+.pg-tile {
+  flex: none;
+  display: grid;
+  place-items: center;
+  width: 26px;
+  height: 26px;
+  border-radius: 9px;
+  background: linear-gradient(135deg, var(--accent), var(--accent-deep));
+  color: #0b0b0d;
+}
+
+.pg-tile .li {
+  width: 16px;
+  height: 16px;
+  stroke-width: 1.8;
+}
+
+.pg-right {
+  flex: none;
+  padding: 3px 8px;
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.07);
+  color: #cfcfd4;
+  font-size: 10px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.pg-right.hidden,
+.pg-meters.hidden,
+.pg-pbuttons.hidden,
+.pg-pbar.hidden,
+.pg-pill .line-sub.hidden {
+  display: none;
+}
+
+.pg-meters {
+  flex: none;
+  display: flex;
+  align-items: flex-end;
+  gap: 2px;
+  height: 20px;
+}
+
+.pg-meters i {
+  width: 3px;
+  height: 8%;
+  min-height: 2px;
+  border-radius: 2px;
+  background: var(--accent);
+  transition: height 0.07s linear;
+}
+
+.pg-pbuttons {
+  flex: none;
+  display: flex;
+  gap: 2px;
+}
+
+.pg-pbuttons .pg-buttons {
+  display: contents;
+}
+
+.pg-pill .pg-b {
+  min-width: 24px;
+  height: 24px;
+  padding: 0 6px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: #f2f2f5;
+  font: inherit;
+  font-size: 11px;
+  cursor: pointer;
+  transition: background 0.15s;
+}
+
+.pg-pill .pg-b:hover {
+  background: rgba(255, 255, 255, 0.12);
+}
+
+.pg-pill .pg-b .li {
+  width: 15px;
+  height: 15px;
+  stroke-width: 1.8;
+}
+
+.pg-pbar {
+  position: absolute;
+  left: 14px;
+  right: 14px;
+  bottom: 5px;
+  height: 2px;
+  border-radius: 2px;
+  background: rgba(255, 255, 255, 0.12);
+  overflow: hidden;
+}
+
+.pg-pbar i {
+  display: block;
+  height: 100%;
+  width: 0;
+  background: var(--accent);
+  transition: width 0.5s linear;
+}
+
+/* only light digits, glowing in the theme colour: the time */
+.pg-pill.pg-big {
+  justify-content: center;
+}
+
+.pg-pill.pg-big .pg-tile,
+.pg-pill.pg-big .line-sub,
+.pg-pill.pg-big .pg-right {
+  display: none;
+}
+
+.pg-pill.pg-big .text-col {
+  flex: none;
+}
+
+.pg-pill.pg-big .line-main {
+  font-size: 22px;
+  font-weight: 300;
+  letter-spacing: -0.01em;
+  font-variant-numeric: tabular-nums;
+  text-shadow: 0 0 14px rgba(var(--accent-rgb), 0.55);
+}
+
+/* the same, when a plugin's pill comes by itself (the queue of banners) */
+#brief.brief-plugin .pg-tile {
+  margin: 0 4px;
+}
+
+#brief.brief-plugin #brief-right.hidden {
+  display: none;
 }
 
 /* ---- session brief-show (compact pill) ---- */
@@ -503,6 +652,7 @@ body.big #viz-bleed {
 }
 
 #brief.brief-time .llm-tile,
+#brief.brief-time .pg-tile,
 #brief.brief-time #brief-right {
   display: none;
 }
@@ -611,7 +761,7 @@ body.big #viz-bleed {
 }
 
 /* ---- usage peek ---- */
-#usage-peek {
+#usage_peek {
   position: absolute;
   inset: 0;
   display: flex;
@@ -758,7 +908,8 @@ body.big #viz-bleed {
 }
 
 /* pill icons that used to be glyphs */
-#work-icon .li {
+#work-icon .li,
+#page-icon .li {
   width: 16px;
   height: 16px;
   stroke-width: 1.8;

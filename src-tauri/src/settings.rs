@@ -21,14 +21,6 @@ const OLD_AUTOSTART_NAME: &str = "DynamicIsland";
 #[derive(Serialize, Deserialize, Clone)]
 #[serde(default)]
 pub struct Settings {
-    pub game_detection: bool,
-    pub work_detection: bool,
-    /// list what the browsers, Steam and qBittorrent are downloading right now
-    pub download_detection: bool,
-    /// list the Claude Code sessions running on this machine as cards
-    pub llm_detection: bool,
-    /// the island drops down briefly when a Claude Code session needs you or finishes
-    pub llm_brief: bool,
     pub start_with_windows: bool,
     pub idle_hide_delay_s: u64,
     pub peek_duration_s: u64,
@@ -52,16 +44,8 @@ pub struct Settings {
     pub show_eyes: bool,
     /// theme (accent) colour as #rrggbb
     pub accent_color: String,
-    /// the island says what time it is now and then (a session pill)
-    pub time_announce: bool,
-    /// which step of `clock::INTERVALS`
-    pub time_interval: u64,
-    pub time_24h: bool,
     /// 0..100 -- how strongly (and how far) the sound's light bleeds outside the island, 0 = off
     pub audio_bleed: u64,
-    pub calendar_ics_url: String,
-    pub calendar_reminder_lead_min: u64,
-    pub calendar_poll_min: u64,
     /// custom backgrounds (files copied into %APPDATA%\NADI\backgrounds): the
     /// collapsed island, and optionally a different one for the expanded hub
     pub bg_compact: String,
@@ -70,10 +54,6 @@ pub struct Settings {
     pub bg_dim: u64,
     /// 0..100 -- how strongly (and how far) the glow around the brief-show views shines, 0 = off
     pub glow_intensity: u64,
-    /// browsing card: fetch the page in front of you (public https pages only) to show its gist
-    pub page_preview: bool,
-    /// the page's main picture (a post's photo, an article's hero) on the browsing card, via the extension
-    pub page_images: bool,
     /// hovering the top edge does nothing while a fullscreen / borderless-fullscreen app is in front
     pub fullscreen_guard: bool,
     /// the key that lifts the guard while it is held: "alt" or "ctrl"
@@ -83,11 +63,6 @@ pub struct Settings {
 impl Default for Settings {
     fn default() -> Self {
         Self {
-            game_detection: true,
-            work_detection: true,
-            download_detection: true,
-            llm_detection: true,
-            llm_brief: true,
             start_with_windows: false,
             idle_hide_delay_s: 1,
             peek_duration_s: 3,
@@ -101,19 +76,11 @@ impl Default for Settings {
             react_to_audio: true,
             show_eyes: true,
             accent_color: "#5ac88c".into(),
-            time_announce: false,
-            time_interval: 4,
-            time_24h: false,
             audio_bleed: 60,
-            calendar_ics_url: String::new(),
-            calendar_reminder_lead_min: 15,
-            calendar_poll_min: 10,
             bg_compact: String::new(),
             bg_hub: String::new(),
             bg_dim: 50,
             glow_intensity: 70,
-            page_preview: true,
-            page_images: true,
             fullscreen_guard: true,
             guard_key: "alt".to_string(),
         }
@@ -182,6 +149,11 @@ pub fn load() -> Settings {
     s
 }
 
+/// the settings file as it was written, whatever it holds (see native.rs: a native plugin adopts its old fields)
+pub(crate) fn raw() -> Option<serde_json::Value> {
+    serde_json::from_str(&std::fs::read_to_string(settings_path()?).ok()?).ok()
+}
+
 pub(crate) fn save_to_disk(settings: &Settings) {
     let Some(path) = settings_path() else { return };
     if let Some(dir) = path.parent() {
@@ -220,26 +192,11 @@ pub fn get_settings(window: WebviewWindow) -> Settings {
 #[tauri::command]
 pub fn save_settings(window: WebviewWindow, settings: Settings) {
     let state = window.state::<Arc<IslandState>>();
-    let (autostart_changed, calendar_changed) = {
-        let current = state.settings.lock().unwrap();
-        (
-            current.start_with_windows != settings.start_with_windows,
-            current.calendar_ics_url != settings.calendar_ics_url,
-        )
-    };
-    if calendar_changed {
-        state.calendar.refetch.store(true, Ordering::Relaxed);
-    }
+    let autostart_changed = state.settings.lock().unwrap().start_with_windows != settings.start_with_windows;
     if autostart_changed {
         set_autostart(settings.start_with_windows);
     }
 
-    state
-        .game_detection_enabled
-        .store(settings.game_detection, Ordering::Relaxed);
-    state
-        .work_detection_enabled
-        .store(settings.work_detection, Ordering::Relaxed);
     state
         .idle_hide_ms
         .store(settings.idle_hide_delay_s.max(1) * 1000, Ordering::Relaxed);
@@ -253,12 +210,11 @@ pub fn save_settings(window: WebviewWindow, settings: Settings) {
     state.top_margin.store(settings.top_margin.clamp(0, 80), Ordering::Relaxed);
     state.show_at_cursor.store(settings.show_at_cursor, Ordering::Relaxed);
     state.cursor_follow.store(settings.cursor_follow, Ordering::Relaxed);
-    state.audio_enabled.store(settings.react_to_audio, Ordering::Relaxed);
+    state.audio_enabled.store(settings.react_to_audio || state.plugins.needs_audio(), Ordering::Relaxed);
     state
         .peek_ms
         .store(settings.peek_duration_s.max(1) * 1000, Ordering::Relaxed);
 
-    state.ext.push_config(&settings);
     save_to_disk(&settings);
     *state.settings.lock().unwrap() = settings;
 }

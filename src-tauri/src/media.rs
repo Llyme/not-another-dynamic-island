@@ -173,6 +173,30 @@ fn snapshots_now() -> Vec<MediaSnapshot> {
         .collect()
 }
 
+/// What a module that may see what is playing is told (never the picture, and the position only to the second).
+fn publish_for_plugins(state: &IslandState, snaps: &[MediaSnapshot]) {
+    if !state.plugins.needs_media() {
+        return;
+    }
+    let sessions: Vec<serde_json::Value> = snaps
+        .iter()
+        .map(|s| {
+            serde_json::json!({
+                "source": s.source, "title": s.title, "artist": s.artist, "playing": s.playing,
+                "position": s.position.round(), "duration": s.duration.round(),
+                "can_previous": s.can_previous, "can_next": s.can_next,
+            })
+        })
+        .collect();
+    let value = serde_json::Value::Array(sessions);
+    let mut last = state.media_seen.lock().unwrap();
+    // (a module is told at every change; while something plays, the position moves each second)
+    if *last != value {
+        *last = value;
+        state.media_seq.fetch_add(1, Ordering::Relaxed);
+    }
+}
+
 /// Spawns the poll thread; call once from `setup`.
 pub fn spawn(app: AppHandle, state: Arc<IslandState>) {
     std::thread::spawn(move || {
@@ -183,6 +207,7 @@ pub fn spawn(app: AppHandle, state: Arc<IslandState>) {
         loop {
             let snaps = snapshots_now();
             state.has_media.store(!snaps.is_empty(), Ordering::Relaxed);
+            publish_for_plugins(&state, &snaps);
             let tracks: Vec<(String, String)> =
                 snaps.iter().map(|s| (s.title.clone(), s.artist.clone())).collect();
             if !tracks.is_empty() && tracks != last_tracks {
@@ -259,7 +284,6 @@ fn wait_completed(
 /// A control op gets 2 s to finish; a stuck player is dropped, never hung on.
 const OP_TIMEOUT_MS: u64 = 2000;
 
-#[tauri::command]
 pub fn media_play_pause(source: Option<String>) {
     with_session(source, |s| {
         let op = s.TryTogglePlayPauseAsync()?;
@@ -271,7 +295,6 @@ pub fn media_play_pause(source: Option<String>) {
     });
 }
 
-#[tauri::command]
 pub fn media_next(source: Option<String>) {
     with_session(source, |s| {
         let op = s.TrySkipNextAsync()?;
@@ -283,7 +306,6 @@ pub fn media_next(source: Option<String>) {
     });
 }
 
-#[tauri::command]
 pub fn media_previous(source: Option<String>) {
     with_session(source, |s| {
         let op = s.TrySkipPreviousAsync()?;
@@ -295,7 +317,6 @@ pub fn media_previous(source: Option<String>) {
     });
 }
 
-#[tauri::command]
 pub fn media_seek(position_seconds: f64, source: Option<String>) {
     with_session(source, |s| {
         let ticks = (position_seconds * 10_000_000.0) as i64;
@@ -311,7 +332,6 @@ pub fn media_seek(position_seconds: f64, source: Option<String>) {
 /// jump forward (positive) or back (negative) by some seconds, from where the player is now:
 /// the timeline's position is the one it last reported, so the time since then is added (at
 /// the playback speed) while it plays
-#[tauri::command]
 pub fn media_seek_by(delta_seconds: f64, source: Option<String>) {
     with_session(source, |s| {
         let tl = s.GetTimelineProperties()?;
@@ -339,7 +359,6 @@ pub fn media_seek_by(delta_seconds: f64, source: Option<String>) {
 }
 
 /// set the playback speed (0.1 to 16); true when the player took it
-#[tauri::command]
 pub fn media_set_rate(rate: f64, source: Option<String>) -> bool {
     let rate = rate.clamp(0.1, 16.0);
     let mut ok = false;

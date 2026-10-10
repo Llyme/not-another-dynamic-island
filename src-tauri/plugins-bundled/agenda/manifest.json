@@ -1,0 +1,18 @@
+{
+  "id": "agenda",
+  "name": "Agenda",
+  "description": "A card with the next events of the calendar, and a banner shortly before one starts.",
+  "version": "2.0.0",
+  "kind": "wasm",
+  "module": "agenda.wasm",
+  "default_on": false,
+  "banners": true,
+  "permissions": {
+    "calendar": true
+  },
+  "source": { "when": "always" },
+  "settings": {
+    "remind": { "label": "Banner before an event", "type": "toggle", "default": true },
+    "lead_min": { "label": "How long before (minutes)", "type": "number", "default": 15 }
+  }
+}

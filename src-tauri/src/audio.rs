@@ -45,6 +45,9 @@ pub struct AudioTick {
     /// 16 log-spaced bands from ~60 Hz to ~12 kHz, each 0..1 on a fixed
     /// dBFS scale. Index 0 = lowest. Drives the gradient lights.
     pub bands: [f32; VIZ_BANDS],
+    /// The same 16 bands for a meter: each in true dBFS (a full-scale sine reads 0 dB), -72..-6 mapped to 0..1, smoothed
+    /// the same way. `bands` is a scale for lights and saturates on loud music; this one keeps its range.
+    pub spectrum: [f32; VIZ_BANDS],
     /// a beat landed since the previous tick (a real onset, or a tempo-predicted
     /// one when the track has a steady pulse but this hit was too soft to catch)
     pub beat: bool,
@@ -133,6 +136,7 @@ struct Analyzer {
     // mapping -- no adaptive peak tracking, so brightness never gets
     // stuck dim after a loud passage)
     band_env: [f32; VIZ_BANDS],
+    spec_env: [f32; VIZ_BANDS],
     // onsets + tempo
     prev_log: Vec<f32>,
     flux_prev: f32,
@@ -179,6 +183,7 @@ impl Analyzer {
             nlevel: 0.0,
             frame_no: 0,
             band_env: [0.0; VIZ_BANDS],
+            spec_env: [0.0; VIZ_BANDS],
             prev_log: vec![0.0; FFT_N / 2],
             flux_prev: 0.0,
             prev_log_bass: [0.0; 16],
@@ -305,6 +310,11 @@ impl Analyzer {
             let target = ((20.0 * (e + 1e-9).log10() + 60.0) / 48.0).clamp(0.0, 1.0);
             let k = if target > self.band_env[b] { 0.7 } else { 0.22 };
             self.band_env[b] += (target - self.band_env[b]) * k;
+            // (a Hann-windowed full-scale sine has a bin magnitude of N/4)
+            let true_db = 20.0 * (e * 4.0 / FFT_N as f32 + 1e-9).log10();
+            let st = ((true_db + 72.0) / 66.0).clamp(0.0, 1.0);
+            let sk = if st > self.spec_env[b] { 0.7 } else { 0.22 };
+            self.spec_env[b] += (st - self.spec_env[b]) * sk;
         }
 
         // loudness: block RMS in dBFS mapped -60..-12 -> 0..1, fixed scale
@@ -485,6 +495,7 @@ impl Analyzer {
             mid: avg_range(800.0, 3000.0),
             high: avg_range(3000.0, 12000.0),
             bands: self.band_env,
+            spectrum: self.spec_env,
             beat: std::mem::take(&mut self.beat_pending),
             kick: std::mem::take(&mut self.kick_pending),
             hit: std::mem::take(&mut self.hit_pending),
@@ -584,6 +595,8 @@ unsafe fn capture_session(app: &AppHandle, state: &Arc<IslandState>) -> windows:
                     .drain(..FFT_N)
                     .fold((0.0f32, 0.0f32), |(a, b), (l, r)| (a + l, b + r));
                 if let Some(tick) = analyzer.process(&block, el, er) {
+                    // (the modules that may hear get what the island works out, never the sound)
+                    state.plugins.audio.put(&tick);
                     let silent = tick.kind == "silent";
                     // don't spam identical silence
                     if !(silent && was_silent_emitted) {

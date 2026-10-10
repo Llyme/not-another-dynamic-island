@@ -2,7 +2,7 @@
 //! work and browsing detection read this so they keep working while another
 //! window (or the island itself) has focus.
 
-use crate::game::exe_path_for_pid;
+use crate::winutil::exe_path_for_pid;
 use std::collections::HashMap;
 use windows::Win32::Foundation::{BOOL, HWND, LPARAM};
 use windows::Win32::Graphics::Dwm::{DwmGetWindowAttribute, DWMWA_CLOAKED};

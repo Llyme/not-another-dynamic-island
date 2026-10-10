@@ -1,0 +1,12 @@
+{
+  "id": "downloads",
+  "name": "Downloads",
+  "description": "What your browsers, Steam and qBittorrent are downloading right now.",
+  "version": "1.0.0",
+  "default_on": true,
+  "permissions": {
+    "sees": [
+      { "name": "read files and folders" }
+    ]
+  }
+}

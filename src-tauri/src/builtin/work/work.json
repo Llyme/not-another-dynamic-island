@@ -1,0 +1,15 @@
+{
+  "id": "work",
+  "name": "Work",
+  "description": "What you work on: your editor, your hours, and a pill for the session you are in.",
+  "version": "1.0.0",
+  "default_on": true,
+  "permissions": {
+    "sees": [
+      { "name": "windows" },
+      { "name": "idle time" },
+      { "name": "use CLI", "detail": "git" }
+    ]
+  },
+  "pills": [{ "id": "work", "w": 260, "h": 40, "rank": 10 }]
+}
