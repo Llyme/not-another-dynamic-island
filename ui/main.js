@@ -6,6 +6,9 @@
 import { initFloats } from "./floats.js";
 import { initPluginUi, pluginCard, setRings, whenText } from "./pluginui.js";
 import { plugins } from "./plugins/index.js";
+import { eyes } from "./plugins/eyes.js";
+import { soundLight } from "./plugins/sound-light.js";
+import { updateAudio } from "./sound.js";
 import {
 	FLOATS,
 	LLM_COLOR,
@@ -23,8 +26,6 @@ import {
 	invoke,
 	li,
 	listen,
-	mediaListOf,
-	pickPrimaryMedia,
 	pills,
 	ringFrom,
 	view,
@@ -92,956 +93,8 @@ window.addEventListener(
 ); // no autoscroll
 
 const pill = document.getElementById("pill");
-const canvas = document.getElementById("face");
-const ctx = canvas.getContext("2d");
-const hubEyesCanvas = document.getElementById("hub-eyes");
-const hubEyesCtx = hubEyesCanvas.getContext("2d");
+// (the eyes are in plugins/eyes.js, the sound light in plugins/sound-light.js, and the sound they borrow in sound.js)
 
-let dpr = window.devicePixelRatio || 1;
-
-function sizeCanvasToElement(c) {
-	// Only sets the drawing-buffer resolution (width/height attributes) --
-	// never the inline style size. CSS alone controls the displayed size
-	// (#face and #hub-eyes both already size themselves via their own rules);
-	// writing inline style here bit us once already: #hub-eyes was
-	// `display:none` (0x0) the first time this ran at page load, and setting
-	// `style.height = "0px"` inline then permanently overrode its CSS
-	// `height: 40px` rule -- inline style always wins over a class -- so it
-	// stayed invisible forever after, even once re-measured on becoming visible.
-	// layout size, not getBoundingClientRect: that one includes CSS transforms (the shrunken pinned
-	// island, entrance animations), and the buffer must not follow those
-	const width = c.offsetWidth;
-	const height = c.offsetHeight;
-	c.width = Math.round(width * dpr);
-	c.height = Math.round(height * dpr);
-}
-
-function resizeCanvas() {
-	dpr = window.devicePixelRatio || 1;
-	sizeCanvasToElement(canvas);
-	sizeCanvasToElement(hubEyesCanvas);
-}
-window.addEventListener("resize", resizeCanvas);
-resizeCanvas();
-
-// -- eye state: blink + squash/stretch (ported from the Qt prototype) plus a
-// small mood system (happy / sleepy / wide) driven by springs, so expression
-// changes overshoot and settle like everything else in the island --
-const eyeState = {
-	blinkState: "open", // "open" | "closing" | "opening"
-	blinkStart: 0,
-	nextBlinkAt: performance.now() + rand(2500, 5500),
-	openness: 1.0,
-	squish: 0.0,
-	squishDir: [0, 0],
-	lastCursor: { x: 0, y: 0 },
-	smoothedCursor: { x: 0, y: 0 },
-	doubleBlink: false,
-	winkSide: 0, // -1 left eye only, +1 right eye only, 0 both
-};
-
-const mood = {
-	happy: { p: 0, v: 0 },
-	sleepy: { p: 0, v: 0 },
-	wide: { p: 0, v: 0 },
-	xd: { p: 0, v: 0 }, // > <  (excited, punchy music)
-	bliss: { p: 0, v: 0 }, // u u  (chill)
-	hover: false, // cursor is over the island
-	happyUntil: 0,
-	wideUntil: 0,
-	lastMoveAt: performance.now(),
-	// idle glances: after the cursor sits still a while the eyes look around
-	glance: { x: 0, y: 0 },
-	glanceTarget: { x: 0, y: 0 },
-	glanceW: 0,
-	nextGlanceAt: 0,
-	lastFrame: performance.now(),
-	force: null,
-};
-window.__mood = mood;
-
-// -- listening: Rust analyzes the system audio (WASAPI loopback) and sends
-// loudness, beat pulses and a rough speech-vs-music call. Music -> the eyes
-// bob and sway on the beat (arches flash on strong hits); speech -> they
-// "talk", opening and closing with the voice. --
-const VIZ_BANDS = 16;
-const audio = {
-	target: 0,
-	level: 0,
-	mode: "silent", // "silent" | "music" | "speech" (hard call, for logic that needs one)
-	lastTick: 0,
-	kind: "silent",
-	voice: 0, // raw 0..1 how voice-like (jumps around on vocal music)
-	voiceSm: 0, // what the visuals use: eased toward the director's call (see below)
-	bang: 0, // 0..1 fast, hard, punchy music (picks the > < expression)
-	bands: new Array(VIZ_BANDS).fill(0), // 16 log-spaced bands, ~60 Hz .. ~12 kHz, each 0..1
-	bandTarget: new Array(VIZ_BANDS).fill(0),
-	bpm: 100,
-	conf: 0,
-	lastBeatAt: 0,
-	energy: 0, // 0..1 how energetic the sound is (loudness, hit sharpness, tempo)
-	chill: 0, // 0..1 how relaxed: soft, slow, gentle music
-	pan: 0, // -1 left .. 1 right, smoothed: where the sound is coming from
-	panTarget: 0,
-	dance: 0, // level * (1 - voice): how much "music energy" to show
-	talk: 0, // level * voice
-	talkEnv: 0, // fast envelope for the eyes' open/close
-	kick: { p: 0, v: 0 },
-	nod: { p: 0, v: 0 }, // head-bang nod: snaps down on each kick-drum hit
-	lastKickAt: 0,
-	sway: 0, // phase, advances with the estimated tempo
-};
-// -- the "director": once a second it takes a sample of the audio and calls a
-// vibe: silent / talk / chill / groove / bang. The call is not made from that
-// one second alone but from a rolling ~20 s PROFILE of the current track (tempo
-// feel, how often the kick lands, energy, vocal share...), which is far steadier
-// than any single second. A new call must also hold for two samples in a row.
-// The profile resets when the song changes, and finished profiles are
-// remembered per song, so a replay is understood from its first second. --
-const PROFILE_SECS = 20;
-const PROFILE_KEY = "di.trackProfiles";
-const newAcc = () => ({
-	n: 0,
-	voice: 0,
-	energy: 0,
-	level: 0,
-	bass: 0,
-	beats: 0,
-	kicks: 0,
-});
-const director = {
-	state: "silent",
-	cand: "silent",
-	count: 0,
-	since: 0,
-	lastSample: 0,
-	video: false, // what plays looks like a video/film (set from the media session)
-	acc: newAcc(),
-	history: [], // one-second summaries of the current track, oldest first
-	track: "", // "title|artist" of what is playing
-};
-
-let savedProfiles = {};
-try {
-	savedProfiles = JSON.parse(
-		localStorage.getItem(PROFILE_KEY) || "{}",
-	);
-} catch (_) {}
-let profilesSavedAt = 0;
-
-function avgHistory(list) {
-	const o = {
-		voice: 0,
-		energy: 0,
-		level: 0,
-		bass: 0,
-		beats: 0,
-		kicks: 0,
-	};
-	for (const h of list) for (const k in o) o[k] += h[k];
-	const n = Math.max(1, list.length);
-	for (const k in o) o[k] /= n;
-	return o;
-}
-
-function rememberProfile(P) {
-	if (!director.track) return;
-	delete savedProfiles[director.track]; // re-insert = most recent
-	savedProfiles[director.track] = P;
-	const keys = Object.keys(savedProfiles);
-	for (let i = 0; i < keys.length - 200; i++)
-		delete savedProfiles[keys[i]];
-	const now = performance.now();
-	if (now - profilesSavedAt > 15000) {
-		profilesSavedAt = now;
-		try {
-			localStorage.setItem(
-				PROFILE_KEY,
-				JSON.stringify(savedProfiles),
-			);
-		} catch (_) {}
-	}
-}
-
-function onTrackChange(key) {
-	director.track = key;
-	// a known song starts from what we learned last time; a new one starts empty
-	const known = savedProfiles[key];
-	director.history = known
-		? Array.from({ length: 8 }, () => ({ ...known }))
-		: [];
-	director.since = 0; // no dwell wait: the new song may deserve a different vibe at once
-}
-
-listen("media-tick", (e) => {
-	const m = pickPrimaryMedia(mediaListOf(e.payload));
-	// video context: a video player, or anything long enough to be an episode/film
-	// rather than a song. Mostly dialogue -- the eyes must not "vibe" to it.
-	director.video =
-		!!m &&
-		((m.duration || 0) > 900 ||
-			/potplayer|vlc|mpv|mpc|wmplayer|kmplayer|gom|video|movies|netflix|primevideo|disney|hulu/i.test(
-				m.source || "",
-			));
-	if (!m) return;
-	const key = `${m.title || ""}|${m.artist || ""}`;
-	if (key !== director.track) onTrackChange(key);
-});
-
-function directorSample(now, alive) {
-	const a = director.acc;
-	director.acc = newAcc();
-	const secs = Math.max(
-		0.5,
-		(now - director.lastSample) / 1000,
-	);
-	director.lastSample = now;
-	const n = a.n;
-	let cand = "silent";
-	if (alive && n > 0 && a.level / n >= 0.05) {
-		director.history.push({
-			voice: a.voice / n,
-			energy: a.energy / n,
-			level: a.level / n,
-			bass: a.bass / n,
-			beats: a.beats / secs,
-			kicks: a.kicks / secs,
-		});
-		while (director.history.length > PROFILE_SECS)
-			director.history.shift();
-		const P = avgHistory(director.history);
-		const recentVoice = avgHistory(
-			director.history.slice(-4),
-		).voice;
-		const cur = director.state;
-		if (director.video) {
-			// movies / episodes: mostly dialogue over ambience. Lean hard toward "talk"
-			// (the analyzer under-scores speech mixed with music and effects) and
-			// otherwise stay "calm": no dancing, no rings, no head-banging.
-			cand =
-				recentVoice > (cur === "talk" ? 0.12 : 0.2)
-					? "talk"
-					: "calm";
-		} else if (recentVoice > (cur === "talk" ? 0.3 : 0.5))
-			cand = "talk";
-		// punchy: a kick lands steadily, it is energetic and loud (vocals are fine -- the kick detector ignores them)
-		else if (
-			P.kicks >= (cur === "bang" ? 1.2 : 1.5) &&
-			P.energy >= (cur === "bang" ? 0.25 : 0.3) &&
-			P.level > 0.5
-		)
-			cand = "bang";
-		else if (
-			P.energy < (cur === "chill" ? 0.27 : 0.2) &&
-			P.beats < 1.4
-		)
-			cand = "chill";
-		else cand = "groove";
-		if (director.history.length >= 12) rememberProfile(P);
-	}
-	if (cand === director.state) {
-		director.count = 0;
-		return;
-	}
-	if (cand === "silent") {
-		// silence is not ambiguous: no waiting
-		director.state = "silent";
-		director.count = 0;
-		director.since = now;
-		return;
-	}
-	director.count =
-		cand === director.cand ? director.count + 1 : 1;
-	director.cand = cand;
-	if (director.count >= 2 && now - director.since >= 2000) {
-		director.state = cand;
-		director.count = 0;
-		director.since = now;
-	}
-}
-
-listen("audio-tick", (e) => {
-	const a = e.payload;
-	director.acc.n++;
-	director.acc.voice += a.voice;
-	director.acc.energy += a.energy;
-	// genre profiling reads the peak-normalized twin (quiet-but-active
-	// still counts); visuals read the absolute `level` below
-	director.acc.level += a.nlevel ?? a.level;
-	director.acc.bass += a.bass;
-	if (a.beat) director.acc.beats++;
-	if (a.kick) director.acc.kicks++;
-	audio.target = a.level;
-	audio.kind = a.kind;
-	audio.voice = a.voice;
-	// Rust now sends 16 log-spaced bands; older payloads (or the demo page)
-	// still send the 4 legacy splits -- expand those across the 16 lights.
-	if (
-		Array.isArray(a.bands) &&
-		a.bands.length === VIZ_BANDS
-	) {
-		audio.bandTarget = a.bands.slice();
-	} else {
-		const legacy = [
-			a.bass || 0,
-			a.lowmid || 0,
-			a.mid || 0,
-			a.high || 0,
-		];
-		audio.bandTarget = Array.from(
-			{ length: VIZ_BANDS },
-			(_, i) =>
-				legacy[
-					Math.min(3, Math.floor((i / VIZ_BANDS) * 4))
-				],
-		);
-	}
-	audio.bpm = a.bpm;
-	audio.conf = a.conf;
-	audio.panTarget = a.pan;
-	audio.energy = a.energy;
-	audio.lastTick = performance.now();
-	// head-bang: only a low-end kick-drum hit moves the head (vocals and melody
-	// onsets don't), and the head is back up before the next hit
-	if (
-		a.kick &&
-		audio.bang > 0.25 &&
-		audio.lastTick - audio.lastKickAt > 170
-	) {
-		audio.lastKickAt = audio.lastTick;
-		audio.nod.v += 40 * audio.bang;
-	}
-	// one reaction per hit: never re-trigger within 220 ms of the last one
-	if (
-		a.beat &&
-		a.level > 0.15 &&
-		audio.lastTick - audio.lastBeatAt > 220
-	) {
-		audio.lastBeatAt = audio.lastTick;
-		// every beat bounces the eyes and sends a ripple through the island
-		// chill music barely bounces: hits are scaled down by how relaxed it is
-		audio.kick.v +=
-			(14 + 8 * a.level) *
-			(1 - 0.88 * audio.chill) *
-			(1 - 0.9 * audio.bang);
-	}
-	// sound-wave rings are bass-only: a kick-drum hit, or a strong low-end
-	// onset. Hats, snares, vocals and melody never make rings.
-	const bassNow = Array.isArray(a.bands)
-		? (a.bands[0] + a.bands[1] + a.bands[2]) / 3
-		: a.bass || 0;
-	if (
-		a.kick &&
-		audio.chill < 0.55 &&
-		director.state !== "calm" &&
-		director.state !== "talk"
-	) {
-		vizBeat(
-			0.25 + 0.75 * Math.min(1, 0.4 + 0.6 * a.level),
-			a.pan,
-		);
-	} else if (
-		a.hit > 0.25 &&
-		bassNow > 0.45 &&
-		audio.chill < 0.55 &&
-		director.state !== "calm" &&
-		director.state !== "talk"
-	) {
-		vizBeat(
-			0.12 + 0.88 * a.hit * (0.45 + 0.55 * a.level),
-			a.pan,
-		);
-	}
-});
-
-function smoothTo(cur, target, dt, up, down) {
-	return (
-		cur +
-		(target - cur) *
-			(1 - Math.exp(-dt * (target > cur ? up : down)))
-	);
-}
-
-function updateAudio(now, dt) {
-	const alive = now - audio.lastTick < 700;
-	const tgt = alive ? audio.target : 0;
-	// lights linger: fast attack, then a fixed slow linear fall (0..1/sec)
-	// instead of exponential decay, so a dropped value fades evenly.
-	const LEVEL_FALL = 1;
-	audio.level =
-		tgt > audio.level
-			? smoothTo(audio.level, tgt, dt, 30, 8)
-			: Math.max(tgt, audio.level - LEVEL_FALL * dt);
-	const BAND_FALL = 0.1;
-	for (let i = 0; i < VIZ_BANDS; i++) {
-		const bt = alive ? audio.bandTarget[i] || 0 : 0;
-		const cur = audio.bands[i];
-		audio.bands[i] =
-			bt > cur
-				? smoothTo(cur, bt, dt, 40, 10)
-				: Math.max(bt, cur - BAND_FALL * dt);
-	}
-	audio.pan = smoothTo(
-		audio.pan,
-		alive ? audio.panTarget : 0,
-		dt,
-		18,
-		6,
-	);
-	if (!alive) {
-		director.acc = newAcc();
-		if (director.state !== "silent") {
-			director.state = "silent";
-			director.since = now;
-		}
-	} else if (now - director.lastSample >= 1000) {
-		directorSample(now, alive);
-	}
-	const vibe = director.state;
-	audio.voiceSm = smoothTo(
-		audio.voiceSm,
-		vibe === "talk" ? 1 : 0,
-		dt,
-		3,
-		2.5,
-	);
-	const voice = audio.voiceSm;
-	const chillTarget = vibe === "chill" ? 1 : 0;
-	audio.bang = smoothTo(
-		audio.bang,
-		vibe === "bang" ? 1 : 0,
-		dt,
-		3.5,
-		2.5,
-	);
-	audio.chill = smoothTo(
-		audio.chill,
-		chillTarget,
-		dt,
-		1.2,
-		3,
-	);
-	// (no breath rings: rings are bass-only, chill stays as light)
-	audio.mode =
-		!alive || audio.level < 0.05
-			? "silent"
-			: vibe === "talk"
-				? "speech"
-				: "music";
-	// "calm" (video without much speech right now): a whisper of movement only
-	audio.dance = smoothTo(
-		audio.dance,
-		audio.level * (1 - voice) * (vibe === "calm" ? 0.2 : 1),
-		dt,
-		12,
-		4,
-	);
-	audio.talk = smoothTo(
-		audio.talk,
-		audio.level * voice,
-		dt,
-		12,
-		4,
-	);
-	// fast envelopes: the eyes follow syllables and hits, not just loudness.
-	// Voice lives ~800 Hz..3 kHz, which is roughly the upper-middle third of
-	// the 16 log bands -- average a few of them for a stable syllable signal.
-	const midAvg =
-		(audio.bands[8] +
-			audio.bands[9] +
-			audio.bands[10] +
-			audio.bands[11] +
-			audio.bands[12]) /
-		5;
-	const env = 0.5 * audio.level + 0.5 * midAvg;
-	audio.talkEnv = smoothTo(audio.talkEnv, env, dt, 60, 16);
-	// head-bang nod spring: quick down, settles well inside one beat
-	audio.nod.v += (420 * -audio.nod.p - 26 * audio.nod.v) * dt;
-	audio.nod.p += audio.nod.v * dt;
-	// beat kick: an underdamped spring, so each hit bounces and settles
-	const acc = 260 * -audio.kick.p - 15 * audio.kick.v;
-	audio.kick.v += acc * dt;
-	audio.kick.p += audio.kick.v * dt;
-	// sway at half the beat rate (a nod every other beat), locked to the tempo estimate
-	if (audio.dance > 0.04)
-		audio.sway +=
-			dt *
-			Math.PI *
-			(audio.bpm / 60) *
-			(1 - 0.55 * audio.chill);
-}
-
-function rand(min, max) {
-	return min + Math.random() * (max - min);
-}
-
-function springTo(s, target, dt) {
-	// underdamped on purpose: an expression change pops past its target and settles
-	const a = 340 * (target - s.p) - 19 * s.v;
-	s.v += a * dt;
-	s.p += s.v * dt;
-}
-
-// Which expression the music calls for. Picked when the director's vibe
-// changes and then re-rolled only every 5-9 s, so it reads as a deliberate
-// mood, never a flicker.
-const emote = { name: "none", vibe: "", until: 0 };
-function pickEmote(now) {
-	if (emote.forced) return;
-	if (director.state === emote.vibe && now < emote.until)
-		return;
-	emote.vibe = director.state;
-	const options = {
-		bang: ["xd", "arch", "xd", "arch", "open"],
-		chill: ["bliss", "sleepy", "bliss", "open"],
-		groove: ["open", "open", "arch"],
-	}[emote.vibe] || ["none"];
-	let next =
-		options[Math.floor(Math.random() * options.length)];
-	if (next === emote.name && options.length > 1)
-		next =
-			options[
-				(options.indexOf(next) + 1) % options.length
-			];
-	emote.name = next;
-	emote.until = now + rand(5000, 9000);
-}
-
-window.__setEmote = (name) => {
-	// debug hook: pin an expression ("xd" | "bliss" | "arch" | "sleepy" | "open")
-	emote.name = name;
-	emote.vibe = director.state;
-	emote.until = Infinity;
-	emote.forced = true;
-};
-
-function updateMood(now) {
-	const dt = Math.min((now - mood.lastFrame) / 1000, 0.05);
-	mood.lastFrame = now;
-	const idleFor = now - mood.lastMoveAt;
-	const inIdle = currentView === "idle";
-
-	const f = mood.force; // debug override (window.__mood.force = "happy" | "sleepy" | "wide")
-	const wide =
-		f === "wide" || (!f && now < mood.wideUntil) ? 1 : 0;
-	const happy =
-		f === "happy" ||
-		(!f &&
-			!wide &&
-			((mood.hover && inIdle) || now < mood.happyUntil))
-			? 1
-			: 0;
-	const sleepy =
-		f === "sleepy" ||
-		(!f &&
-			!wide &&
-			!happy &&
-			idleFor > 25000 &&
-			audio.mode === "silent")
-			? 1
-			: 0;
-	springTo(mood.wide, wide, dt);
-	// music-driven expressions (never over a hover / click reaction)
-	pickEmote(now);
-	const free = !happy && !wide && !f;
-	const e = free ? emote.name : "none";
-	springTo(
-		mood.happy,
-		Math.max(happy, e === "arch" ? 1 : 0),
-		dt,
-	);
-	springTo(mood.xd, e === "xd" ? 1 : 0, dt);
-	springTo(mood.bliss, e === "bliss" ? 1 : 0, dt);
-	// relaxed, half-lidded eyes while the music is chill
-	springTo(
-		mood.sleepy,
-		Math.max(
-			sleepy,
-			e === "sleepy"
-				? 0.75
-				: 0.3 * audio.chill * (e === "bliss" ? 0 : 1),
-		),
-		dt,
-	);
-
-	// glances: cursor parked for 4s+ -> look around now and then
-	const glancing = idleFor > 4000 && !happy && !wide;
-	if (glancing && now >= mood.nextGlanceAt) {
-		const spots = [
-			[-1, 0.1],
-			[1, 0.1],
-			[0.7, -0.8],
-			[-0.7, -0.8],
-			[0, 0],
-			[-0.9, 0.5],
-			[0.9, 0.5],
-		];
-		const [gx, gy] =
-			spots[Math.floor(Math.random() * spots.length)];
-		mood.glanceTarget = { x: gx, y: gy };
-		mood.nextGlanceAt = now + rand(1400, 3400);
-	}
-	const k = 1 - Math.exp(-dt * 14);
-	mood.glance.x += (mood.glanceTarget.x - mood.glance.x) * k;
-	mood.glance.y += (mood.glanceTarget.y - mood.glance.y) * k;
-	mood.glanceW +=
-		((glancing ? 1 : 0) - mood.glanceW) *
-		(1 - Math.exp(-dt * 8));
-}
-
-function tickBlink(now) {
-	// no blinking while the face is doing an expression (> <, ^ ^, u u, sleepy lids):
-	// it only blinks in its normal open-eyed mode. The next blink is pushed out so
-	// it does not fire the instant the expression ends.
-	const expressive =
-		Math.max(
-			mood.happy.p,
-			mood.xd.p,
-			mood.bliss.p,
-			mood.sleepy.p,
-		) > 0.35;
-	if (expressive && eyeState.blinkState === "open") {
-		eyeState.nextBlinkAt = Math.max(
-			eyeState.nextBlinkAt,
-			now + 1200,
-		);
-		return;
-	}
-	const slow =
-		1 + Math.max(0, Math.min(mood.sleepy.p, 1)) * 1.8; // sleepy blinks are lazy
-	if (
-		eyeState.blinkState === "open" &&
-		now >= eyeState.nextBlinkAt
-	) {
-		eyeState.blinkState = "closing";
-		eyeState.blinkStart = now;
-		// now and then: a wink instead of a blink
-		if (
-			!eyeState.doubleBlink &&
-			mood.happy.p < 0.3 &&
-			mood.sleepy.p < 0.3 &&
-			Math.random() < 0.07
-		) {
-			eyeState.winkSide = Math.random() < 0.5 ? -1 : 1;
-		} else if (!eyeState.doubleBlink) {
-			eyeState.winkSide = 0;
-		}
-	} else if (eyeState.blinkState === "closing") {
-		const t = (now - eyeState.blinkStart) / (80 * slow);
-		if (t >= 1) {
-			eyeState.blinkState = "opening";
-			eyeState.blinkStart = now;
-			eyeState.openness = 0;
-		} else {
-			eyeState.openness = 1 - t;
-		}
-	} else if (eyeState.blinkState === "opening") {
-		const hold = eyeState.winkSide !== 0 ? 260 : 0; // a wink lingers
-		const t =
-			(now - eyeState.blinkStart - hold) / (120 * slow);
-		if (t < 0) {
-			eyeState.openness = 0;
-		} else if (t >= 1) {
-			eyeState.blinkState = "open";
-			eyeState.openness = 1;
-			if (
-				!eyeState.doubleBlink &&
-				eyeState.winkSide === 0 &&
-				Math.random() < 0.22
-			) {
-				eyeState.doubleBlink = true; // quick second blink
-				eyeState.nextBlinkAt = now + 110;
-			} else {
-				eyeState.doubleBlink = false;
-				eyeState.winkSide = 0;
-				eyeState.nextBlinkAt =
-					now +
-					(mood.sleepy.p > 0.5
-						? rand(1800, 3400)
-						: rand(2500, 5500));
-			}
-		} else {
-			eyeState.openness = t;
-		}
-	}
-}
-
-// gaze vector (each axis -1..1) from one eye toward the cursor, blended with
-// the idle-glance target when the cursor has been still for a while
-function gazeFor(eyeX, eyeY) {
-	const cx = Math.max(
-		-1,
-		Math.min(1, (eyeState.smoothedCursor.x - eyeX) / 60),
-	);
-	const cy = Math.max(
-		-1,
-		Math.min(1, (eyeState.smoothedCursor.y - eyeY) / 40),
-	);
-	const w = mood.glanceW;
-	return [
-		cx + (mood.glance.x - cx) * w,
-		cy + (mood.glance.y - cy) * w,
-	];
-}
-
-// Each eye is a closed shape built from two curves over x in [-1, 1]:
-//   centerY(x) = c0 + k*x^2         (k > 0 bends the middle up: an arch)
-//   top/bottom = centerY -/+ amp * sqrt(1 - x^2)
-// A circle is c0=k=0 with top=bot=r; every mood is just a different set of
-// numbers, so morphing between expressions is plain interpolation.
-const EYE_SHAPES = {
-	//            half-width, top, bottom, c0,   k
-	neutral: {
-		rx: 5.1,
-		top: 5.8,
-		bot: 5.8,
-		c0: 0,
-		k: 0,
-		pw: 2,
-	},
-	happy: {
-		rx: 6.0,
-		top: 2.0,
-		bot: 2.0,
-		c0: -2.6,
-		k: 5.2,
-		pw: 2,
-	}, // ^  ^ smiling arches
-	sleepy: {
-		rx: 5.6,
-		top: 0.6,
-		bot: 5.0,
-		c0: -2.0,
-		k: 0,
-		pw: 2,
-	}, // ◡  ◡ heavy lids
-	wide: { rx: 4.6, top: 8.0, bot: 8.0, c0: 0, k: 0, pw: 2 }, // tall, startled ovals
-	// >  < squeezed-shut chevrons: a sharp arch (pw ~ 1) drawn turned 90 degrees
-	xd: {
-		rx: 6.8,
-		top: 1.5,
-		bot: 1.5,
-		c0: -3.5,
-		k: 7.0,
-		pw: 1.1,
-	},
-	// u  u blissfully closed
-	bliss: {
-		rx: 6.0,
-		top: 2.0,
-		bot: 2.0,
-		c0: 2.6,
-		k: -5.2,
-		pw: 2,
-	},
-};
-const EYE_KEYS = ["rx", "top", "bot", "c0", "k", "pw"];
-
-function eyeParams(happy, sleepy, wide, xd = 0, bliss = 0) {
-	const out = {};
-	for (const key of EYE_KEYS) {
-		const n = EYE_SHAPES.neutral[key];
-		out[key] =
-			n +
-			happy * (EYE_SHAPES.happy[key] - n) +
-			sleepy * (EYE_SHAPES.sleepy[key] - n) +
-			wide * (EYE_SHAPES.wide[key] - n) +
-			xd * (EYE_SHAPES.xd[key] - n) +
-			bliss * (EYE_SHAPES.bliss[key] - n);
-	}
-	out.top = Math.max(out.top, 0.4); // springs overshoot; never invert a curve
-	out.bot = Math.max(out.bot, 0.4);
-	return out;
-}
-
-const EYE_STEPS = 32;
-
-function eyePath(c, p, blink) {
-	c.beginPath();
-	for (let i = 0; i <= EYE_STEPS; i++) {
-		const x = -1 + (2 * i) / EYE_STEPS;
-		const s = Math.sqrt(Math.max(0, 1 - x * x));
-		const y =
-			p.c0 +
-			p.k * Math.pow(Math.abs(x), p.pw) -
-			p.top * blink * s;
-		if (i === 0) c.moveTo(x * p.rx, y);
-		else c.lineTo(x * p.rx, y);
-	}
-	for (let i = EYE_STEPS; i >= 0; i--) {
-		const x = -1 + (2 * i) / EYE_STEPS;
-		const s = Math.sqrt(Math.max(0, 1 - x * x));
-		c.lineTo(
-			x * p.rx,
-			p.c0 +
-				p.k * Math.pow(Math.abs(x), p.pw) +
-				p.bot * blink * s,
-		);
-	}
-	c.closePath();
-}
-
-// Draws the eyes centered at (centerX, cy) on the given context -- shared by
-// the idle pill's canvas and the hub header. `opts.scale` enlarges them.
-function paintEyesAt(targetCtx, centerX, cy, opts = {}) {
-	const sc = opts.scale || 1;
-	const wide = Math.max(0, Math.min(mood.wide.p, 1.3));
-	const happy = Math.max(0, Math.min(mood.happy.p, 1.25));
-	const sleepy = Math.max(0, Math.min(mood.sleepy.p, 1.1));
-	const xd = Math.max(0, Math.min(mood.xd.p, 1.15));
-	const bliss = Math.max(0, Math.min(mood.bliss.p, 1.15));
-	const [dirx, diry] = eyeState.squishDir;
-	// motion squash & stretch stays axis-aligned (no rotation): rotating the eye
-	// made blinks close sideways when the cursor moved vertically
-	const ax = Math.abs(dirx);
-	const ay = Math.abs(diry);
-	const sq = eyeState.squish;
-	const stretchX = Math.max(
-		1 + sq * (0.25 * ax - 0.12 * ay),
-		0.6,
-	);
-	const stretchY = Math.max(
-		1 + sq * (0.25 * ay - 0.12 * ax),
-		0.6,
-	);
-
-	// audio-driven motion for the whole face
-	const kickP = Math.max(0, Math.min(audio.kick.p, 1.2));
-	const chill = audio.chill;
-	const xdW = Math.min(xd, 1); // how much the eyes are currently the > < chevrons
-	const bang = audio.bang;
-	const nodP = Math.max(-0.4, Math.min(audio.nod.p, 1.4));
-	// while head-banging the head only moves on the kick (the usual bass-band bob
-	// and beat lift would also follow vocals and melody, so they fade out)
-	const groupBob =
-		-(
-			audio.bands[0] * 1.5 * (1 - 0.8 * chill) +
-			kickP * 1.7
-		) *
-			audio.dance *
-			sc *
-			(1 - bang) +
-		nodP * 6.5 * bang * sc;
-	// the > < chevrons rock gently side to side (~1.3 Hz, a happy wiggle rather
-	// than a shake); not tied to the beat
-	const tt = performance.now() / 1000;
-	const shakeX =
-		(Math.sin(tt * 8.2) + 0.3 * Math.sin(tt * 4.6 + 1.3)) *
-		(1.3 + 0.5 * audio.level) *
-		xdW *
-		sc;
-	const swayX =
-		Math.sin(audio.sway) *
-			2.6 *
-			(1 - 0.35 * chill) *
-			(1 - 0.8 * bang) *
-			audio.dance *
-			sc +
-		shakeX;
-	const tilt =
-		Math.sin(audio.sway) *
-		0.11 *
-		(1 - 0.6 * chill) *
-		audio.dance *
-		(1 - xdW) *
-		(1 - bang); // head-nod lean
-	const kickSquash =
-		1 +
-		kickP * 0.16 * audio.dance * (1 - bang) -
-		nodP * 0.16 * bang;
-	const talkAmt =
-		Math.max(-0.32, Math.min(audio.talkEnv - 0.32, 0.68)) *
-		audio.talk *
-		1.8;
-	const talkY = 1 + talkAmt * 0.8;
-	const talkX = 1 - talkAmt * 0.24;
-
-	targetCtx.save();
-	targetCtx.translate(centerX + swayX, cy + groupBob);
-	targetCtx.rotate(tilt);
-	targetCtx.translate(-centerX, -cy);
-
-	for (const side of [-1, 1]) {
-		const ex = centerX + side * 13.5 * sc;
-		let [gx, gy] = gazeFor(ex, cy);
-		// spatial awareness: glance toward wherever the sound is panned
-		gx += audio.pan * 0.6 * Math.min(1, audio.level * 2);
-
-		// a wink is just this one eye morphing into the happy arch and back
-		const winking = eyeState.winkSide === side;
-		const eyeHappy = winking
-			? Math.max(happy, 1 - eyeState.openness)
-			: happy;
-		const p = eyeParams(eyeHappy, sleepy, wide, xd, bliss);
-		const blink = winking
-			? 1
-			: Math.max(eyeState.openness, 0.06);
-
-		targetCtx.save();
-		// without pupils the whole eye does the looking
-		targetCtx.translate(
-			ex + gx * 3.2 * sc,
-			cy + gy * 1.7 * sc,
-		);
-		targetCtx.scale(sc * talkX, sc * talkY * kickSquash);
-		// eyelids always close vertically, whatever else the eye is doing
-		targetCtx.scale(1, blink);
-		// the ^ ^ arch / sleepy lids stay undistorted: squash fades out as they form
-		const calm =
-			1 -
-			Math.min(Math.max(eyeHappy, sleepy, xd, bliss), 1);
-		targetCtx.scale(
-			1 + (stretchX - 1) * calm,
-			1 + (stretchY - 1) * calm,
-		);
-
-		// the > < chevrons are the arch turned toward the middle (left eye >, right eye <)
-		if (xd > 0.01)
-			targetCtx.rotate(
-				-side * (Math.PI / 2) * Math.min(xd, 1),
-			);
-		eyePath(targetCtx, p, 1);
-		const g = targetCtx.createRadialGradient(
-			-p.rx * 0.3,
-			-p.top * 0.35,
-			0,
-			-p.rx * 0.3,
-			-p.top * 0.35,
-			p.rx * 2,
-		);
-		g.addColorStop(0, "rgb(252, 252, 254)");
-		g.addColorStop(1, "rgb(222, 226, 236)");
-		targetCtx.fillStyle = g;
-		targetCtx.fill();
-		targetCtx.restore();
-	}
-
-	targetCtx.restore();
-}
-
-function paintEyes() {
-	const w = canvas.width / dpr;
-	const h = canvas.height / dpr;
-	ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-	ctx.clearRect(0, 0, w, h);
-	// breathing: the eyes drift up and down a hair, on a slow cycle
-	const t = performance.now();
-	const cy =
-		h / 2 + Math.sin((t / 3600) * Math.PI * 2) * 0.55;
-	paintEyesAt(ctx, w / 2, cy);
-}
-
-function paintHubEyes() {
-	const w = hubEyesCanvas.width / dpr;
-	const h = hubEyesCanvas.height / dpr;
-	hubEyesCtx.setTransform(dpr, 0, 0, dpr, 0, 0);
-	hubEyesCtx.clearRect(0, 0, w, h);
-
-	const cx = w / 2;
-	const cy = h / 2;
-
-	paintEyesAt(hubEyesCtx, cx, cy, { scale: 1.3 });
-}
 
 
 // pop a view's children in with a small stagger (see .enter in style.css)
@@ -1060,567 +113,8 @@ function playEnter(container) {
 // has_game flags that could race the resize.
 let currentView = "idle";
 
-// -- audio visualizer: an aura that lives in the island itself instead of bars.
-// 16 soft gradient lights (one per frequency band, ~60 Hz..12 kHz) drift
-// through the pill; the detected genre picks how they dance (talk huddles,
-// chill drifts, groove/pop orbits, bang/rock slams). Bass-only kick hits
-// send a ripple out from the eyes; a voice gets a warm halo that pulses
-// with the syllables (halo only, never rings). Drawn under all content. --
-const vizCanvas = document.getElementById("viz");
-const vizCtx = vizCanvas.getContext("2d");
-const VIZ_SCALE = 0.7; // render below device resolution: it's all soft glow anyway
-const viz = { rings: [], hue: 150, on: false, fadeFrom: null, lightCur: [] };
-const VIZ_FADE_MS = 700;
-
-// the aura also bleeds outside the island into the window's margin (settings: Ambient, 0 = off)
-const bleedCanvas = document.getElementById("viz-bleed");
-const bleedCtx = bleedCanvas.getContext("2d");
-let bleedLevel = 0.6; // 0..1
-
-function sizeViz() {
-	// (layout size: the pinned island may be drawn scaled down, the buffer must not follow)
-	vizCanvas.width = Math.max(
-		1,
-		Math.round(pill.offsetWidth * VIZ_SCALE),
-	);
-	vizCanvas.height = Math.max(
-		1,
-		Math.round(pill.offsetHeight * VIZ_SCALE),
-	);
-	bleedCanvas.width = Math.max(
-		1,
-		Math.round(window.innerWidth * VIZ_SCALE),
-	);
-	bleedCanvas.height = Math.max(
-		1,
-		Math.round(window.innerHeight * VIZ_SCALE),
-	);
-}
-
-// The light outside the island is the aura (see paintViz) drawn once over the island's shape and
-// kept where a soft mask lets it through: bright at the island's edge, gone a few pixels away, so it
-// reads as light spilling out, never as a slab. The mask is only rebuilt when the island's shape
-// changes (while it resizes), not every frame.
-const maskCanvas = document.createElement("canvas");
-const maskCtx = maskCanvas.getContext("2d");
-let maskKey = "";
-function paintBleed() {
-	const r = pill.getBoundingClientRect();
-	const S = VIZ_SCALE;
-	// reach follows the setting (it can never go past the margin the window has)
-	const reach = Math.min(cursorPad * 0.5, 24) * bleedLevel;
-	const grow = reach * 0.3;
-	const x = (r.left - grow) * S;
-	const y = (r.top - grow) * S;
-	const w = (r.width + 2 * grow) * S;
-	const h = (r.height + 2 * grow) * S;
-	const radius = Math.min(
-		((parseFloat(
-			getComputedStyle(pill).borderTopLeftRadius,
-		) || 0) +
-			grow) *
-			S,
-		w / 2,
-		h / 2,
-	);
-	const blur = Math.max(0.5, reach * 0.5 * S);
-	const key = [
-		x,
-		y,
-		w,
-		h,
-		radius,
-		blur,
-		bleedCanvas.width,
-		bleedCanvas.height,
-	]
-		.map((v) => Math.round(v * 10))
-		.join();
-	if (key !== maskKey) {
-		maskKey = key;
-		maskCanvas.width = bleedCanvas.width;
-		maskCanvas.height = bleedCanvas.height;
-		maskCtx.filter = `blur(${blur}px)`;
-		maskCtx.fillStyle = "#fff";
-		maskCtx.beginPath();
-		maskCtx.roundRect(x, y, w, h, radius);
-		maskCtx.fill();
-		maskCtx.filter = "none";
-	}
-	bleedCtx.setTransform(1, 0, 0, 1, 0, 0);
-	bleedCtx.globalCompositeOperation = "source-over";
-	bleedCtx.clearRect(
-		0,
-		0,
-		bleedCanvas.width,
-		bleedCanvas.height,
-	);
-	// the light has to exist as far out as the mask lets it reach (or the mask's soft edge is cut
-	// off where the picture ends): the aura is stretched over the island grown by the full reach
-	const ext = Math.max(
-		grow,
-		Math.min(cursorPad - 2, reach * 2.2),
-	);
-	bleedCtx.drawImage(
-		vizCanvas,
-		(r.left - ext) * S,
-		(r.top - ext) * S,
-		(r.width + 2 * ext) * S,
-		(r.height + 2 * ext) * S,
-	);
-	bleedCtx.globalCompositeOperation = "destination-in";
-	bleedCtx.drawImage(maskCanvas, 0, 0);
-	bleedCtx.globalCompositeOperation = "source-over";
-}
-
-function clearBleed() {
-	bleedCtx.clearRect(
-		0,
-		0,
-		bleedCanvas.width,
-		bleedCanvas.height,
-	);
-	document.body.classList.remove("bleeding");
-}
-new ResizeObserver(sizeViz).observe(pill);
-sizeViz();
-
-// where the eyes sit inside the pill, in CSS px
-function vizEyeCenter() {
-	return [
-		pill.offsetWidth / 2,
-		currentView === "hub" ? 38 : pill.offsetHeight / 2,
-	];
-}
-
-// Bass-only rings: one ring per kick-drum / strong low-end onset -- no
-// merging and no rate limit beyond the analyzer's onset spacing, so a fast
-// run of kicks gives a fast run of rings, while nothing is drawn that the
-// low end did not actually do. (A cap keeps a pathological input from
-// piling up rings.)
-function pushRing(now, s, hue, pan) {
-	viz.rings.push({ t: now, s, sv: s, hue, pan: pan || 0 });
-	if (viz.rings.length > 12) viz.rings.shift();
-}
-
-function vizBeat(strength, pan) {
-	pushRing(performance.now(), strength, viz.hue + 20, pan);
-}
-
-// -- genre choreography: where each of the 16 lights sits, per vibe --
-// talk = huddled murmur, chill = slow drift, groove/pop = orbit,
-// bang/rock = slam, calm/silent = barely there.
-// deterministic per-light 0..1 variation, so no two lights ever share a
-// path -- every choreography is non-uniform by construction.
-function lightVar(i, salt) {
-	const x = Math.sin(i * 127.1 + salt * 311.7) * 43758.5453;
-	return x - Math.floor(x);
-}
-
-function lightPose(i, n, t, vibe, w, h, kickP, env) {
-	const frac = i / n;
-	const TAU = Math.PI * 2;
-	const v1 = lightVar(i, 1);
-	const v2 = lightVar(i, 2);
-	const v3 = lightVar(i, 3);
-	const v4 = lightVar(i, 4);
-	switch (vibe) {
-		case "talk": {
-			// simple talking: loose huddle -- wide enough that the
-			// lights read as separate voices, not one blob
-			const ax = 0.34 * (0.55 + 0.45 * v1);
-			const fx = 0.9 * (0.7 + 0.6 * v2);
-			const ay = 0.28 * (0.55 + 0.45 * v4);
-			const fy = 1.1 * (0.7 + 0.6 * v1);
-			return [
-				w *
-					(0.5 +
-						ax * Math.sin(t * fx + i * 0.55 + v3 * TAU) +
-						audio.pan * 0.1),
-				h *
-					(0.5 +
-						ay * Math.sin(t * fy + i * 0.9 + v2 * TAU)),
-			];
-		}
-		case "chill": {
-			// soft drift, each light its own slow lane
-			const ax = 0.42 * (0.55 + 0.45 * v1);
-			const fx = 0.25 * (0.6 + 0.9 * v2);
-			const ay = 0.36 * (0.55 + 0.45 * v3);
-			const fy = 0.3 * (0.6 + 0.9 * v4);
-			return [
-				w *
-					(0.5 +
-						ax *
-							Math.sin(
-								t * fx + i * 2.4 + v3 * TAU,
-							)),
-				h *
-					(0.5 +
-						ay *
-							Math.sin(
-								t * fy + i * 1.8 + 1 + v4 * TAU,
-							)),
-			];
-		}
-		case "bang": {
-			// rock/hard song: fast orbit + vertical slam, each light its
-			// own speed, radius and phase -- never a ring in formation
-			const spd = 2.2 * (0.7 + 0.6 * v1);
-			const ang = t * spd + frac * TAU + v2 * TAU;
-			const slam = kickP * 0.16 * (0.6 + 0.8 * v4);
-			const rx = 0.44 * (0.6 + 0.4 * v3);
-			const ry = 0.38 * (0.6 + 0.4 * v4);
-			return [
-				w *
-					(0.5 +
-						rx *
-							Math.cos(
-								ang +
-									Math.sin(
-										t * (5 + 3 * v1) +
-											i +
-											v2 * 6,
-									) *
-										0.35,
-							) +
-						audio.pan * 0.14),
-				h *
-					(0.5 +
-						ry *
-							Math.sin(
-								ang * (1.1 + 0.5 * v2) +
-									i +
-									v3 * 6,
-							) -
-						slam),
-			];
-		}
-		case "calm": {
-			// video ambience: whisper, each light its own still point
-			const ax = 0.26 * (0.55 + 0.45 * v1);
-			const fx = 0.3 * (0.6 + 0.9 * v2);
-			const ay = 0.2 * (0.55 + 0.45 * v3);
-			const fy = 0.35 * (0.6 + 0.9 * v4);
-			return [
-				w *
-					(0.5 +
-						ax *
-							Math.sin(
-								t * fx + i * 1.1 + v3 * TAU,
-							)),
-				h *
-					(0.5 +
-						ay *
-							Math.sin(
-								t * fy + i * 1.7 + v4 * TAU,
-							)),
-			];
-		}
-		case "groove": // pop song and friends: loose orbit, no formation
-		default: {
-			const spd =
-				(0.5 + Math.PI * (audio.bpm / 60) * 0.04) *
-				(0.7 + 0.6 * v1);
-			const ang =
-				t * spd +
-				frac * TAU +
-				v2 * TAU +
-				Math.sin(audio.sway + v3 * 6) * 0.35;
-			const bounce = (env || 0) * 0.1 + kickP * 0.05;
-			const rx = 0.38 * (0.6 + 0.4 * v3);
-			const ry = (0.3 + bounce) * (0.6 + 0.4 * v4);
-			return [
-				w *
-					(0.5 +
-						rx * Math.cos(ang) +
-						0.04 * Math.sin(t * (1.3 + v1) + i * 2.1) +
-						audio.pan * 0.12),
-				h *
-					(0.5 +
-						ry * Math.sin(ang) +
-						0.04 * Math.sin(t * (1.7 + v2) + i * 1.3)),
-			];
-		}
-	}
-}
-
-function lightHue(i, n, t, vibe, baseHue) {
-	const frac = i / n;
-	switch (vibe) {
-		case "talk":
-			return 28 + frac * 40 + Math.sin(t * 0.7 + i) * 5; // warm voices, still distinct
-		case "chill":
-			return (
-				195 +
-				Math.sin(t * 0.2 + i * 0.5) * 25 +
-				frac * 30
-			); // teal-blue wash
-		case "bang":
-			return (
-				(8 +
-					frac * 45 +
-					t * 40 +
-					Math.sin(t * 5 + i) * 12 +
-					360) %
-				360
-			); // hot, fast cycle
-		case "calm":
-			return (baseHue + frac * 40) % 360;
-		case "groove": // pop rainbow: full circle across the 16 lights
-		default:
-			return (baseHue + frac * 300) % 360;
-	}
-}
-
-function paintViz(now, dt) {
-	const c = vizCtx;
-	const w = vizCanvas.width;
-	const h = vizCanvas.height;
-	const S = VIZ_SCALE;
-	// stay live while any lingering band is still visible, so the slow fall
-	// actually plays out instead of getting cut by the fade-out.
-	let peakBand = 0;
-	for (let i = 0; i < VIZ_BANDS; i++)
-		if (audio.bands[i] > peakBand)
-			peakBand = audio.bands[i];
-	const live =
-		audio.level > 0.03 ||
-		peakBand > 0.04 ||
-		viz.rings.length > 0;
-	if (!live) {
-		if (viz.on) {
-			// the sound stopped: the light fades out over a moment instead of vanishing
-			if (viz.fadeFrom === null) viz.fadeFrom = now;
-			const f = 1 - (now - viz.fadeFrom) / VIZ_FADE_MS;
-			if (f > 0) {
-				vizCanvas.style.opacity = String(f);
-				bleedCanvas.style.opacity = String(
-					Math.min(1, bleedLevel * 1.1) * f,
-				);
-				return;
-			}
-			c.clearRect(0, 0, w, h);
-			viz.on = false;
-			viz.fadeFrom = null;
-			vizCanvas.style.opacity = "";
-			clearBleed();
-		}
-		return;
-	}
-	viz.fadeFrom = null;
-	vizCanvas.style.opacity = "";
-	viz.on = true;
-	c.setTransform(1, 0, 0, 1, 0, 0);
-	c.clearRect(0, 0, w, h);
-	// source-over, not additive: stacked lights converge toward the cap
-	// instead of summing past it, so a huddle never blows out white
-	c.globalCompositeOperation = "source-over";
-
-	viz.hue =
-		(viz.hue + dt * 7 * (1 - 0.75 * audio.chill)) % 360;
-	const chill = audio.chill;
-	const vibe = director.state; // silent | talk | chill | groove | bang | calm: picks the dance
-	const t =
-		(now / 1000) *
-		(vibe === "chill" ? 0.45 : vibe === "talk" ? 1 : 1);
-	const baseHue = viz.hue;
-	// the hub is mostly text -- keep the aura subtle there
-	const gain =
-		currentView === "hub"
-			? 0.5
-			: currentView === "idle"
-				? 1
-				: 0.7;
-	const musicish = 0.35 + 0.65 * (1 - audio.voiceSm);
-	const size = Math.max(w, h);
-	// a narrow island packs the same 16 lights into less room, and they add up to a glare:
-	// below the usual compact width they get smaller and fainter
-	const crowd = Math.min(1, Math.max(0.5, w / (260 * S)));
-	const kickP = Math.max(0, Math.min(audio.kick.p, 1.2));
-
-	// view sizing: the expanded island is large, so lights roam it fully at
-	// full size; the collapsed pill / notification banner / notification pills
-	// are significantly smaller, so their lights shrink to match.
-	const expanded = currentView === "hub";
-	const compact =
-		currentView === "idle" ||
-		currentView === "notification" ||
-		currentView === "brief" ||
-		currentView === "usage_peek";
-	const rMul = expanded ? 1 : compact ? 0.65 : 0.8;
-
-	// 16 lights expanded, 8 elsewhere: the small views condense adjacent
-	// band pairs so all 16 bands still show through 8 lights.
-	// Genre switches glide ease-in-out: each light rides a critically
-	// damped spring toward its choreography target -- it accelerates out
-	// of the old dance and settles softly into the new one, instead of
-	// jumping or easing only one way.
-	const activeN = expanded ? VIZ_BANDS : 8;
-	const STIFF = 20;
-	const DAMP = 9;
-	for (let i = 0; i < activeN; i++) {
-		const env = expanded
-			? audio.bands[i] || 0
-			: ((audio.bands[2 * i] || 0) + (audio.bands[2 * i + 1] || 0)) / 2;
-		const [tx, ty] = lightPose(i, activeN, t, vibe, w, h, kickP, env);
-		// safety: never let a center leave the island (an off-canvas
-		// light reads as a light that disappeared)
-		const tnx = Math.min(0.98, Math.max(0.02, tx / Math.max(1, w)));
-		const tny = Math.min(0.98, Math.max(0.02, ty / Math.max(1, h)));
-		let cur = viz.lightCur[i];
-		if (!cur) {
-			cur = viz.lightCur[i] = { x: tnx, y: tny, vx: 0, vy: 0 };
-		} else {
-			cur.vx += ((tnx - cur.x) * STIFF - cur.vx * DAMP) * dt;
-			cur.vy += ((tny - cur.y) * STIFF - cur.vy * DAMP) * dt;
-			cur.x = Math.min(1.05, Math.max(-0.05, cur.x + cur.vx * dt));
-			cur.y = Math.min(1.05, Math.max(-0.05, cur.y + cur.vy * dt));
-		}
-		const px = cur.x * w;
-		const py = cur.y * h;
-		// (expanded: full roam over the whole island, no clamping)
-		const hue = lightHue(i, activeN, now / 1000, vibe, baseHue);
-		// talk stays warm; bang runs hot; chill stays soft
-		const sizeMul =
-			vibe === "talk"
-				? 0.16
-				: vibe === "chill"
-					? 0.3
-					: vibe === "bang"
-						? 0.2
-						: vibe === "calm"
-							? 0.16
-							: 0.17;
-		const r =
-			size * sizeMul * (0.35 + 2.1 * env) * crowd * rMul;
-		let a =
-			(0.03 + 0.32 * env) *
-			audio.level *
-			gain *
-			musicish *
-			1.4 *
-			crowd *
-			crowd;
-		// (brightness is band-driven only -- the genre picks the dance and
-		// the hues, never the intensity)
-		if (a < 0.004) continue;
-		const g = c.createRadialGradient(
-			px,
-			py,
-			0,
-			px,
-			py,
-			Math.max(1, r),
-		);
-		g.addColorStop(
-			0,
-			`hsla(${hue}, 90%, 62%, ${Math.min(0.5, a)})`,
-		);
-		g.addColorStop(1, `hsla(${hue}, 90%, 62%, 0)`);
-		c.fillStyle = g;
-		c.fillRect(0, 0, w, h);
-	}
-
-	const [ecx, ecy] = vizEyeCenter();
-	const cx = ecx * S;
-	const cy = ecy * S;
-
-	// voice: a warm halo breathing with the syllables (halo only -- syllables
-	// never make rings; rings are bass-only)
-	if (audio.talk > 0.03) {
-		const env = audio.talkEnv;
-		const r = size * (0.16 + 0.3 * env) * rMul;
-		const g = c.createRadialGradient(cx, cy, 0, cx, cy, r);
-		g.addColorStop(
-			0,
-			`hsla(38, 95%, 70%, ${Math.min(0.5, 0.3 * audio.talk * gain * (0.4 + env))})`,
-		);
-		g.addColorStop(1, "hsla(38, 95%, 70%, 0)");
-		c.fillStyle = g;
-		c.fillRect(0, 0, w, h);
-	}
-
-	// the light that goes outside the island is the lights only, taken before the rings are drawn:
-	// the rings stay inside the island
-	const bleeding = bleedLevel > 0 && cursorPad > 0;
-	document.body.classList.toggle("bleeding", bleeding);
-	if (bleeding) {
-		bleedCanvas.style.opacity = String(
-			Math.min(1, bleedLevel * 1.1),
-		);
-		paintBleed();
-	}
-
-	// bass ripples: very thin circular waves expanding from the middle between
-	// the eyes. Sound panned to a side shows as a ring that is solid on that
-	// side and translucent on the other.
-	c.lineWidth = 0.7; // hairline, always -- only the fade changes
-	c.lineCap = "round";
-	for (let i = viz.rings.length - 1; i >= 0; i--) {
-		const rg = viz.rings[i];
-		// rAF timestamps can trail performance.now() by a hair: never let age go negative
-		const age = Math.max(0, (now - rg.t) / 900);
-		if (age >= 1) {
-			viz.rings.splice(i, 1);
-			continue;
-		}
-		const ease = 1 - Math.pow(1 - age, 2.2);
-		// merged hits raise the target strength; the drawn strength eases toward it
-		rg.sv += (rg.s - rg.sv) * Math.min(1, dt * 9);
-		const side = Math.max(-1, Math.min(1, rg.pan || 0));
-		const dirness = Math.max(
-			0,
-			Math.min((Math.abs(side) - 0.12) / 0.6, 1),
-		); // 0 centered .. 1 hard-panned
-		// how far it travels follows how strong the bass hit was: soft = a short
-		// ripple, a hard kick = a wave that crosses the whole island
-		const reach = 0.12 + 0.62 * rg.sv;
-		const radius = Math.max(0, ease * size * reach);
-		// always a full circle from the middle; the direction shows as the translucency on the far side
-		const ox = cx;
-		// near-opaque at birth, fading out slowly so the hairline stays easy to see
-		const alpha =
-			Math.min(
-				1,
-				(0.6 + 0.4 * rg.sv) * Math.pow(1 - age, 0.7),
-			) * (currentView === "hub" ? 0.85 : 1);
-		if (dirness > 0.02 && radius > 1) {
-			// sound from one side: the ring is solid on the side it comes from and turns translucent
-			// across to the other, more so the harder it is panned
-			const far = alpha * (1 - 0.85 * dirness);
-			const g = c.createLinearGradient(
-				ox - side * radius,
-				cy,
-				ox + side * radius,
-				cy,
-			);
-			g.addColorStop(
-				0,
-				`hsla(${rg.hue}, 95%, 76%, ${far})`,
-			);
-			g.addColorStop(
-				0.5,
-				`hsla(${rg.hue}, 95%, 76%, ${(far + alpha) / 2})`,
-			);
-			g.addColorStop(
-				1,
-				`hsla(${rg.hue}, 95%, 76%, ${alpha})`,
-			);
-			c.strokeStyle = g;
-		} else {
-			c.strokeStyle = `hsla(${rg.hue}, 95%, 76%, ${alpha})`;
-		}
-		c.beginPath();
-		c.arc(ox, cy, radius, 0, Math.PI * 2);
-		c.stroke();
-	}
-	c.globalCompositeOperation = "source-over";
-}
 
 let lastFrameT = performance.now();
-let showEyes = true; // Settings > Eyes
-let eyesDrawn = false;
 function frame(now) {
 	// one bad frame must never kill the loop (the eyes would freeze/vanish for good)
 	try {
@@ -1631,35 +125,8 @@ function frame(now) {
 		lastFrameT = now;
 		updateCall(now);
 		updateAudio(now, dt);
-		paintViz(now, dt);
-		if (!showEyes) {
-			// no eyes: nothing to draw, and what was drawn is cleared once
-			if (eyesDrawn) {
-				ctx.clearRect(
-					0,
-					0,
-					canvas.width,
-					canvas.height,
-				);
-				hubEyesCtx.clearRect(
-					0,
-					0,
-					hubEyesCanvas.width,
-					hubEyesCanvas.height,
-				);
-				eyesDrawn = false;
-			}
-		} else if (currentView === "idle") {
-			eyesDrawn = true;
-			updateMood(now);
-			tickBlink(now);
-			paintEyes();
-		} else if (currentView === "hub") {
-			eyesDrawn = true;
-			updateMood(now);
-			tickBlink(now);
-			paintHubEyes();
-		}
+		soundLight.frame(now, dt);
+		eyes.frame(now);
 	} catch (err) {
 		console.error(err);
 	}
@@ -1698,14 +165,14 @@ listen("view-tick", (event) => {
 	if (currentView !== "idle") {
 		// the canvas stops repainting once a view takes over -- clear its last
 		// frame so stale eye pixels don't linger visible through any gaps
-		ctx.clearRect(0, 0, canvas.width, canvas.height);
+		eyes.clearFace();
 	}
 	if (currentView === "hub") {
 		// hub-eyes was `display:none` (0x0) at the one point page-load sizing
 		// ran, and toggling a CSS class doesn't fire a `resize` event to catch
 		// it later -- size it explicitly now that it's actually visible
-		sizeCanvasToElement(hubEyesCanvas);
-		mood.happyUntil = performance.now() + 1600; // happy to see you
+		eyes.sizeHub();
+		eyes.mood.happyUntil = performance.now() + 1600; // happy to see you
 		// left-click opens the info pane; the tray's Settings item asks for settings
 		setHubPane(pendingSettingsPane ? "settings" : "info");
 		pendingSettingsPane = false;
@@ -1779,6 +246,7 @@ listen("cursor-tick", (event) => {
 	const pad = event.payload.pad || 0;
 	if (pad !== cursorPad) {
 		cursorPad = pad;
+		soundLight.setCursorPad(pad);
 		document.documentElement.style.setProperty(
 			"--pad",
 			`${pad}px`,
@@ -1799,17 +267,7 @@ listen("cursor-tick", (event) => {
 		rs.setProperty("--pill-h", event.payload.pill_h);
 	}
 	const { local_x, local_y } = event.payload;
-	const dx = local_x - eyeState.lastCursor.x;
-	const dy = local_y - eyeState.lastCursor.y;
-	eyeState.lastCursor = { x: local_x, y: local_y };
-
-	const speed = Math.hypot(dx, dy);
-	const nowMs = performance.now();
-	if (speed > 2) {
-		if (nowMs - mood.lastMoveAt > 25000)
-			mood.wideUntil = nowMs + 500; // startled awake
-		mood.lastMoveAt = nowMs;
-	}
+	const { dx, dy, speed } = eyes.cursor(local_x, local_y);
 	if (islandShown !== !!event.payload.shown) {
 		islandShown = !!event.payload.shown;
 		pill.classList.toggle("hiding", !islandShown);
@@ -1828,26 +286,18 @@ listen("cursor-tick", (event) => {
 		}
 		updateBg();
 	}
-	mood.hover =
+	eyes.track(
+		local_x,
+		local_y,
+		dx,
+		dy,
+		speed,
 		!!event.payload.shown &&
-		local_x >= cursorPad &&
-		local_x <= window.innerWidth - cursorPad &&
-		local_y >= cursorPad &&
-		local_y <= window.innerHeight - cursorPad;
-	const targetSquish = Math.min(speed / 140.0, 1.0);
-	if (targetSquish > eyeState.squish) {
-		eyeState.squish = targetSquish;
-		if (speed > 0.5) {
-			eyeState.squishDir = [dx / speed, dy / speed];
-		}
-	} else {
-		eyeState.squish *= 0.78;
-	}
-
-	eyeState.smoothedCursor.x +=
-		(local_x - eyeState.smoothedCursor.x) * 0.35;
-	eyeState.smoothedCursor.y +=
-		(local_y - eyeState.smoothedCursor.y) * 0.35;
+			local_x >= cursorPad &&
+			local_x <= window.innerWidth - cursorPad &&
+			local_y >= cursorPad &&
+			local_y <= window.innerHeight - cursorPad,
+	);
 });
 
 // -- drag to move (native OS move, not a JS-computed one -- cheaper and
@@ -2048,7 +498,7 @@ pill.addEventListener("contextmenu", (e) => {
 });
 const lockBadge = document.getElementById("lock-badge");
 listen("pin-tick", (event) => {
-	mood.happyUntil = performance.now() + 900; // a little happy blip either way
+	eyes.mood.happyUntil = performance.now() + 900; // a little happy blip either way
 	// a lock (pinned) or an open lock (unpinned) pops up at the centre of the island
 	const pinned = !!event.payload;
 	lockBadge.innerHTML = li(pinned ? "lock" : "unlock");
@@ -2062,7 +512,7 @@ pill.addEventListener("mousedown", (e) => {
 	if (e.button !== 0) return;
 	// the open hub is a panel to work in: only its head (the eyes) takes the click that closes it
 	if (currentView === "hub" && !e.target.closest("#hub-head")) return;
-	mood.wideUntil = performance.now() + 320; // boop!
+	eyes.mood.wideUntil = performance.now() + 320; // boop!
 	invoke("drag_start");
 });
 // No mouseup/drag_end handler: `start_dragging()`'s native OS move-loop can
@@ -2308,10 +758,6 @@ const setIdleHideDelayLabel = document.getElementById(
 const setShowAtCursor = document.getElementById(
 	"set-show-at-cursor",
 );
-const setReactToAudio = document.getElementById(
-	"set-react-to-audio",
-);
-const setShowEyes = document.getElementById("set-show-eyes");
 // the theme colour: a handful of swatches; the accent of the hub, the glow and the pills follows
 const ACCENTS = [
 	"#5ac88c",
@@ -2422,12 +868,6 @@ for (const b of setFullscreenGuard.querySelectorAll("button"))
 	});
 const edgeDwellText = (ms) =>
 	Number(ms) === 0 ? "off" : `${ms} ms`;
-const setAudioBleed = document.getElementById(
-	"set-audio-bleed",
-);
-const setAudioBleedLabel = document.getElementById(
-	"set-audio-bleed-label",
-);
 const setGlow = document.getElementById("set-glow");
 const setGlowLabel = document.getElementById("set-glow-label");
 const setBgDim = document.getElementById("set-bg-dim");
@@ -2445,10 +885,7 @@ async function loadSettingsIntoForm() {
 	setIdleHideDelayLabel.textContent = `${currentSettings.idle_hide_delay_s}s`;
 	setShowAtCursor.checked = currentSettings.show_at_cursor;
 	setCursorFollow.checked = currentSettings.cursor_follow;
-	setReactToAudio.checked = currentSettings.react_to_audio;
-	setShowEyes.checked = currentSettings.show_eyes ?? true;
 	applyAccent(currentSettings.accent_color);
-	showEyes = setShowEyes.checked;
 	setCompactWidth.value =
 		currentSettings.compact_width ?? 260;
 	setCompactWidthLabel.textContent = `${setCompactWidth.value}px`;
@@ -2473,9 +910,6 @@ async function loadSettingsIntoForm() {
 	);
 	setPeekDuration.value = currentSettings.peek_duration_s;
 	setPeekDurationLabel.textContent = `${currentSettings.peek_duration_s}s`;
-	setAudioBleed.value = currentSettings.audio_bleed ?? 60;
-	setAudioBleedLabel.textContent = `${setAudioBleed.value}%`;
-	bleedLevel = Number(setAudioBleed.value) / 100;
 	setGlow.value = currentSettings.glow_intensity ?? 70;
 	setGlowLabel.textContent = `${setGlow.value}%`;
 	applyGlow(Number(setGlow.value));
@@ -2540,8 +974,6 @@ function saveSettingsFromForm() {
 		idle_hide_delay_s: Number(setIdleHideDelay.value),
 		show_at_cursor: setShowAtCursor.checked,
 		cursor_follow: setCursorFollow.checked,
-		react_to_audio: setReactToAudio.checked,
-		show_eyes: setShowEyes.checked,
 		peek_duration_s: Number(setPeekDuration.value),
 		edge_dwell_ms: Number(setEdgeDwell.value),
 		fullscreen_guard: guardValue() !== "off",
@@ -2555,9 +987,7 @@ function saveSettingsFromForm() {
 		top_margin: Number(setTopMargin.value),
 		bg_dim: Number(setBgDim.value),
 		glow_intensity: Number(setGlow.value),
-		audio_bleed: Number(setAudioBleed.value),
 	};
-	showEyes = setShowEyes.checked;
 	currentSettings.accent_color = accentColor;
 	updateClock();
 	invoke("save_settings", { settings: currentSettings });
@@ -2567,8 +997,6 @@ for (const el of [
 	setStartWithWindows,
 	setShowAtCursor,
 	setCursorFollow,
-	setReactToAudio,
-	setShowEyes,
 ]) {
 	el.addEventListener("change", saveSettingsFromForm);
 }
@@ -2670,11 +1098,6 @@ function applyGlow(pct) {
 		(pct / 100).toFixed(2),
 	);
 }
-setAudioBleed.addEventListener("input", () => {
-	setAudioBleedLabel.textContent = `${setAudioBleed.value}%`;
-	bleedLevel = Number(setAudioBleed.value) / 100; // live: the next frame uses it
-});
-setAudioBleed.addEventListener("change", saveSettingsFromForm);
 let glowPreviewTimer = 0;
 setGlow.addEventListener("input", () => {
 	setGlowLabel.textContent = `${setGlow.value}%`;
@@ -2970,7 +1393,7 @@ function openCalendar() {
 document
 	.getElementById("hub-clock")
 	.addEventListener("click", () => {
-		mood.happyUntil = performance.now() + 700;
+		eyes.mood.happyUntil = performance.now() + 700;
 		if (paneCalendar.classList.contains("hidden"))
 			openCalendar();
 		else setHubPane("info");
@@ -3122,7 +1545,6 @@ function applyBackgrounds(s) {
 	setBgLayer(bgLayers.hub, s.bg_hub || "");
 	applyBgDim(s.bg_dim ?? 50);
 	applyGlow(s.glow_intensity ?? 70);
-	bleedLevel = (s.audio_bleed ?? 60) / 100;
 	updateBg();
 	for (const kind of ["compact", "hub"]) {
 		const path = s["bg_" + kind] || "";
@@ -3377,6 +1799,37 @@ function pluginItem(p, reload) {
 					return b;
 				});
 				f.append(group);
+				more.append(f);
+				continue;
+			}
+			if (s.type === "range") {
+				// a slider: the value follows the thumb at once (the plugin may show it live), and is kept as it is let go
+				const wrap = el("span", "pg-range");
+				const r = document.createElement("input");
+				r.type = "range";
+				r.min = s.min ?? 0;
+				r.max = s.max ?? 100;
+				r.step = s.step ?? 1;
+				r.value = s.value ?? s.min ?? 0;
+				const val = el("span", "set-val");
+				const paint = () => {
+					val.textContent = `${r.value}${s.unit || ""}`;
+					const span = Number(r.max) - Number(r.min) || 1;
+					r.style.setProperty("--p", `${(((Number(r.value) - Number(r.min)) / span) * 100).toFixed(1)}%`);
+				};
+				paint();
+				let sentAt = 0;
+				r.addEventListener("input", () => {
+					paint();
+					const now = performance.now();
+					if (now - sentAt > 80) {
+						sentAt = now;
+						invoke("plugin_value", { id: p.id, key: s.key, value: Number(r.value) });
+					}
+				});
+				r.addEventListener("change", () => invoke("plugin_value", { id: p.id, key: s.key, value: Number(r.value) }));
+				wrap.append(r, val);
+				f.append(wrap);
 				more.append(f);
 				continue;
 			}

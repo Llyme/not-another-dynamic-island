@@ -13,14 +13,14 @@ There are three kinds:
 * **Declarative**: the manifest names an address to poll (JSON, or a calendar), and the card, the pill, the rings and the banner
   are written as templates over what the address answers. No plugin code runs.
 * **Module**: a WebAssembly file for a plugin that needs real logic (audio, games, files, the calendar, what is playing). The
-  island calls it with what it may see; it answers with what the island is to do. It has **no network at all**, only the
+  island calls it with what it may see; it answers with what the island is to do. It has **no network of its own**, only the
   sensors its manifest lists, a time budget for each call, and a memory cap. It is written in any language that makes
   WebAssembly; there is a Rust SDK (`plugins/sdk`) and examples (`plugins/`).
 * **Native**: a plugin written in Rust inside the app, for what a sandbox must not hand out: the list of windows with their
   paths, performance counters, other programs' files and logins, the browser extension. See [The native plugins](#the-native-plugins).
 
 A declarative plugin and a module are the same to the island whether they sit in a folder or are carried by the app: the
-*Time*, *Agenda* and *ICS calendar* plugins that come with it are a module, a module and a declarative plugin. Nothing in the
+*Time* and *ICS Calendar* plugins that come with it are two modules. Nothing in the
 host knows them by name. They go through the same checks, the same sandbox, the same list, the same switch and the same
 question before they are switched on as a plugin you drop in a folder. The difference is only that the app carries them (an
 update brings their new version) and that you can switch them off but not delete them.
@@ -56,9 +56,9 @@ update brings their new version) and that you can switch them off but not delete
 
 Settings > Plugins lists them, shows what each one asks to see, has the switches, each plugin's settings, a button to
 mute its banners, and **Do not disturb**. A plugin you drop in is **off** until you turn it on, and switching it on
-asks first. "Open the plugins folder" opens the folder; "Look again" reads it again. Three examples are put in the
-folder once (the weather, an audio meter, a game clock); delete one and it is not put back. The plugins the app carries are in
-the same list, above the ones you install.
+asks first. "Open the plugins folder" opens the folder; "Look again" reads it again. The app puts nothing in the
+folder: the examples (a weather card, an audio meter, a game clock, a busy meter) are in the repository, in `plugins/`, with their
+source, to read and to copy from. The plugins the app carries are in the same list, above the ones you install.
 
 ## What ships with the app
 
@@ -69,22 +69,23 @@ the same list, above the ones you install.
 | Page Reader | native | a card for each page you have open; the page in front of you, named | the browser windows, and what the NADI browser extension sends (never a private window or a blocked site) |
 | Downloads | native | what the browsers, Steam and qBittorrent are downloading | partial files in the download folders, the browsers' history, qBittorrent's own files |
 | Claude Code | native | your sessions, and a pill when one needs you or has finished; the 5-hour and 7-day limits as two rings in the hub, with a peek | Claude Code's own session files; for the rings, its own sign-in to Claude (kept encrypted for your Windows user; Claude Code's login is never read), and it asks Anthropic and nothing else |
+| Eyes | native | the two eyes of the island: they blink, follow the cursor, squash and stretch, and can bounce to the beat and send out a ripple for each hit of the bass | where the cursor is; the sound levels |
+| Sound light | native | an aura in the island that dances to what plays (with a most-brightness setting: 0 turns it off), and spills a little outside it | the sound levels |
 | Now playing | native | what is playing, with play, skip, seek, speed; a pill | what Windows says is playing |
 | Notification mirror | native | other apps' notifications on the island | Windows' notification access; Viber's popup |
 | Time | module | the time now and then, in a small pill (`plugins/time`) | the clock |
-| ICS calendar | declarative | brings the events of a calendar link to the calendar | the one address you give it |
-| Agenda | module | the next events, and a banner shortly before one (`plugins/agenda`) | the island's calendar |
+| ICS Calendar | module | brings the events of a calendar link to the calendar, lists the next ones on a card, and gives a banner shortly before one (`plugins/ics-calendar`) | the one address you give it; the island's calendar |
 
 Each of them can be switched off, and one that is off does nothing: no thread works, no file is read, nothing is asked of Windows
 and its card and its pill are gone. A plugin takes over what the old settings file said about it the first time it is seen (a
-game switch that was off stays off; a calendar link that was set switches the ICS calendar and the agenda on).
+game switch that was off stays off; a calendar link that was set switches ICS Calendar on; the agenda it used to be next to is part of it now).
 
 ### What stays in the island
 
 * **The windows**: the pill (and the order its views take: a banner, then the highest pill a plugin offers, then the eyes), the hub,
   the banners with their priority and do not disturb, the floating cards.
-* **The calendar**: the month view and the store of events. Whoever has events brings them (the ICS calendar plugin does; so can a
-  module, see `events` below), and whoever works from them takes them (the agenda does).
+* **The calendar**: the month view and the store of events. Whoever has events brings them (the ICS Calendar plugin does; so can a
+  module, see `events` below), and whoever works from them takes them (the card and reminders of ICS Calendar do).
 * **The eyes and the light**, which follow the sound and what is playing.
 * **The sensors** the plugins read: the sound, the media session, the list of windows. A plugin sees one only after you allowed it.
 * The system rings (CPU, memory, GPU) and the notification list.
@@ -187,7 +188,7 @@ notification is 0. `banner` is a template (inside a list, over the item).
 ## The pill
 
 The collapsed island shows one pill at a time: the highest of what it has. A banner or the hub has it first; then the highest
-`rank` among the pills the plugins offer (Work 10, Page Reader 15, Games 20, Now playing 30, the usage peek 100; a plugin's
+`rank` among the pills the plugins offer (Work 10, Games 20, Now playing 30, the usage peek 100; a plugin's
 own is 0 to 99), then the eyes. A pill is offered while something is going on and taken back when it is over (a module says
 `pill: null`; a declarative plugin's `when` stops holding); switching the plugin off takes it back too.
 
@@ -230,7 +231,7 @@ A manifest can list what the user may set. They appear under the plugin in Setti
 }
 ```
 
-`type` is `text`, `number`, `toggle` or `choice`. `"actions": [{ "id": "preview", "label": "Show it now" }]` puts buttons in the
+`type` is `text`, `number`, `toggle`, `choice` or `range` (a slider: `min`, `max`, `step` and the `unit` written after the number). `"actions": [{ "id": "preview", "label": "Show it now" }]` puts buttons in the
 plugin's settings; a module is sent an `action` event when one is pressed. An action that needs a word from the user (a code to
 paste) says `"ask": "what the field asks"` and `"then": "the-call"`: the field comes under the buttons, and what is typed goes
 to that call as `{ "text": ... }`.
@@ -275,7 +276,10 @@ to that call as `{ "text": ... }`.
 | `budget.call_ms` | the time one call may take: 4 by default, 20 at most |
 | `budget.memory_mb` | memory: 8 by default, 64 at most |
 
-A module cannot list `net`: nothing that hears or sees the PC can also reach the network.
+A module cannot list `net`: nothing that hears or sees the PC can also reach the network. One exception, which sends nothing out: a
+module may name a calendar link (`source.http` with `"format": "ics"`, the address a `{{settings.url}}` setting holds, and `net` for
+that host only). The island reads the link with a plain request to that one address and brings its events to the calendar; the
+module makes no request, and gets only the events. This is how *ICS Calendar* works.
 
 ### The interface
 
@@ -317,7 +321,7 @@ import nothing. The event and the answer are JSON.
 
 * `tz_offset` is how far this PC's clock is from UTC, in minutes: a module has no time zone, and `now` is UTC. (The SDK's
   `ev.local()` gives the date and the time of day.)
-* `events` brings events to the island's calendar (the month view, and the agenda card and reminders work from it too). A module that
+* `events` brings events to the island's calendar (the month view, and the *ICS Calendar* card and reminders work from it too). A module that
   says `events` again replaces what it brought; `"events": null` takes them away; they go with the module when it is switched off.
   At most 500 events, each with a summary of up to 200 characters.
 * `wake_ms` asks to be called again after that long (50 ms to a day): a module that keeps time asks for the next minute and
@@ -325,7 +329,7 @@ import nothing. The event and the answer are JSON.
 * `quiet` asks the other plugins to hold their peace while something fills the screen; `ambient` banners and pills wait for it.
 * `media` presses a button of the player (the plugin must have `media_control`).
 
-With the Rust SDK this is `fn handle(ev: &Event) -> Reply` and `plugin!(handle);` (see `plugins/time`, `plugins/agenda`,
+With the Rust SDK this is `fn handle(ev: &Event) -> Reply` and `plugin!(handle);` (see `plugins/time`, `plugins/ics-calendar`,
 `plugins/busy-meter`). A module is a function from an event to a reply, so its logic is tested as an ordinary Rust test. Build with
 `plugins/build.ps1` (needs `rustup target add wasm32-unknown-unknown`).
 

@@ -28,8 +28,8 @@ pub struct Settings {
     pub edge_dwell_ms: u64,
     /// while pinned and left alone (for the hide delay) the island shrinks to this share of its size, 100 = never
     pub pin_shrink: u64,
-    /// width in logical px of the standard collapsed island (the media and work pills, the banner, the session
-    /// pill); the idle and game pills keep their proportions. (Older files hold a percentage: see `compact_px`.)
+    /// width in logical px of the collapsed island: the plain island, the pills, the banner and the session pill are
+    /// all that wide. (Older files hold a percentage: see `compact_px`.)
     pub compact_width: u64,
     /// width of the expanded island (the hub), in logical pixels
     pub hub_width: u64,
@@ -210,7 +210,7 @@ pub fn save_settings(window: WebviewWindow, settings: Settings) {
     state.top_margin.store(settings.top_margin.clamp(0, 80), Ordering::Relaxed);
     state.show_at_cursor.store(settings.show_at_cursor, Ordering::Relaxed);
     state.cursor_follow.store(settings.cursor_follow, Ordering::Relaxed);
-    state.audio_enabled.store(settings.react_to_audio || state.plugins.needs_audio(), Ordering::Relaxed);
+    crate::plugins::sync_audio(&state);
     state
         .peek_ms
         .store(settings.peek_duration_s.max(1) * 1000, Ordering::Relaxed);

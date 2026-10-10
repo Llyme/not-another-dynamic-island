@@ -3,13 +3,6 @@
 version = 4
 
 [[package]]
-name = "agenda"
-version = "1.0.0"
-dependencies = [
- "nadi-plugin",
-]
-
-[[package]]
 name = "audio-meter"
 version = "1.0.0"
 dependencies = [
@@ -26,6 +19,13 @@ dependencies = [
 [[package]]
 name = "game-clock"
 version = "1.0.0"
+dependencies = [
+ "nadi-plugin",
+]
+
+[[package]]
+name = "ics-calendar"
+version = "3.0.0"
 dependencies = [
  "nadi-plugin",
 ]

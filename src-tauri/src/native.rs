@@ -226,6 +226,36 @@ impl Host {
                 self.save();
             }
         }
+        // The agenda was a plugin of its own, next to the ICS calendar; they are one now (ICS Calendar). It stays on if either
+        // was on; a reminder the agenda had switched off stays off, and so does the mute.
+        {
+            let mut saved = self.saved.lock().unwrap();
+            if saved.adopted.iter().any(|x| x == "agenda") {
+                let agenda_on = saved.on.iter().any(|x| x == "agenda");
+                let muted = saved.muted.iter().any(|x| x == "agenda");
+                let values = saved.values.remove("agenda").unwrap_or_default();
+                saved.adopted.retain(|x| x != "agenda");
+                saved.on.retain(|x| x != "agenda");
+                saved.muted.retain(|x| x != "agenda");
+                if saved.adopted.iter().any(|x| x == "ics-calendar") {
+                    if agenda_on && !saved.on.iter().any(|x| x == "ics-calendar") {
+                        saved.on.push("ics-calendar".into());
+                    }
+                    if muted && !saved.muted.iter().any(|x| x == "ics-calendar") {
+                        saved.muted.push("ics-calendar".into());
+                    }
+                    let slot = saved.values.entry("ics-calendar".to_string()).or_default();
+                    for (k, v) in values {
+                        slot.entry(k).or_insert(v);
+                    }
+                    if !agenda_on {
+                        slot.entry("remind".to_string()).or_insert(Value::Bool(false));
+                    }
+                }
+                drop(saved);
+                self.save();
+            }
+        }
         let todo: Vec<(Arc<dyn Native>, String, bool)> = {
             let saved = self.saved.lock().unwrap();
             self.natives

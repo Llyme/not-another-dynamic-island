@@ -1,7 +1,7 @@
 {
   "id": "page-reader",
   "name": "Page Reader",
-  "description": "A card for each page you have open, and what the page in front of you says (needs the NADI browser extension).",
+  "description": "A card in the expanded island for each page you have open, with what the page says (needs the NADI browser extension).",
   "version": "1.0.0",
   "default_on": true,
   "permissions": {
@@ -12,6 +12,5 @@
   },
   "settings": {
     "images": { "label": "Show the page's main picture", "type": "toggle", "default": true }
-  },
-  "pills": [{ "id": "page", "w": 260, "h": 40, "rank": 15 }]
+  }
 }

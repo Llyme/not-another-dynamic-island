@@ -8,6 +8,7 @@ const GRANTS: &[(&str, &str, &str)] = &[
     ("processes", "See which programs have a window open, and which one is in front.", ""),
     ("titles", "Read the titles of the windows (a browser's title is its page).", ""),
     ("performance", "Read how much CPU, memory and GPU each program uses, from Windows.", ""),
+    ("cursor position", "Know where the mouse cursor is on the screen.", ""),
     ("idle time", "Know how long it has been since the keyboard or mouse was last used (never what was typed).", ""),
     (
         "read files and folders",

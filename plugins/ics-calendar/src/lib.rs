@@ -1,5 +1,7 @@
-//! Agenda: what is coming up, from the island's calendar, whoever brought the events (a plugin like ICS calendar). A card
-//! in the hub with the next events, and a banner shortly before one starts.
+//! ICS Calendar: brings the events of a calendar link to the island's calendar, and says what is coming up. The island
+//! reads the link for it (the manifest names the address, `"format": "ics"`: a module has no network of its own), so this
+//! code only works from the events: a card in the hub with the next ones, and a banner shortly before one starts. It shows
+//! the events of the island's calendar, whoever brought them.
 //!
 //! This plugin ships with NADI, and is written as any plugin can be: it asks for the `calendar` permission, is told when the
 //! calendar changes, and asks the island to wake it every 15 seconds to look at the clock.

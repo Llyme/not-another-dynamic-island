@@ -1,11 +1,14 @@
 {
   "id": "ics-calendar",
-  "name": "ICS calendar",
-  "description": "Brings the events of a calendar link (.ics: Google Calendar, Outlook, iCloud) to the island's calendar.",
-  "version": "2.0.0",
-  "kind": "declarative",
+  "name": "ICS Calendar",
+  "description": "Brings the events of a calendar link (.ics: Google Calendar, Outlook, iCloud) to the island's calendar, shows the next ones on a card, and reminds you with a banner shortly before one starts.",
+  "version": "3.0.0",
+  "kind": "wasm",
+  "module": "ics-calendar.wasm",
   "default_on": false,
+  "banners": true,
   "permissions": {
+    "calendar": true,
     "net": ["{{settings.url}}"]
   },
   "source": {
@@ -20,6 +23,8 @@
   "status": "{{count}} events read.",
   "settings": {
     "url": { "label": "Calendar link (.ics)", "type": "text", "default": "" },
-    "poll_min": { "label": "Look again every (minutes)", "type": "number", "default": 10 }
+    "poll_min": { "label": "Look again every (minutes)", "type": "number", "default": 10 },
+    "remind": { "label": "Banner before an event", "type": "toggle", "default": true },
+    "lead_min": { "label": "How long before (minutes)", "type": "number", "default": 15 }
   }
 }

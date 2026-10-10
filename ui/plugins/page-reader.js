@@ -1,6 +1,6 @@
-// Page Reader, the face of the native plugin (src/builtin/pages): a card for each page you have open, and the pill
-// that names the page in front of you.
-import { FLOATS, KIND_GLYPH, addPill, call, collapsible, el, focusable, going, host, iconEl, invoke, li, line, listen, peek, textCol, formatDuration } from "../kit.js";
+// Page Reader, the face of the native plugin (src/builtin/pages): a card for each page you have open, in the expanded
+// island. It has no pill: the collapsed island shows nothing of it.
+import { FLOATS, KIND_GLYPH, call, collapsible, el, focusable, going, host, iconEl, invoke, li, line, peek, textCol } from "../kit.js";
 import { guideReader } from "./guide.js";
 
 // the guide reader asks for words and pictures by the island's old names: they are calls to this plugin
@@ -273,37 +273,8 @@ function browsingCard(w) {
 	);
 }
 
-// the pill: the page in front of you, named (the step of a walkthrough, the headline, the time left)
-function initPill() {
-	addPill(
-		"page",
-		`
-		<div id="page-icon"></div>
-		<div class="text-col">
-			<div id="page-label" class="line-main"></div>
-			<div id="page-app" class="line-sub"></div>
-		</div>
-		<span id="page-time"></span>
-	`,
-	);
-	const icon = document.getElementById("page-icon");
-	const label = document.getElementById("page-label");
-	const app = document.getElementById("page-app");
-	const time = document.getElementById("page-time");
-	listen("page-tick", (event) => {
-		const p = event.payload;
-		icon.innerHTML = li(KIND_GLYPH[p.kind] || "globe");
-		label.textContent = p.main || "";
-		app.textContent = p.sub || "";
-		time.textContent = formatDuration(p.since_secs);
-	});
-}
-
 export default {
 	id: "page-reader",
-	init() {
-		if (!FLOATS) initPill();
-	},
 	cards(data) {
 		return data.map((w) => {
 			const c = browsingCard(w);

@@ -47,11 +47,9 @@ const GLOW_PAD: f64 = 44.0;
 // REVEAL_SECS is how long that lasts
 const REVEAL_SECS: f64 = 0.6;
 
-/// the width of the standard collapsed island (the media and work pills) before the setting
-const COMPACT_BASE: f64 = 260.0;
+// (the widths here are only the plain ones: every view but the hub takes the collapsed width setting, see view_size)
 const IDLE_SIZE: (f64, f64) = (140.0, 28.0);
-// the notification banner and the session pill take the width of the collapsed island they drop over
-const NOTIF_SIZE: (f64, f64) = (IDLE_SIZE.0, 72.0); // (the width follows the collapsed view, see view_size)
+const NOTIF_SIZE: (f64, f64) = (IDLE_SIZE.0, 72.0);
 const BRIEF_SIZE: (f64, f64) = (IDLE_SIZE.0, 40.0);
 // settle (bars sit at the old value) + fill animation + hold, ms
 // the hub is as tall as its content, between the two heights, and as wide as the setting says
@@ -72,16 +70,13 @@ enum PillView {
     Hub,
 }
 
-/// the size of a view. `width` is the setting for the standard collapsed island (px): the media and
-/// work pills, the notification banner and the session pill are that wide, the others (idle, game,
-/// usage peek) keep their proportions to it.
+/// the size of a view. `width` is the setting for the collapsed island (px): every view that is not
+/// the expanded hub (the plain island, the pills, the notification banner, the session pill) is that wide.
 fn view_size(view: PillView, width: u64, hub_w: f64) -> (f64, f64) {
-    let (w, h) = view.size();
-    let k = width as f64 / COMPACT_BASE;
+    let (_, h) = view.size();
     match view {
         PillView::Hub => (hub_w, h),
-        PillView::Notification | PillView::Brief => (width as f64, h),
-        _ => (w * k, h),
+        _ => (width as f64, h),
     }
 }
 
@@ -263,7 +258,7 @@ impl Default for IslandState {
             peek_request: AtomicBool::new(false),
             show_at_cursor: AtomicBool::new(loaded.show_at_cursor),
             pinned: AtomicBool::new(false),
-            audio_enabled: AtomicBool::new(loaded.react_to_audio),
+            audio_enabled: AtomicBool::new(false),
             cursor_follow: AtomicBool::new(loaded.cursor_follow),
             settings: std::sync::Mutex::new(loaded),
         }
@@ -503,7 +498,7 @@ fn spawn_edge_poll(window: WebviewWindow) {
         pos_x += pad_full;
         pos_y += pad_full;
         let mut applied_width = state.compact_width.load(Ordering::Relaxed);
-        win_w = IDLE_SIZE.0 * scale * applied_width as f64 / COMPACT_BASE;
+        win_w = applied_width as f64 * scale;
         win_h = IDLE_SIZE.1 * scale;
         // the window setup() parked was sized for the plain 140 px pill, without the margin or the
         // width setting: centre the island itself on the screen instead of trusting that position
@@ -1084,6 +1079,7 @@ pub fn run() {
     tauri::Builder::default()
         .manage(Arc::new(IslandState::default()))
         .invoke_handler(tauri::generate_handler![
+            builtin::look::look_state,
             plugins::plugin_list,
             plugins::plugin_set,
             native::plugin_call,

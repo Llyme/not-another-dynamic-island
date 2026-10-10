@@ -32,7 +32,6 @@ body {
 #pill[data-view="media"],
 #pill[data-view="game"],
 #pill[data-view="work"],
-#pill[data-view="page"],
 #pill[data-view="brief"] {
   border-radius: 20px;
 }
@@ -66,8 +65,7 @@ body {
 
 body[data-view="media"],
 body[data-view="game"],
-body[data-view="work"],
-body[data-view="page"] {
+body[data-view="work"] {
   --r: 20px;
 }
 
@@ -88,8 +86,7 @@ body[data-view="game"] {
   --glow: 124, 140, 255;
 }
 
-body[data-view="work"],
-body[data-view="page"] {
+body[data-view="work"] {
   --glow: 79, 195, 247;
 }
 
@@ -182,7 +179,8 @@ body.big #viz-bleed {
 }
 
 /* audio aura, painted under every view's content (see paintViz) */
-#viz {
+#viz,
+#rings {
   position: absolute;
   inset: 0;
   width: 100%;
@@ -438,8 +436,7 @@ body.big #viz-bleed {
 }
 
 /* ---- work ---- */
-#work-icon,
-#page-icon {
+#work-icon {
   flex: none;
   display: grid;
   place-items: center;
@@ -452,8 +449,7 @@ body.big #viz-bleed {
   font-weight: 800;
 }
 
-#work-time,
-#page-time {
+#work-time {
   flex: none;
   padding: 3px 8px;
   border-radius: 10px;
@@ -908,8 +904,7 @@ body.big #viz-bleed {
 }
 
 /* pill icons that used to be glyphs */
-#work-icon .li,
-#page-icon .li {
+#work-icon .li {
   width: 16px;
   height: 16px;
   stroke-width: 1.8;

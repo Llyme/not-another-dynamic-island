@@ -3,7 +3,7 @@
 //! before they are switched on as one a user drops in a folder; they are only carried by the app (so an update brings the
 //! new version) and cannot be deleted, only switched off.
 //!
-//! Their sources are in `plugins/` (a module: `time`, `agenda`) and `src-tauri/plugins-bundled/` (the manifest, and the
+//! Their sources are in `plugins/` (a module: `time`, `ics-calendar`) and `src-tauri/plugins-bundled/` (the manifest, and the
 //! built `.wasm` that `plugins/build.ps1` copies there).
 
 use crate::native::{old_flag, old_value, Adopted};
@@ -18,8 +18,11 @@ pub struct Bundled {
 
 pub const ALL: &[Bundled] = &[
     Bundled { id: "time", manifest: include_str!("../plugins-bundled/time/manifest.json"), module: Some(("time.wasm", include_bytes!("../plugins-bundled/time/time.wasm"))) },
-    Bundled { id: "ics-calendar", manifest: include_str!("../plugins-bundled/ics-calendar/manifest.json"), module: None },
-    Bundled { id: "agenda", manifest: include_str!("../plugins-bundled/agenda/manifest.json"), module: Some(("agenda.wasm", include_bytes!("../plugins-bundled/agenda/agenda.wasm"))) },
+    Bundled {
+        id: "ics-calendar",
+        manifest: include_str!("../plugins-bundled/ics-calendar/manifest.json"),
+        module: Some(("ics-calendar.wasm", include_bytes!("../plugins-bundled/ics-calendar/ics-calendar.wasm"))),
+    },
 ];
 
 pub fn find(id: &str) -> Option<&'static Bundled> {
@@ -48,15 +51,11 @@ pub fn adopt(id: &str, old: &Value, default_on: bool) -> Adopted {
             if let Some(v) = old_value(old, "calendar_poll_min") {
                 values.insert("poll_min".into(), v);
             }
-            // (it was on when a link was set)
-            Adopted { on: !url.is_empty() || default_on, values }
-        }
-        "agenda" => {
             if let Some(v) = old_value(old, "calendar_reminder_lead_min") {
                 values.insert("lead_min".into(), v);
             }
-            let had_link = old.get("calendar_ics_url").and_then(|v| v.as_str()).map_or(false, |u| !u.trim().is_empty());
-            Adopted { on: had_link || default_on, values }
+            // (it was on when a link was set)
+            Adopted { on: !url.is_empty() || default_on, values }
         }
         _ => Adopted { on: default_on, values },
     }
@@ -100,11 +99,9 @@ mod tests {
         assert!(ics.on);
         assert_eq!(ics.values["url"], json!("https://example.com/a.ics"));
         assert_eq!(ics.values["poll_min"], json!(30));
-        let agenda = adopt("agenda", &old, false);
-        assert!(agenda.on);
-        assert_eq!(agenda.values["lead_min"], json!(5));
+        assert_eq!(ics.values["lead_min"], json!(5));
         // a new install, or no calendar link: they start as their manifest says
-        for id in ["time", "ics-calendar", "agenda"] {
+        for id in ["time", "ics-calendar"] {
             assert!(!adopt(id, &Value::Null, false).on, "{id}");
             assert!(!adopt(id, &json!({}), false).on, "{id}");
         }

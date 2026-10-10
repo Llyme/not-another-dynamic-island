@@ -516,11 +516,23 @@ mod tests {
         std::fs::read(std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("plugins-bundled").join(name)).unwrap()
     }
 
+    /// An example's module, as `plugins/build.ps1` builds it (the examples are not carried by the app). `None` when it was
+    /// not built: the test then has nothing to run, and says so.
+    fn example(dir: &str, file: &str) -> Option<Vec<u8>> {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("..").join("plugins").join("dist").join(dir).join(file);
+        let bytes = std::fs::read(&path).ok();
+        if bytes.is_none() {
+            eprintln!("skipped: {} is not built (run plugins/build.ps1)", path.display());
+        }
+        bytes
+    }
+
     // (it times the interpreter, which runs at debug speed in a debug test: `cargo test --release`)
     #[cfg_attr(debug_assertions, ignore)]
     #[test]
     fn the_audio_meter_draws_bands_and_stays_inside_its_budget() {
-        let mut rt = Runtime::load(&bundled("example-audio-meter/audio-meter.wasm"), 4, 8).unwrap();
+        let Some(wasm) = example("audio-meter", "audio-meter.wasm") else { return };
+        let mut rt = Runtime::load(&wasm, 4, 8).unwrap();
         let m = manifest(json!({ "id": "example-audio-meter", "name": "Audio meter", "live": true }));
         let ev = json!({
             "event": "audio", "now": 1000, "settings": { "show_bpm": true },
@@ -561,7 +573,8 @@ mod tests {
 
     #[test]
     fn the_game_clock_tells_the_time_once_in_a_while() {
-        let mut rt = Runtime::load(&bundled("example-game-clock/game-clock.wasm"), 4, 8).unwrap();
+        let Some(wasm) = example("game-clock", "game-clock.wasm") else { return };
+        let mut rt = Runtime::load(&wasm, 4, 8).unwrap();
         let settings = json!({ "games": "endfield.exe, hl2.exe", "remind_min": 60 });
         let at = |ms: u64, exe: &str| {
             json!({ "event": "processes", "now": ms, "settings": settings, "windows": [
@@ -612,9 +625,9 @@ mod tests {
     }
 
     #[test]
-    fn the_agenda_plugin_lists_the_calendar_and_reminds_once() {
-        let mut rt = Runtime::load(&bundled("agenda/agenda.wasm"), 4, 8).unwrap();
-        let m = manifest(json!({ "id": "agenda", "name": "Agenda", "kind": "wasm" }));
+    fn the_ics_calendar_plugin_lists_the_calendar_and_reminds_once() {
+        let mut rt = Runtime::load(&bundled("ics-calendar/ics-calendar.wasm"), 4, 8).unwrap();
+        let m = manifest(json!({ "id": "ics-calendar", "name": "ICS Calendar", "kind": "wasm" }));
         let now = 1_791_558_000_000u64;
         let events = json!([
             { "uid": "a", "summary": "Standup", "start_ms": now as i64 + 10 * 60_000, "end_ms": now as i64 + 40 * 60_000, "all_day": false },

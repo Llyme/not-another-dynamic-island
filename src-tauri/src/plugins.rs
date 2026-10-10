@@ -148,12 +148,17 @@ pub struct OptionSpec {
 #[serde(default)]
 pub struct SettingSpec {
     pub label: String,
-    /// "text", "number" or "toggle"
+    /// "text", "number", "toggle", "choice" or "range"
     #[serde(rename = "type")]
     pub kind: String,
     pub default: Value,
     /// "choice": what it is one of
     pub options: Vec<OptionSpec>,
+    /// "range": the ends, the step and the unit written after the number
+    pub min: Option<f64>,
+    pub max: Option<f64>,
+    pub step: Option<f64>,
+    pub unit: String,
 }
 
 #[derive(Deserialize, Clone, Default, Debug)]
@@ -992,8 +997,6 @@ pub(crate) struct Saved {
     pub(crate) muted: Vec<String>,
     pub(crate) dnd: bool,
     pub(crate) values: HashMap<String, HashMap<String, Value>>,
-    /// the examples that were put in the plugins folder once (one that was deleted is not put back)
-    pub(crate) seeded: Vec<String>,
     /// the native plugins that took over what the old settings said about them (once each)
     pub(crate) adopted: Vec<String>,
 }
@@ -1125,6 +1128,10 @@ pub struct SettingInfo {
     pub kind: String,
     pub value: Value,
     pub options: Vec<Value>,
+    pub min: Option<f64>,
+    pub max: Option<f64>,
+    pub step: Option<f64>,
+    pub unit: String,
 }
 
 #[derive(Serialize)]
@@ -1228,15 +1235,30 @@ fn check(m: &Manifest, dir: &std::path::Path, bundled: bool) -> Option<String> {
             if !bundled && !dir.join(f).is_file() {
                 return Some(format!("The module {f} is not in the folder."));
             }
+            if m.permissions.media_control && !m.permissions.media {
+                return Some("To control what is playing, a module must also be allowed to see it (\"media\").".into());
+            }
+            if brings_a_calendar(m) {
+                // (the island reads the link for the module and hands the events to the calendar: the module itself still
+                // has no network, and never sees anything but events)
+                if m.source.format != "ics" {
+                    return Some("A module may name a source only for a calendar (\"format\": \"ics\").".into());
+                }
+                for k in &m.needs {
+                    if !m.settings.contains_key(k) {
+                        return Some(format!("\"needs\" names the setting {k}, which the manifest does not have."));
+                    }
+                }
+                let defaults = values_of(m, &Saved::default());
+                let probe = render(&m.source.http, &json!({ "settings": defaults }));
+                if !m.needs.is_empty() && !probe.contains("://") {
+                    return None;
+                }
+                return allowed(&probe, &net_hosts(m, &defaults)).err();
+            }
             if !m.permissions.net.is_empty() {
                 // (no module can reach the network: what it sees stays on this PC)
                 return Some("A module cannot ask the network. Use a declarative plugin for that.".into());
-            }
-            if !m.source.http.is_empty() {
-                return Some("A module has no source address.".into());
-            }
-            if m.permissions.media_control && !m.permissions.media {
-                return Some("To control what is playing, a module must also be allowed to see it (\"media\").".into());
             }
             None
         }
@@ -1267,6 +1289,11 @@ fn check(m: &Manifest, dir: &std::path::Path, bundled: bool) -> Option<String> {
         }
         other => Some(format!("Unknown kind \"{other}\".")),
     }
+}
+
+/// A module that names an address: the island reads it (a calendar) and brings the events to the calendar, for the module.
+fn brings_a_calendar(m: &Manifest) -> bool {
+    m.kind == "wasm" && !m.source.http.trim().is_empty()
 }
 
 /// The hosts a plugin may ask: what its manifest lists. An entry may be a template over the settings (`{{settings.url}}`
@@ -1322,35 +1349,8 @@ fn read_bundled(b: &'static crate::bundled::Bundled) -> Plugin {
     }
 }
 
-/// What a new install starts with, to show what a plugin looks like. Each is written once (a folder you delete is not
-/// put back).
-struct Example {
-    id: &'static str,
-    manifest: &'static str,
-    /// the module's file name and bytes, for a module plugin
-    module: Option<(&'static str, &'static [u8])>,
-}
-
-const EXAMPLES: &[Example] = &[
-    Example {
-        id: "example-weather",
-        manifest: include_str!("../plugins-bundled/example-weather/manifest.json"),
-        module: None,
-    },
-    Example {
-        id: "example-audio-meter",
-        manifest: include_str!("../plugins-bundled/example-audio-meter/manifest.json"),
-        module: Some(("audio-meter.wasm", include_bytes!("../plugins-bundled/example-audio-meter/audio-meter.wasm"))),
-    },
-    Example {
-        id: "example-game-clock",
-        manifest: include_str!("../plugins-bundled/example-game-clock/manifest.json"),
-        module: Some(("game-clock.wasm", include_bytes!("../plugins-bundled/example-game-clock/game-clock.wasm"))),
-    },
-];
-
 impl Host {
-    /// Read the plugins folder (putting the examples in the first time) and what is switched on.
+    /// Read the plugins folder and what is switched on.
     pub fn rescan(&self) {
         let Some(root) = dir() else { return };
         if !self.loaded.swap(true, Ordering::Relaxed) {
@@ -1362,27 +1362,6 @@ impl Host {
                     self.saved.lock().unwrap().on = list;
                 }
             }
-        }
-        let mut changed = false;
-        {
-            let mut saved = self.saved.lock().unwrap();
-            for ex in EXAMPLES {
-                if saved.seeded.iter().any(|s| s == ex.id) {
-                    continue;
-                }
-                let d = root.join(ex.id);
-                if !d.exists() && std::fs::create_dir_all(&d).is_ok() {
-                    let _ = std::fs::write(d.join("manifest.json"), ex.manifest);
-                    if let Some((name, bytes)) = ex.module {
-                        let _ = std::fs::write(d.join(name), bytes);
-                    }
-                }
-                saved.seeded.push(ex.id.to_string());
-                changed = true;
-            }
-        }
-        if changed {
-            self.save();
         }
         // (the plugins that are part of the app come first: the ones written in Rust, then the ones inside the exe)
         let mut all: Vec<Arc<Plugin>> = self.natives.lock().unwrap().iter().map(|e| e.plugin.clone()).collect();
@@ -1555,6 +1534,10 @@ impl Host {
                             kind: if s.kind.is_empty() { "text".into() } else { s.kind.clone() },
                             value: vals.get(k).cloned().unwrap_or(Value::Null),
                             options: s.options.iter().map(|o| json!({ "value": o.value, "label": o.label })).collect(),
+                            min: s.min,
+                            max: s.max,
+                            step: s.step,
+                            unit: s.unit.clone(),
                         })
                         .collect(),
                     actions: m.actions.iter().map(|a| ActionSpec2 { id: a.id.clone(), label: a.label.clone(), ask: a.ask.clone(), then: a.then.clone(), filled: !a.ask.is_empty() && self.filled_of(&m.id, &a.id) }).collect(),
@@ -1580,7 +1563,7 @@ impl Host {
             .lock()
             .unwrap()
             .iter()
-            .filter(|p| self.is_on(p) && p.manifest.kind != "wasm" && p.manifest.kind != "native")
+            .filter(|p| self.is_on(p) && p.manifest.kind != "native" && (p.manifest.kind != "wasm" || brings_a_calendar(&p.manifest)))
             .filter(|p| seen || p.manifest.source.when == "always")
             .filter(|p| *p.due.lock().unwrap() <= now && !p.busy.load(Ordering::Relaxed))
             .cloned()
@@ -1893,7 +1876,9 @@ fn poll(p: Arc<Plugin>, app: AppHandle, state: Arc<IslandState>) {
         *p.error.lock().unwrap() = None;
         p.set_note(Some(if m.setup.is_empty() { "Fill in its settings below.".to_string() } else { m.setup.clone() }));
         // (a calendar that is switched on and has no link yet is an empty calendar, not a missing one)
-        state.plugins.apply(&app, &state, &p, Out { card: Some(None), pill: Some(None), rings: Some(Vec::new()), events: m.source.format.eq("ics").then_some(Some(Vec::new())), ..Default::default() }, false);
+        // (a module draws its own card: only the calendar is emptied)
+        let own = m.kind != "wasm";
+        state.plugins.apply(&app, &state, &p, Out { card: own.then_some(None), pill: own.then_some(None), rings: own.then(Vec::new), events: m.source.format.eq("ics").then_some(Some(Vec::new())), ..Default::default() }, false);
         *p.due.lock().unwrap() = Instant::now() + Duration::from_secs(5);
         p.busy.store(false, Ordering::Relaxed);
         return;
@@ -1944,9 +1929,15 @@ pub fn card_visible(state: &IslandState) -> bool {
     state.shown.load(Ordering::Relaxed) || state.floats.any()
 }
 
-/// The audio capture runs for the eyes (the setting) and for a module that listens.
+/// The audio capture runs for the plugins that show the sound (the eyes, the sound light) and for a module that listens.
 pub fn sync_audio(state: &IslandState) {
-    let want = state.settings.lock().unwrap().react_to_audio || state.plugins.needs_audio();
+    // (the eyes, when they react to sound, and the sound light listen: they are plugins, see builtin/look.rs)
+    let p = &state.plugins;
+    let flag = |id: &str, key: &str| p.value(id, key).as_bool().unwrap_or(true);
+    let light = p.is_on_id("sound-light") && p.value("sound-light", "brightness").as_f64().unwrap_or(100.0) > 0.0;
+    let eyes = p.is_on_id("eyes") && (flag("eyes", "react") || flag("eyes", "rings"));
+    let looks = light || eyes;
+    let want = looks || state.plugins.needs_audio();
     state.audio_enabled.store(want, Ordering::Relaxed);
     state.plugins.audio.wanted.store(state.plugins.needs_audio(), Ordering::Relaxed);
 }
@@ -2260,7 +2251,9 @@ mod tests {
     fn the_ics_calendar_that_ships_with_the_app_is_a_plugin_like_any_other() {
         let b = crate::bundled::find("ics-calendar").unwrap();
         let m: Manifest = serde_json::from_str(b.manifest).unwrap();
-        assert_eq!(m.kind, "declarative");
+        // (a module: it draws the card and the reminder; the island reads the link for it)
+        assert_eq!(m.kind, "wasm");
+        assert!(brings_a_calendar(&m));
         // switched on with no link yet: waiting for the link is not a fault
         assert!(check(&m, std::path::Path::new(""), true).is_none());
         assert!(missing(&m, &json!({ "url": "  " })) && !missing(&m, &json!({ "url": "https://x.example/a.ics" })));
@@ -2270,10 +2263,18 @@ mod tests {
         assert_eq!(hosts, vec!["calendar.google.com".to_string()]);
         assert_eq!(render(&m.source.every, &json!({ "settings": v })), "10m");
         assert!(allowed(&render(&m.source.http, &json!({ "settings": v })), &hosts).is_ok());
-        // a module-only permission on a declarative plugin is refused
-        let mut bad = m.clone();
-        bad.permissions.calendar = true;
-        assert!(check(&bad, std::path::Path::new(""), true).unwrap().contains("Only a module"));
+        // a module may name only a calendar, and only an address on its own list
+        let mut json_source = m.clone();
+        json_source.source.format = "json".into();
+        assert!(check(&json_source, std::path::Path::new(""), true).unwrap().contains("only for a calendar"));
+        let mut elsewhere = m.clone();
+        elsewhere.needs.clear();
+        elsewhere.source.http = "https://evil.example.com/a.ics".into();
+        assert!(check(&elsewhere, std::path::Path::new(""), true).is_some());
+        // without an address, a module still has no network
+        let mut net_only = m.clone();
+        net_only.source.http.clear();
+        assert!(check(&net_only, std::path::Path::new(""), true).unwrap().contains("cannot ask the network"));
     }
 
     #[test]

@@ -1,8 +1,8 @@
-# The example plugins that ship with NADI, and the SDK they are written with.
+# The module plugins the app carries (time, ics-calendar), the examples (not part of the app), and the SDK they are written with.
 #   cd plugins && cargo build --release --target wasm32-unknown-unknown
-#   (or: powershell ./build.ps1, which also copies the .wasm files into src-tauri/plugins-bundled)
+#   (or: powershell ./build.ps1: the carried ones into src-tauri/plugins-bundled, the examples into dist/)
 [workspace]
-members = ["sdk", "audio-meter", "game-clock", "time", "agenda", "busy-meter"]
+members = ["sdk", "audio-meter", "game-clock", "time", "ics-calendar", "busy-meter"]
 resolver = "2"
 
 [profile.release]

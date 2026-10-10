@@ -1,5 +1,5 @@
-//! Page Reader: "what are you browsing". A plugin (see native.rs): a card for each page you have open, and a pill that
-//! names the page in front of you (the step of a walkthrough, the headline, the time left).
+//! Page Reader: "what are you browsing". A plugin (see native.rs): a card for each page you have open, in the expanded
+//! island. It shows nothing on the collapsed island.
 //!
 //! The window title only names the page, so the rest comes from the browser extension (the `nadi-chrome` repo): the
 //! page describes itself, exactly, and costs the browser next to nothing (see `ext`, the link to the extension, which
@@ -40,8 +40,6 @@ pub const BROWSE_MRU_CAP: usize = 8;
 const BROWSE_MRU_TTL_S: u64 = 180;
 /// the cards are shown while a browser window was seen this recently
 const FRESH_S: u64 = 30;
-/// the pill stays this long after the page in front stops being one it can name
-const PILL_GRACE_S: u64 = 4;
 
 /// what the plugin is, as the island's list shows it
 pub fn manifest() -> Manifest {
@@ -188,8 +186,6 @@ struct Reader {
     seen: Mutex<Option<Instant>>,
     /// the link to the extension is being served
     serving: AtomicBool,
-    /// the pill is offered (since when the page in front has been named, the last time it could be)
-    pill: Mutex<Option<(Instant, Instant)>>,
 }
 
 impl Reader {
@@ -286,15 +282,7 @@ impl Reader {
         self.mru.lock().unwrap().clear();
         self.info.lock().unwrap().clear();
         *self.seen.lock().unwrap() = None;
-        *self.pill.lock().unwrap() = None;
         self.private.store(false, Ordering::Relaxed);
-    }
-
-    /// what is in front of the browser's window (the page that leads the list), if the island can name it
-    fn in_front(&self) -> Option<(String, BrowseInfo)> {
-        let key = self.mru.lock().unwrap().front().map(|e| browse_key(&e.exe, &e.title))?;
-        let info = self.info.lock().unwrap().get(&key).cloned()?;
-        Some((key, info))
     }
 
     /// the cards: one for every recently focused page, most recent first, across all browsers
@@ -366,32 +354,6 @@ impl Reader {
 }
 
 // ------------------------------------------------------------------------------------------------------- the thread
-
-/// the pill: the page in front of you, when the island can name it
-fn pill(r: &Reader, ctx: &Ctx) {
-    let named = foreground_info()
-        .filter(|(_, exe, _)| exe.as_deref().map_or(false, is_browser_exe))
-        .and_then(|_| r.in_front())
-        .and_then(|(_, i)| i.kind)
-        .filter(|k| k.id != "video");
-    let mut slot = r.pill.lock().unwrap();
-    match named {
-        Some(k) => {
-            let since = slot.map_or_else(Instant::now, |(s, _)| s);
-            *slot = Some((since, Instant::now()));
-            ctx.offer_pill(Some("page"));
-            ctx.emit("page-tick", json!({ "kind": k.id, "main": k.main, "sub": k.sub, "since_secs": since.elapsed().as_secs_f64() }));
-        }
-        None => {
-            if slot.map_or(false, |(_, last)| last.elapsed() > Duration::from_secs(PILL_GRACE_S)) {
-                *slot = None;
-            }
-            if slot.is_none() {
-                ctx.offer_pill(None);
-            }
-        }
-    }
-}
 
 fn run(ctx: Ctx, r: Arc<Reader>) {
     std::thread::spawn(move || {
@@ -481,7 +443,6 @@ fn run(ctx: Ctx, r: Arc<Reader>) {
             }
             if r.keys().is_empty() {
                 versions.clear();
-                pill(&r, &ctx);
                 continue;
             }
             // a private window in front: nothing is read meanwhile, and the other cards stay as they are
@@ -535,7 +496,6 @@ fn run(ctx: Ctx, r: Arc<Reader>) {
                     r.upsert(key, info);
                 }
             }
-            pill(&r, &ctx);
         }
     });
 }

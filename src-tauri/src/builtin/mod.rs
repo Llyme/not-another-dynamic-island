@@ -9,9 +9,12 @@ use {crate::native::Adopted, crate::plugins::Manifest, serde_json::Value};
 
 pub mod claude_code;
 pub mod downloads;
+pub mod eyes;
 pub mod games;
+pub mod look;
 pub mod now_playing;
 pub mod pages;
+pub mod sound_light;
 pub mod toasts;
 pub mod work;
 
@@ -49,6 +52,8 @@ built_in! {
     claude_code => claude_code::ClaudeCode::default(),
     now_playing => now_playing::NowPlaying,
     toasts => toasts::Toasts,
+    eyes => eyes::Eyes,
+    sound_light => sound_light::SoundLight,
 }
 
 #[cfg(test)]
@@ -71,7 +76,7 @@ mod tests {
                 assert!(!s.label.is_empty(), "{}.{k} needs a label", m.id);
                 match s.kind.as_str() {
                     "toggle" => assert!(s.default.is_boolean(), "{}.{k}", m.id),
-                    "number" => assert!(s.default.is_number(), "{}.{k}", m.id),
+                    "number" | "range" => assert!(s.default.is_number(), "{}.{k}", m.id),
                     "text" => assert!(s.default.is_string(), "{}.{k}", m.id),
                     "choice" => assert!(s.options.iter().any(|o| o.value == s.default), "{}.{k}: the default is not one of the options", m.id),
                     other => panic!("{}.{k}: unknown setting type {other}", m.id),
@@ -105,7 +110,7 @@ mod tests {
             }
         }
         // the pills the page knows by name
-        for name in ["game", "work", "page", "media", "usage_peek"] {
+        for name in ["game", "work", "media", "usage_peek"] {
             assert!(seen.iter().any(|s| s == name), "no plugin offers the {name} pill");
         }
     }
@@ -125,6 +130,13 @@ mod tests {
         assert!(!get("downloads").on);
         assert!(get("claude-code").on && get("claude-code").values["alerts"] == json!(false));
         assert!(!get("page-reader").on && get("page-reader").values["images"] == json!(false));
+
+        // the eyes and the sound light were two settings of the app (and the sound was heard for both): each keeps its own
+        let old = json!({ "show_eyes": false, "react_to_audio": true, "audio_bleed": 35 });
+        let list = adopted(&old);
+        let get = |id: &str| &list[by_id(&list, id)].1;
+        assert!(!get("eyes").on && get("eyes").values["react"] == json!(true));
+        assert!(get("sound-light").on && get("sound-light").values["ambient"] == json!(35));
 
         // a new install (no old file): what each plugin says it starts as
         let fresh = adopted(&Value::Null);

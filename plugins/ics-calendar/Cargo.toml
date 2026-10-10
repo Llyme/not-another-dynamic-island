@@ -1,6 +1,6 @@
 [package]
-name = "agenda"
-version = "1.0.0"
+name = "ics-calendar"
+version = "3.0.0"
 edition = "2021"
 
 [lib]

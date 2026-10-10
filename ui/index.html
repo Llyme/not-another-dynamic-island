@@ -31,6 +31,7 @@
       </div>
       <div id="lock-badge" aria-hidden="true"></div>
       <canvas id="viz"></canvas>
+      <canvas id="rings"></canvas>
       <canvas id="face"></canvas>
       <div id="notification" class="hidden">
         <div id="notif-icon"></div>
@@ -120,7 +121,7 @@
               <div class="set-title">Dimensions</div>
               <div class="set-card">
                 <label class="set-row">
-                  <span class="set-lab tipped" data-tip="Width of the collapsed island (the idle and game pills keep their proportions)">Collapsed width</span>
+                  <span class="set-lab tipped" data-tip="Width of the collapsed island: the plain island, the pills and the banners are all this wide">Collapsed width</span>
                   <span class="set-sl">
                     <input type="range" id="set-compact-width" data-default="260" min="180" max="560" step="10" />
                     <span class="set-val" id="set-compact-width-label"></span>
@@ -157,21 +158,6 @@
                   <span class="set-lab">Accent color</span>
                   <span class="swatches" id="set-accent" role="group" aria-label="Accent color"></span>
                 </div>
-                <label class="set-row">
-                  <span class="set-lab tipped" data-tip="Show the eyes (the sound light stays either way)">Show the eyes</span>
-                  <input class="set-end" type="checkbox" id="set-show-eyes" />
-                </label>
-                <label class="set-row">
-                  <span class="set-lab tipped" data-tip="The eyes and the lights move with the sound that plays">React to sound</span>
-                  <input class="set-end" type="checkbox" id="set-react-to-audio" />
-                </label>
-                <label class="set-row">
-                  <span class="set-lab tipped" data-tip="Sound light bleeding outside the island: strength and reach (0 = off)">Ambient light</span>
-                  <span class="set-sl">
-                    <input type="range" id="set-audio-bleed" data-default="60" min="0" max="100" step="5" />
-                    <span class="set-val" id="set-audio-bleed-label"></span>
-                  </span>
-                </label>
                 <label class="set-row">
                   <span class="set-lab tipped" data-tip="Glow around a status: strength and reach">Glow</span>
                   <span class="set-sl">
