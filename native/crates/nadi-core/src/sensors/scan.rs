@@ -27,6 +27,22 @@ pub struct Win {
 }
 
 /// The same, and with `tools` the tool windows too (flagged `tool`): the popups of other apps.
+/// A process's program, asked of Windows once and kept a minute (scans every second or two would ask every process each time).
+fn exe_of(pid: u32) -> String {
+    static KEPT: std::sync::Mutex<Option<HashMap<u32, (String, std::time::Instant)>>> = std::sync::Mutex::new(None);
+    let mut g = KEPT.lock().unwrap();
+    let m = g.get_or_insert_with(HashMap::new);
+    if let Some((e, _)) = m.get(&pid).filter(|(_, at)| at.elapsed().as_secs() < 60) {
+        return e.clone();
+    }
+    let e = exe_path_for_pid(pid).unwrap_or_default();
+    if m.len() > 512 {
+        m.retain(|_, (_, at)| at.elapsed().as_secs() < 60);
+    }
+    m.insert(pid, (e.clone(), std::time::Instant::now()));
+    e
+}
+
 pub fn visible_windows_with(tools: bool) -> Vec<Win> {
     struct Ctx {
         out: Vec<Win>,
@@ -63,11 +79,7 @@ pub fn visible_windows_with(tools: bool) -> Vec<Win> {
         if pid == 0 || pid == ctx.me {
             return BOOL(1);
         }
-        let exe = ctx
-            .exes
-            .entry(pid)
-            .or_insert_with(|| exe_path_for_pid(pid).unwrap_or_default())
-            .clone();
+        let exe = ctx.exes.entry(pid).or_insert_with(|| exe_of(pid)).clone();
         if exe.is_empty() {
             return BOOL(1);
         }

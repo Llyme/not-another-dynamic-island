@@ -94,6 +94,7 @@ input[type=range] { accent-color: var(--accent); flex: 1; min-width: 80px; }
 #sheet.on { display: flex; }
 #sheet .box { width: 400px; background: var(--card); border-radius: 16px; padding: 16px; display: flex; flex-direction: column; gap: 12px; box-shadow: 0 0 0 1px #24242a; }
 .tip { position: fixed; pointer-events: none; background: #26262c; color: var(--text); padding: 7px 10px; border-radius: 9px; font-size: 12px; max-width: 320px; opacity: 0; transition: opacity .15s; z-index: 9; white-space: pre-wrap; }
+.hint { text-decoration: underline dotted; text-decoration-color: var(--dim); text-underline-offset: 3px; cursor: help; flex: 0 1 auto; margin-right: auto; }
 </style>
 </head>
 <body>
@@ -121,6 +122,8 @@ const ICONS = {
   taskbar: "M3 15h18v5H3zM6 17.5h2",
   win: "M4 5l7-1v7H4zM13 4l7-1v8h-7zM4 13h7v7l-7-1zM13 13h7v8l-7-1z",
   power: "M12 3v8M6.4 6.4a8 8 0 1 0 11.2 0",
+  moon: "M19.5 14.5A8 8 0 0 1 9.5 4.5a8 8 0 1 0 10 10z",
+  bell: "M6 16v-5a6 6 0 0 1 12 0v5l1.5 2h-15zM10 20.5a2.2 2.2 0 0 0 4 0",
   folder: "M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z",
 };
 const PAGES = [["plugins", "Plugins"], ["look", "Look"], ["frame", "Frame"]];
@@ -165,6 +168,8 @@ function tiles(cols, items, value, onPick) {
   return t;
 }
 function card(name, ...kids) { const c = el("div", "card"); if (name) c.append(el("div", "k", name)); c.append(...kids); return c; }
+// (a row whose words say more in a tip: underlined with dots, so it shows there is more)
+function hintRow(label, tip, control, ico) { const r = row(label, control, ico); const l = r.querySelector("span.grow"); l.classList.add("hint"); tipOn(l, tip); return r; }
 function row(label, control, ico) { const r = el("div", "row"); if (ico) { const i = icon(ico, "s"); i.style.color = "var(--dim)"; r.append(i); } r.append(el("span", "grow", label), control); return r; }
 // (a plugin's own colour, from its name: its picture is its first letter on it)
 const HUES = ["#d97757", "#e8b04a", "#5ac88c", "#3fb6c6", "#4f8ff0", "#a77bf3", "#e86a9a"];
@@ -386,6 +391,12 @@ function pluginPage(m, id) {
     for (const x of perms) { const r = el("div", "perm"); const i = icon(/network|internet/i.test(x.name) ? "net" : "shield", "s"); i.style.color = "var(--dim)"; r.append(i, el("span", "grow", x.name)); if (x.detail) r.append(el("span", "sub", x.detail)); tipOn(r, x.why || x.detail || x.name); c.append(r); }
     right.append(c);
   }
+  // (its banners while it is quiet (full screen, a game): the small ones wait, unless it may)
+  if (p && p.banners) {
+    const list = S.config.quiet_banners || [];
+    const flip = on => send("config", { patch: { quiet_banners: on ? [...list.filter(x => x !== id), id] : list.filter(x => x !== id) } });
+    right.append(card("Banners", hintRow("When Quiet", "Show every banner from this plugin, even over full-screen apps and games.", sw(list.includes(id), flip), "moon")));
+  }
   if (p && (p.actions || []).length) {
     const c = card("Actions"); const r = el("div", "row"); r.style.flexWrap = "wrap";
     for (const a of p.actions) r.append(...actionField(p, a));
@@ -532,8 +543,10 @@ function pageFrame(m) {
       ["fullscreen", "Full Screen", `<rect x="8" y="5" width="48" height="28" rx="3" fill="none" stroke="${grey}" stroke-width="1.5"/><path d="M14 11V9h3M50 11V9h-3M14 27v2h3M50 27v2h-3" stroke="${grey}" stroke-width="1.5" fill="none"/>`],
       ["maximized", "Maximized", `<rect x="8" y="5" width="48" height="28" rx="3" fill="none" stroke="${grey}" stroke-width="1.5"/><rect x="12" y="9" width="40" height="20" rx="2" fill="none" stroke="${grey}" stroke-width="1.5"/>`],
     ], c.auto_hide || "fullscreen", v => set({ auto_hide: v }))));
+  grid.append(card("Banners",
+    hintRow("Quiet Over Full Screen", "Minor banners wait while a full-screen app or game is in front. Banners that need you still show.", sw(c.quiet_full !== false, on => set({ quiet_full: on })), "bell")));
   grid.append(card("Windows",
-    row("Taskbar", seg([["keep", "Keep"], ["hide", "Hide"]], c.taskbar || "keep", v => set({ taskbar: v })), "taskbar"),
+    hintRow("Taskbar", "Keep: widgets stay clear of it. Under: widgets stand at the screen's edge, the taskbar under them. Hide: hidden.", seg([["keep", "Keep"], ["under", "Under"], ["hide", "Hide"]], c.taskbar || "keep", v => set({ taskbar: v })), "taskbar"),
     row("Windows Key", seg([["auto", "Auto"], ["launcher", "Launcher"], ["start", "Start"]], c.win_key || "auto", v => set({ win_key: v })), "win"),
     row("Start With Windows", sw(!!S.autostart, on => send("autostart", { on })), "power")));
   m.append(grid);

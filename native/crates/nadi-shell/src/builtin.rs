@@ -14,6 +14,13 @@ pub const PLUGIN: &str = "nadi";
 pub const DOCK: &str = "dock";
 pub const QUICK: &str = "quick";
 pub const TRAY: &str = "tray";
+/// the launcher's button, a widget of its own (placed where you like, beside the dock or not)
+pub const APPS: &str = "apps";
+
+/// The launcher's button, as a widget: pressed, the launcher opens.
+pub fn apps_widget() -> Value {
+    json!({ "peek": { "icon": "grid" }, "press": "launcher", "tip": "Apps" })
+}
 
 /// The tray as a widget: at rest its first icons (the pinned ones first) and how many more; open, every one.
 /// The icons the Tray widget shows: the apps' (Windows' own, such as the speaker and removable drives, are not shown, nor NADI's
@@ -62,7 +69,7 @@ pub fn tray_row(list: &[crate::trayhost::Icon], pinned: &[String]) -> Vec<String
 /// first (a mark after it), so they can be dragged in and out of the row.
 pub fn tray(pinned: &[String], editing: bool) -> Value {
     let list = tray_icons();
-    let item = |i: &crate::trayhost::Icon| json!({ "image": format!("trayicon:{}", i.icon), "action": format!("tray:{}:{}", i.owner, i.uid), "label": i.tip.lines().next().unwrap_or(""), "word": tray_words(i).1 });
+    let item = |i: &crate::trayhost::Icon| json!({ "image": format!("trayicon:{}", i.icon), "action": format!("tray:{}:{}", i.owner, i.uid), "label": i.tip.lines().next().unwrap_or(""), "news": tray_news(&i.tip, &tray_words(i).1) });
     let keys = tray_row(&list, pinned);
     let mut row: Vec<&crate::trayhost::Icon> = keys.iter().filter_map(|k| list.iter().find(|i| &tray_key(i) == k)).collect();
     let split = row.len();
@@ -105,6 +112,92 @@ pub fn tray_words(i: &crate::trayhost::Icon) -> (String, String) {
         .next()
         .unwrap_or_default();
     (name, status)
+}
+
+/// A menu's item for what a window works on: its folder opened, or its document shown in its folder (none: it is not found).
+fn context_item(w: &winlist::AppWindow) -> Option<Value> {
+    match crate::context::of(w.hwnd, &w.exe, &w.title)? {
+        crate::context::Context::Folder(_) => Some(json!({ "icon": "folder", "label": "Open Folder", "action": format!("ctx:{}", w.hwnd) })),
+        crate::context::Context::File(_) => Some(json!({ "icon": "file", "label": "Show Document", "action": format!("ctx:{}", w.hwnd) })),
+    }
+}
+
+/// A window's title less its app's name ("main.rs - NADI - Visual Studio Code" is "main.rs - NADI"); the name alone: nothing.
+pub fn short_title(title: &str, app: &str) -> String {
+    let t = title.trim();
+    let low = t.to_lowercase();
+    let name = app.trim().to_lowercase();
+    if name.is_empty() || low == name {
+        return if low == name { String::new() } else { t.to_string() };
+    }
+    for sep in [" - ", " — ", " – ", " | ", ": "] {
+        let tail = format!("{sep}{name}");
+        if low.ends_with(&tail) {
+            return t[..t.len() - tail.len()].trim().to_string();
+        }
+        let head = format!("{name}{sep}");
+        if low.starts_with(&head) {
+            return t[head.len()..].trim().to_string();
+        }
+    }
+    t.to_string()
+}
+
+/// What a tray icon's app has to say worth a glance, short: connected or not ({ "mark": "ok" | "off" }), how fast it moves things
+/// ({ "text": "↓ 43 KB/s" }), a count ({ "text": "3" }); else nothing (a version, its own name, anything longer).
+pub fn tray_news(tip: &str, status: &str) -> Value {
+    let low = status.to_lowercase();
+    if ["disconnected", "not connected", "offline", "no connection"].iter().any(|w| low.contains(w)) {
+        return json!({ "mark": "off" });
+    }
+    if low == "connected" || low.starts_with("connected") || low == "online" || low.starts_with("protected") {
+        return json!({ "mark": "ok" });
+    }
+    // (speeds, down and up, anywhere in its tip)
+    let (mut down, mut up) = (None::<f64>, None::<f64>);
+    for line in tip.lines() {
+        let l = line.to_lowercase();
+        let Some(v) = speed_of(&l) else { continue };
+        if ["dl", "down", "↓", "receiv"].iter().any(|w| l.contains(w)) {
+            down = Some(down.unwrap_or(0.0) + v);
+        } else if ["ul", "up", "↑", "send"].iter().any(|w| l.contains(w)) {
+            up = Some(up.unwrap_or(0.0) + v);
+        }
+    }
+    let rate = |b: f64| {
+        let (v, u) = if b >= 1048576.0 { (b / 1048576.0, "MB/s") } else { (b / 1024.0, "KB/s") };
+        if v >= 10.0 { format!("{v:.0} {u}") } else { format!("{v:.1} {u}") }
+    };
+    let mut parts = Vec::new();
+    if let Some(d) = down.filter(|d| *d >= 1024.0) {
+        parts.push(format!("↓ {}", rate(d)));
+    }
+    if let Some(u) = up.filter(|u| *u >= 10240.0) {
+        parts.push(format!("↑ {}", rate(u)));
+    }
+    if !parts.is_empty() {
+        return json!({ "text": parts.join("  ") });
+    }
+    // (a count)
+    if !status.is_empty() && status.len() <= 4 && status.chars().all(|c| c.is_ascii_digit()) {
+        return json!({ "text": status });
+    }
+    Value::Null
+}
+
+/// A speed in a line ("43.2 KiB/s", "1,2 MB/s"), in bytes a second.
+fn speed_of(l: &str) -> Option<f64> {
+    let units = [("gib/s", 1073741824.0), ("gb/s", 1e9), ("mib/s", 1048576.0), ("mb/s", 1e6), ("kib/s", 1024.0), ("kb/s", 1e3), ("b/s", 1.0)];
+    for (u, k) in units {
+        if let Some(at) = l.find(u) {
+            let before = l[..at].trim_end();
+            let num: String = before.chars().rev().take_while(|c| c.is_ascii_digit() || *c == '.' || *c == ',').collect::<Vec<_>>().into_iter().rev().collect();
+            if let Ok(v) = num.replace(',', ".").parse::<f64>() {
+                return Some(v * k);
+            }
+        }
+    }
+    None
 }
 
 /// Memory, short: "480 MB", "1.4 GB".
@@ -311,6 +404,25 @@ impl Builtins {
                 let u = used(&a.key);
                 let file = a.key.rsplit(['\\', '/']).next().unwrap_or("").to_string();
                 let running = !a.windows.is_empty();
+                let mut menu = vec![
+                    json!({ "icon": "window-new", "label": "New Window", "action": format!("launch:{}", a.key) }),
+                    json!({ "icon": if a.pinned { "unpin" } else { "pin" }, "label": if a.pinned { "Unpin" } else { "Pin" }, "action": format!("pin:{}", a.key) }),
+                ];
+                if std::path::Path::new(&a.key).is_file() {
+                    menu.push(json!({ "icon": "folder", "label": "Reveal in File Explorer", "action": format!("reveal:{}", a.key) }));
+                }
+                // (what its window works on: its folder, or its document, when it can be found)
+                if let Some(w) = a.windows.iter().find(|w| w.front).or(a.windows.first()) {
+                    if let Some(item) = context_item(w) {
+                        menu.push(item);
+                    }
+                }
+                menu.push(json!({ "icon": "x", "label": if a.windows.len() > 1 { "Close All" } else { "Close" }, "action": format!("closeall:{}", a.key), "hold": true, "tone": "no" }));
+                let front_i = {
+                    let mut hw: Vec<isize> = a.windows.iter().map(|w| w.hwnd).collect();
+                    hw.sort();
+                    a.windows.iter().find(|w| w.front).and_then(|f| hw.iter().position(|h| *h == f.hwnd))
+                };
                 json!({
                     "key": a.key, "image": a.image, "name": a.name, "windows": a.windows.len(), "front": a.windows.iter().any(|w| w.front),
                     "cpu": if running { json!(u.cpu) } else { Value::Null },
@@ -318,41 +430,63 @@ impl Builtins {
                     "progress": progress.get(&file).copied(),
                     "sound": self.sounding.contains(&a.key),
                     "attention": a.windows.iter().any(|w| self.flashing.contains(&w.hwnd)),
-                    // (its right-click: new window, pin, close all (held))
-                    "menu": [
-                        { "icon": "window-new", "label": "New Window", "action": format!("launch:{}", a.key) },
-                        { "icon": if a.pinned { "unpin" } else { "pin" }, "label": if a.pinned { "Unpin" } else { "Pin" }, "action": format!("pin:{}", a.key) },
-                        { "icon": "x", "label": if a.windows.len() > 1 { "Close All" } else { "Close" }, "action": format!("closeall:{}", a.key), "hold": true, "tone": "no" },
-                    ],
+                    // (its right-click: new window, pin, its file in Explorer (a program on disk, not a store app's), close all (held))
+                    "menu": menu,
                     // (the app in front: its window, and what it used lately, for the dock at its largest)
                     "front_hwnd": a.windows.iter().find(|w| w.front).map(|w| w.hwnd),
+                    // (which of its windows is in front, in the order its dots are in (none: none of them))
+                    "front_i": front_i,
+                    // (what you are in, in it: its front window's title, less the app's own name)
+                    "title": a.windows.iter().find(|w| w.front).map(|w| short_title(&w.title, &a.name)),
                     "hist": if a.windows.iter().any(|w| w.front) { json!(self.history.get(&a.key).map(|h| h.iter().map(|(c, r)| [*c, *r]).collect::<Vec<[f32; 2]>>()).unwrap_or_default()) } else { Value::Null },
                     "mem_text": if running { json!(mem_text(u.mem)) } else { Value::Null },
                 })
             })
             .collect();
-        let mut tiles = vec![json!({ "icon": "grid", "title": "Apps", "action": "launcher" })];
+        let mut tiles: Vec<Value> = Vec::new();
+        let mut groups: Vec<Value> = Vec::new();
+        let mut pins: Vec<Value> = Vec::new();
         for a in &apps {
             if a.windows.is_empty() {
-                tiles.push(json!({ "image": a.image, "title": a.name, "action": format!("launch:{}", a.key) }));
+                pins.push(json!({ "image": a.image, "name": a.name, "action": format!("launch:{}", a.key) }));
+                continue;
             }
+            let first = tiles.len();
             for w in &a.windows {
                 // (a window put away has no picture to show: its app's, in its place)
                 let title = if w.title.is_empty() { a.name.clone() } else { w.title.clone() };
                 let u = used(&a.key);
                 // (its menu: close it, pin its app, end its task; ending is held)
-                let menu = json!([
-                    { "icon": "x", "label": "Close", "action": format!("close:{}", w.hwnd) },
-                    { "icon": if a.pinned { "unpin" } else { "pin" }, "label": if a.pinned { "Unpin" } else { "Pin" }, "action": format!("pin:{}", a.key) },
-                    { "icon": "power", "label": "End Task", "action": format!("kill:{}", w.hwnd), "hold": true, "tone": "no" },
-                ]);
+                let mut menu = vec![
+                    json!({ "icon": "x", "label": "Close", "action": format!("close:{}", w.hwnd) }),
+                    json!({ "icon": if a.pinned { "unpin" } else { "pin" }, "label": if a.pinned { "Unpin" } else { "Pin" }, "action": format!("pin:{}", a.key) }),
+                ];
+                if std::path::Path::new(&a.key).is_file() {
+                    menu.push(json!({ "icon": "folder", "label": "Reveal in File Explorer", "action": format!("reveal:{}", a.key) }));
+                }
+                if let Some(item) = context_item(w) {
+                    menu.push(item);
+                }
+                menu.push(json!({ "icon": "power", "label": "End Task", "action": format!("kill:{}", w.hwnd), "hold": true, "tone": "no" }));
                 let file = a.key.rsplit(['\\', '/']).next().unwrap_or("").to_string();
-                tiles.push(json!({ "key": a.key, "hwnd": if w.minimized { 0 } else { w.hwnd }, "image": a.image, "title": title, "action": format!("win:{}", w.hwnd), "front": w.front, "cpu": u.cpu, "ram": (u.mem as f64 / total) as f32, "progress": progress.get(&file).copied(), "sound": self.sounding.contains(&a.key), "attention": self.flashing.contains(&w.hwnd), "menu": menu }));
+                tiles.push(json!({ "key": a.key, "hwnd": if w.minimized { 0 } else { w.hwnd }, "image": a.image, "title": title, "short": short_title(&title, &a.name), "action": format!("win:{}", w.hwnd), "front": w.front, "cpu": u.cpu, "ram": (u.mem as f64 / total) as f32, "progress": progress.get(&file).copied(), "sound": self.sounding.contains(&a.key), "attention": self.flashing.contains(&w.hwnd), "menu": menu }));
             }
+            groups.push(json!({ "name": a.name, "image": a.image, "windows": tiles[first..].to_vec() }));
         }
-        let n = tiles.len() as f32;
-        let width = 2.0 * 16.0 + n * crate::blocks::WIN_W + (n - 1.0) * crate::blocks::WIN_GAP;
-        json!({ "peek": { "dock": { "items": items, "numbers": self.numbers } }, "panel": { "width": width, "body": [{ "kind": "windows", "items": tiles }] }, "tip": "Apps" })
+        // (open: each app its name over its windows, as wide as they are side by side, the apps in rows; its pinned ones closed at
+        // its foot)
+        let per = |g: &Value| {
+            let n = g["windows"].as_array().map_or(1, |w| w.len()) as f32;
+            n * crate::blocks::APPWIN_W + (n - 1.0) * 8.0
+        };
+        let total: f32 = groups.iter().map(per).sum::<f32>() + (groups.len().max(1) - 1) as f32 * 16.0;
+        let width = (2.0 * 16.0 + total).clamp(360.0, 940.0);
+        json!({
+            "peek": { "dock": { "items": items, "numbers": self.numbers } },
+            "panel": { "width": width, "body": [{ "kind": "appwindows", "groups": groups, "pins": pins }] },
+            "tiles": tiles,
+            "tip": "Apps",
+        })
     }
 
     /// Quick settings, as a widget.
@@ -368,7 +502,7 @@ impl Builtins {
         let headset = self.outputs.iter().find(|d| d.on).is_some_and(|d| crate::audiodev::is_headset(&d.name));
         let slider_icon = if muted || vol <= 0.0 { "volume-x" } else if headset { "headphones" } else { "volume" };
         let pc = |v: f32| format!("{}%", (v * 100.0).round() as i32);
-        let mut body = vec![json!({ "kind": "slider", "label": "Volume", "icon": slider_icon, "value": if muted { 0.0 } else { vol }, "text": if muted { "Muted".to_string() } else { format!("{pct}%") }, "action": "volume", "press": "mute" })];
+        let mut body = vec![json!({ "kind": "slider", "label": "Volume", "icon": slider_icon, "value": vol, "muted": muted, "text": if muted { "Muted".to_string() } else { format!("{pct}%") }, "action": "volume", "press": "mute" })];
         // (where the sound goes: each output a chip, the one used filled)
         if self.outputs.len() > 1 {
             let chips: Vec<Value> = self.outputs.iter().map(|d| json!({ "icon": if crate::audiodev::is_headset(&d.name) { "headphones" } else { "speaker" }, "text": d.name, "on": d.on, "action": format!("out:{}", d.id) })).collect();
@@ -376,11 +510,11 @@ impl Builtins {
         }
         // (each program that played lately: its own volume, under its picture)
         for a in self.app_volumes.iter().take(5) {
-            body.push(json!({ "kind": "slider", "image": format!("exe:{}", a.key), "muted": a.muted, "value": if a.muted { 0.0 } else { a.volume }, "text": if a.muted { "Muted".to_string() } else { pc(a.volume) }, "action": format!("appvol:{}", a.key), "press": format!("appmute:{}", a.key) }));
+            body.push(json!({ "kind": "slider", "image": format!("exe:{}", a.key), "muted": a.muted, "value": a.volume, "text": if a.muted { "Muted".to_string() } else { pc(a.volume) }, "action": format!("appvol:{}", a.key), "press": format!("appmute:{}", a.key) }));
         }
         // (the microphone: its volume; which one, when there are more)
         if let Some((mv, mm)) = self.mic {
-            body.push(json!({ "kind": "slider", "icon": "mic", "value": if mm { 0.0 } else { mv }, "text": if mm { "Muted".to_string() } else { pc(mv) }, "action": "micvol", "press": "micmute" }));
+            body.push(json!({ "kind": "slider", "icon": "mic", "value": mv, "muted": mm, "text": if mm { "Muted".to_string() } else { pc(mv) }, "action": "micvol", "press": "micmute" }));
         }
         if self.inputs.len() > 1 {
             let chips: Vec<Value> = self.inputs.iter().map(|d| json!({ "icon": "mic", "text": d.name, "on": d.on, "action": format!("in:{}", d.id) })).collect();
@@ -405,6 +539,30 @@ impl Builtins {
         if action == "launcher" {
             return (Effect::Launcher, false);
         }
+        // (what a window works on: its folder opened, or its document shown)
+        if let Some(h) = action.strip_prefix("ctx:").and_then(|h| h.parse::<isize>().ok()) {
+            if let Some(w) = apps.iter().flat_map(|a| a.windows.iter()).find(|w| w.hwnd == h) {
+                if let Some(c) = crate::context::of(w.hwnd, &w.exe, &w.title) {
+                    crate::context::open(&c);
+                }
+            }
+            return (Effect::None, false);
+        }
+        // (its program's file, chosen in a File Explorer window)
+        if let Some(path) = action.strip_prefix("reveal:") {
+            if std::path::Path::new(path).is_file() {
+                // (as Explorer reads it: /select, then the path in quotes of its own (a path with spaces is otherwise not found, and
+                // Explorer opens Documents))
+                use std::os::windows::process::CommandExt;
+                let _ = std::process::Command::new("explorer.exe").raw_arg(format!("/select,\"{path}\"")).spawn();
+            }
+            return (Effect::None, false);
+        }
+        // (the Now Card's cover: what plays there, paused or played)
+        if let Some(source) = action.strip_prefix("mediatoggle:") {
+            nadi_core::sensors::media::media_play_pause(Some(source.to_string()));
+            return (Effect::None, false);
+        }
         // a tray icon: its app hears the click, as from the taskbar
         if let Some(rest) = action.strip_prefix("tray:") {
             if let Some((owner, uid)) = rest.split_once(':') {
@@ -426,14 +584,37 @@ impl Builtins {
                 // one: in front, it goes down; else it comes up
                 1 if a.windows[0].front => winlist::minimize(a.windows[0].hwnd),
                 1 => winlist::activate(a.windows[0].hwnd),
-                // several: the next one after the one in front (the screen's order: the first not in front)
+                // several: one in front, the next of them in turn (each in its turn, all of them); none, the one used last
                 _ => {
-                    let next = a.windows.iter().find(|w| !w.front).unwrap_or(&a.windows[0]);
-                    winlist::activate(next.hwnd);
+                    let mut hw: Vec<isize> = a.windows.iter().map(|w| w.hwnd).collect();
+                    hw.sort();
+                    match a.windows.iter().find(|w| w.front).and_then(|f| hw.iter().position(|h| *h == f.hwnd)) {
+                        Some(i) => winlist::activate(hw[(i + 1) % hw.len()]),
+                        None => winlist::activate(a.windows[0].hwnd),
+                    }
                 }
             }
             self.scanned = None;
             return (Effect::Changed, false);
+        }
+        // (the wheel over an app: its windows one after another, up or down)
+        if let Some((i, dir)) = action.strip_prefix("appwheel:").and_then(|r| r.split_once(':')).and_then(|(i, d)| Some((i.parse::<usize>().ok()?, d == "up"))) {
+            let Some(a) = apps.get(i) else { return (Effect::None, false) };
+            let mut hw: Vec<isize> = a.windows.iter().map(|w| w.hwnd).collect();
+            hw.sort();
+            if !hw.is_empty() {
+                let at = a.windows.iter().find(|w| w.front).and_then(|f| hw.iter().position(|h| *h == f.hwnd));
+                let n = hw.len();
+                let next = match at {
+                    Some(i) if dir => (i + n - 1) % n,
+                    Some(i) => (i + 1) % n,
+                    None => 0,
+                };
+                winlist::activate(hw[next]);
+                self.scanned = None;
+                return (Effect::Changed, false);
+            }
+            return (Effect::None, false);
         }
         if let Some(h) = action.strip_prefix("win:").and_then(|h| h.parse::<isize>().ok()) {
             winlist::activate(h);
@@ -483,6 +664,10 @@ impl Builtins {
         }
         if let Some(k) = action.strip_prefix("appvol:") {
             self.audio.set_volume(k, args["fraction"].as_f64().unwrap_or(0.0) as f32);
+            // (set while muted: heard again, as Windows' own does)
+            if self.app_volumes.iter().any(|a| a.key == k && a.muted) {
+                self.audio.toggle_mute(k);
+            }
             self.app_volumes = self.audio.apps();
             return (Effect::Changed, false);
         }
@@ -493,6 +678,9 @@ impl Builtins {
         }
         if action == "micvol" {
             crate::audiodev::mic_set(args["fraction"].as_f64().unwrap_or(0.0) as f32);
+            if self.mic.is_some_and(|(_, m)| m) {
+                crate::audiodev::mic_mute();
+            }
             self.mic = crate::audiodev::mic_get();
             return (Effect::Changed, false);
         }
@@ -550,6 +738,9 @@ impl Builtins {
             "volume" => {
                 let f = args["fraction"].as_f64().unwrap_or(0.0) as f32;
                 crate::volume::set(f);
+                if self.volume.is_some_and(|(_, m)| m) {
+                    crate::volume::toggle_mute();
+                }
                 self.volume = crate::volume::get();
                 (Effect::Changed, false)
             }

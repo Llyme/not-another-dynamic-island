@@ -55,13 +55,13 @@ pub struct Metrics {
     pub fillet: f32,
     /// between two pieces on an edge
     pub gap: f32,
-    /// a corner's piece is at most this long
+    /// a corner's piece is at most this long (long enough for a large tray, or a dock, in a corner's row)
     pub corner_max: f32,
 }
 
 impl Default for Metrics {
     fn default() -> Self {
-        Metrics { depth_h: 32.0, depth_v: 40.0, fillet: 10.0, gap: 6.0, corner_max: 260.0 }
+        Metrics { depth_h: 32.0, depth_v: 40.0, fillet: 10.0, gap: 6.0, corner_max: 640.0 }
     }
 }
 

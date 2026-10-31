@@ -45,7 +45,7 @@ pub const FLOAT_OFF: f32 = 8.0;
 /// how tall the dock stands
 const DOCK_DEPTH: f32 = 56.0;
 /// how tall the dock stands at its largest, with an app on its stage
-const DOCK_LARGE: f32 = 112.0;
+const DOCK_LARGE: f32 = 68.0;
 /// a press must be held this long, without moving more than `DRAG_START`, to pick its widget up
 const HOLD: Duration = Duration::from_millis(450);
 const DRAG_START: f32 = 6.0;
@@ -145,6 +145,23 @@ const TIP_NEXT: Duration = Duration::from_millis(90);
 const TIP_W: f32 = 260.0;
 
 /// Something held until its ring fills (it cannot be undone): a thing in a widget's panel, or a row of a menu.
+/// A slider or a bar to seek on, being dragged: its widget, its action, its press area (in its panel), where its knob is, and when
+/// its plugin was last told (a slider is told as it moves, a bar to seek on when let go).
+struct Slide {
+    si: usize,
+    key: String,
+    plugin: String,
+    action: String,
+    rect: Rect,
+    frac: f32,
+    told: Instant,
+    told_frac: f32,
+    live: bool,
+}
+
+/// how often a dragged slider tells its plugin
+const SLIDE_EVERY: Duration = Duration::from_millis(40);
+
 struct Hold {
     si: usize,
     /// the widget it is in (none: the menu's row `row`)
@@ -311,6 +328,21 @@ struct Banner {
     si: Option<usize>,
     /// a live one's words, still being typed in
     typing: bool,
+    /// words of it too long for their room, scrolling
+    marquee: bool,
+    /// its glow still settling (or its rings going out)
+    glowing: bool,
+}
+
+impl Screen {
+    /// The banner put away on this screen: its piece and its glow.
+    fn hide_banner(&self) {
+        for p in [&self.banner_piece, &self.banner_glow].into_iter().flatten() {
+            unsafe {
+                let _ = p.visual.SetOffsetY2(-1000.0);
+            }
+        }
+    }
 }
 
 struct Screen {
@@ -320,9 +352,13 @@ struct Screen {
     h: f32,
     /// where the frame may go: the monitor less the taskbar (logical, in the monitor)
     area: Bx,
+    /// the taskbar under the widgets ("under"): its edge and how deep it is; the widgets on that edge as deep as it (logical)
+    bar: Option<(Edge, f32)>,
     primary: bool,
     items: BTreeMap<String, Item>,
     banner_piece: Option<Piece>,
+    /// the banner's glow, on the glass under it
+    banner_glow: Option<Piece>,
     /// where the banner comes out: the Notifications widget's place, laid out with the banner's size (so the others make room)
     banner_slot: Option<(Place, Bx, bool)>,
     /// an app is full screen in front on this monitor (a game, a video)
@@ -375,6 +411,9 @@ pub struct Frame {
     tip_want: Option<(String, Instant)>,
     /// something held until its ring fills
     hold: Option<Hold>,
+    /// a slider (or a bar to seek on) being dragged, and one just let go of (its knob kept where it was let go until its plugin says)
+    slide: Option<Slide>,
+    slid: Option<(usize, String, Instant)>,
     /// the box to type in, over a field (made the first time)
     input: Option<crate::inputbox::InputBox>,
     /// the dock's meters as drawn (each program's use and download, springing to what it is), and how loud each program is now
@@ -406,6 +445,12 @@ pub struct Frame {
     dock_was_seen: bool,
     /// changes that would lay the widgets out again, made while all were tucked away: done as one comes out
     layout_pending: bool,
+    /// the app in front on the dock, the one before it, and when it changed (its card grows, its ground pops in)
+    dock_front: Option<(String, Option<String>, Instant)>,
+    /// when each widget last came out of its edge (its glow plays again from strong)
+    shown_at: HashMap<String, Instant>,
+    /// what the plugins host was last told of each plugin: can any of its widgets be seen
+    told_seen: HashMap<String, bool>,
     /// how long and deep each widget was laid out ("screen|key"): one whose words change but not its size is only drawn again
     sizes: HashMap<String, (f32, f32)>,
     /// the panels scrolled back from their end (one that keeps to its end stays where it was put), and how tall each was then
@@ -512,6 +557,8 @@ impl Frame {
             tip: None,
             tip_want: None,
             hold: None,
+            slide: None,
+            slid: None,
             input: None,
             dock_springs: Default::default(),
             dock_loud: Default::default(),
@@ -530,6 +577,9 @@ impl Frame {
             wheeled: HashMap::new(),
             dock_was_seen: false,
             layout_pending: false,
+            dock_front: None,
+            shown_at: HashMap::new(),
+            told_seen: HashMap::new(),
             sizes: HashMap::new(),
             seen_h: HashMap::new(),
             typed: HashMap::new(),
@@ -592,6 +642,7 @@ impl Frame {
         self.apply(vec![
             Update::Widget { plugin: PLUGIN.into(), widget: DOCK.into(), content: dock },
             Update::Widget { plugin: PLUGIN.into(), widget: QUICK.into(), content: quick },
+            Update::Widget { plugin: PLUGIN.into(), widget: crate::builtin::APPS.into(), content: crate::builtin::apps_widget() },
         ]);
     }
 
@@ -835,6 +886,7 @@ impl Frame {
                         }
                     };
                 let it = self.screens[si].items.get_mut(&k).unwrap();
+                let mut came = false;
                 if want {
                     it.unwanted_since = None;
                     if it.shown.to < 1.0 {
@@ -844,6 +896,8 @@ impl Frame {
                         let d = (b.x + b.w / 2.0 - cx).abs() + (b.y + b.h / 2.0 - cy).abs();
                         let delay = if busy || attention { 0.0 } else { (d / 1000.0 * WAVE).min(WAVE) };
                         if since.elapsed().as_secs_f32() >= delay {
+                            // (out again from its edge: its glow plays again, strong, then settles)
+                            came = it.shown.now < 0.3;
                             it.shown.to = 1.0;
                             it.wanted_since = None;
                         } else {
@@ -867,6 +921,9 @@ impl Frame {
                     // (just come to rest: the liquid once more, without it if it is gone)
                     self.screens[si].liquid_dirty = true;
                     moved_any = true;
+                }
+                if came {
+                    self.shown_at.insert(k.clone(), Instant::now());
                 }
             }
             // over a full-screen app: the window is there only while something is out (brought to the top once, as it shows)
@@ -1100,6 +1157,7 @@ impl Frame {
                 add(&p.id, &p.name, &w.id, if w.name.is_empty() { &w.id } else { &w.name });
             }
         }
+        add(crate::builtin::PLUGIN, "NADI", crate::builtin::APPS, "Apps");
         add(crate::builtin::PLUGIN, "NADI", crate::builtin::DOCK, "Dock");
         add(crate::builtin::PLUGIN, "NADI", crate::builtin::QUICK, "Quick Settings");
         add(crate::builtin::PLUGIN, "NADI", crate::builtin::TRAY, "Tray");
@@ -1380,7 +1438,7 @@ impl Frame {
             let Ok(ov) = Overlay::new(&self.g, m) else { continue };
             let s = m.scale * self.config.scale.clamp(0.5, 3.0);
             let (w, h) = ((m.rect.right - m.rect.left) as f32 / s, (m.rect.bottom - m.rect.top) as f32 / s);
-            self.screens.push(Screen { ov, s, w, h, area: Bx { x: 0.0, y: 0.0, w, h }, primary: m.primary, items: BTreeMap::new(), banner_piece: None, banner_slot: None, full: false, win_shown: true, maxed: false, liquid: None, liquid_dirty: true, liquid_shapes: Vec::new() });
+            self.screens.push(Screen { ov, s, w, h, area: Bx { x: 0.0, y: 0.0, w, h }, bar: None, primary: m.primary, items: BTreeMap::new(), banner_piece: None, banner_glow: None, banner_slot: None, full: false, win_shown: true, maxed: false, liquid: None, liquid_dirty: true, liquid_shapes: Vec::new() });
         }
         self.active = self.mouse_screen().or_else(|| self.screens.iter().position(|s| s.primary)).unwrap_or(0);
         self.areas();
@@ -1389,10 +1447,30 @@ impl Frame {
 
     /// Where the frame may go on each monitor: clear of the taskbar, on whichever edge it stands (all of it, when it is hidden).
     pub fn areas(&mut self) {
-        let hide = self.config.taskbar == "hide";
+        // (hidden, or under the widgets (it stays, they stand at the screen's own edge over it): the whole screen is theirs)
+        let under = self.config.taskbar == "under";
+        let hide = self.config.taskbar == "hide" || under;
         let mons = overlay::monitors();
         for sc in &mut self.screens {
             let Some(m) = mons.iter().find(|m| m.handle == sc.ov.monitor.handle) else { continue };
+            // (under the widgets: the edge it stands on, and how deep it is there)
+            sc.bar = if under {
+                let free = crate::taskbar::free_of(m);
+                let s = sc.s;
+                if free.bottom < m.rect.bottom {
+                    Some((Edge::Bottom, (m.rect.bottom - free.bottom) as f32 / s))
+                } else if free.top > m.rect.top {
+                    Some((Edge::Top, (free.top - m.rect.top) as f32 / s))
+                } else if free.left > m.rect.left {
+                    Some((Edge::Left, (free.left - m.rect.left) as f32 / s))
+                } else if free.right < m.rect.right {
+                    Some((Edge::Right, (m.rect.right - free.right) as f32 / s))
+                } else {
+                    None
+                }
+            } else {
+                None
+            };
             // (kept: clear of the taskbar on whichever edge it stands, even one that hides itself, and of other bars that keep a part of the screen)
             let work = if hide {
                 m.rect
@@ -1593,29 +1671,35 @@ impl Frame {
     fn glow_of(&self, k: &str) -> Option<(crate::paint::Color, f32, bool)> {
         let w = self.widgets.get(unpop(k))?;
         let g = &w.content["glow"];
-        let (c, style) = if let Some(from) = g["from"].as_str() {
-            // (the colour of a picture: a cover's)
-            let (r, gr, b) = crate::images::tone(&self.pc, from)?;
-            (crate::paint::Color(r, gr, b, 1.0), g["style"].as_str().unwrap_or("steady"))
-        } else if g.is_object() {
-            (crate::draw::color_of(&g["color"], crate::draw::accent()), g["style"].as_str().unwrap_or("steady"))
+        // (every glow in the theme's colour, whatever its plugin asks; Claude's in Claude's own, as its banners are)
+        let theme = if w.plugin == "claude" { crate::draw::CLAUDE } else { crate::draw::accent() };
+        let (c, style) = if g["from"].is_string() || g.is_object() {
+            (theme, g["style"].as_str().unwrap_or("steady"))
         } else if g.is_string() {
-            (crate::draw::color_of(g, crate::draw::accent()), "steady")
+            (theme, "steady")
         } else if w.content["peek"]["dot"] == true && self.icon_alone(k) {
             (crate::draw::accent(), "steady")
         } else {
             return None;
         };
+        // (strong as it comes out, or as its glow begins, then settling: hidden and shown again, it plays again)
+        let since = match self.shown_at.get(k) {
+            Some(t) if t.elapsed() < w.glow_at.elapsed() => t.elapsed(),
+            _ => w.glow_at.elapsed(),
+        }
+        .as_secs_f32();
+        let fresh = GLOW_SETTLED + (GLOW_FRESH - GLOW_SETTLED) * (-since / GLOW_SETTLE_S).exp();
+        let settling = since < GLOW_SETTLE_S * 4.0;
         match style {
             "breathe" => {
                 let t = self.start.elapsed().as_secs_f32();
-                Some((c, 0.55 + 0.45 * (0.5 + 0.5 * (t * std::f32::consts::TAU / 1.8).sin()), true))
+                Some((c, fresh * (0.55 + 0.45 * (0.5 + 0.5 * (t * std::f32::consts::TAU / 1.8).sin())), true))
             }
             "flash" => {
                 let age = w.glow_at.elapsed().as_secs_f32();
-                (age < 3.0).then(|| (c, (1.0 - age / 3.0).powf(1.5), true))
+                (age < 3.0).then(|| (c, GLOW_FRESH * (1.0 - age / 3.0).powf(1.5), true))
             }
-            _ => Some((c, 1.0, false)),
+            _ => Some((c, fresh, settling)),
         }
     }
 
@@ -1643,9 +1727,25 @@ impl Frame {
             peek["roll"]["from"] = json!(r.0);
             peek["roll"]["k"] = json!((r.2.elapsed().as_secs_f32() / ROLL_FOR).min(1.0));
         }
-        // (the dock at its largest: the app in front on its stage)
+        // (the app in front just changed: how far its coming has got, and which it was before)
+        if peek["dock"].is_object() {
+            if let Some((_, prev, at)) = &self.dock_front {
+                let fk = (at.elapsed().as_secs_f32() / DOCK_FRONT_S).min(1.0);
+                peek["dock"]["front_k"] = json!(fk);
+                peek["dock"]["front_prev"] = json!(prev);
+            }
+        }
+        // (the dock at its largest: the app in front on its card, with what it plays when it plays)
         if peek["dock"].is_object() && self.large(k) {
             peek["dock"]["large"] = json!(true);
+            let sessions = self.pc.media_seen.lock().unwrap().clone();
+            if let Some(items) = peek["dock"]["items"].as_array_mut() {
+                for it in items.iter_mut().filter(|i| i["front"] == true) {
+                    if let Some(m) = media_of(&sessions, it) {
+                        it["media"] = m;
+                    }
+                }
+            }
         }
         // (the dock, where a click opens widgets: its grip, on the edge away from the screen's)
         if peek["dock"].is_object() && self.click_to_open() {
@@ -1706,6 +1806,7 @@ impl Frame {
             // or not changes nothing. The tray alone is put away until placed: placing it takes the tray from Explorer)
             match widget {
                 crate::builtin::DOCK => ("bottom".to_string(), -1000),
+                crate::builtin::APPS => ("bottom".to_string(), -1100),
                 crate::builtin::TRAY => ("off".to_string(), 20),
                 crate::sysw::PRIVACY => ("top".to_string(), 50),
                 crate::sysw::DESKS => ("top".to_string(), -50),
@@ -1808,6 +1909,8 @@ impl Frame {
             }
             self.prof_add(&what, t_up);
         }
+        // (the dock's app in front changed: its coming forward starts now, before it is drawn)
+        self.note_front();
         let t_size = Instant::now();
         if !layout {
             let changed: Vec<String> = reshaped.into_iter().filter(|k| !self.same_size(k)).collect();
@@ -1867,12 +1970,54 @@ impl Frame {
             }
             let Some(&(w0, b0)) = self.sizes.get(&format!("{si}|{k}")) else { return false };
             let p = self.painter(self.screens[si].s);
-            let (w1, b1) = self.sized(&p, k, look, matches!(place, Place::Corner(_)) && !down);
+            let (w1, b1) = self.sized(si, &p, k, look, matches!(place, Place::Corner(_)) && !down);
             if (w1 - w0).abs() > 0.5 || (b1 - b0).abs() > 0.5 {
                 return false;
             }
         }
         true
+    }
+
+    /// Tell the plugins host which plugins have a widget to be seen (shown, coming or going, open, a window, out as a banner, or
+    /// all of them while editing), when that changes. A plugin with no widgets is not told (it is always "seen").
+    fn tell_seen(&mut self) {
+        let editing = self.edit.is_some();
+        let banner = self.banner.as_ref().map(|b| b.plugin.clone());
+        let mut now: Vec<(String, bool)> = Vec::new();
+        for p in &self.plugins {
+            if !p.on || p.widgets.is_empty() {
+                continue;
+            }
+            let seen = editing
+                || banner.as_deref() == Some(p.id.as_str())
+                || p.widgets.iter().any(|w| {
+                    let k = key(&p.id, &w.id);
+                    self.seen_anywhere(&k)
+                });
+            now.push((p.id.clone(), seen));
+        }
+        for (id, seen) in now {
+            if self.told_seen.get(&id) != Some(&seen) {
+                self.told_seen.insert(id.clone(), seen);
+                let _ = self.tx.send(Command::Seen { plugin: id, seen });
+            }
+        }
+    }
+
+    /// Is it quiet: something full screen in front where banners come out (as the person set it), or a plugin asking for quiet (a
+    /// game runs)? Then the small banners wait.
+    fn is_quiet(&self) -> bool {
+        !self.quiet.is_empty() || (self.config.quiet_full && self.banner_screen().is_some_and(|si| self.screens[si].full))
+    }
+
+    /// The dock's app in front: changed, its coming forward starts now (the one before it noted, to go back).
+    fn note_front(&mut self) {
+        let dk = key(crate::builtin::PLUGIN, crate::builtin::DOCK);
+        let now = self.widgets.get(&dk).and_then(|w| w.content["peek"]["dock"]["items"].as_array().and_then(|a| a.iter().find(|i| i["front"] == true)).and_then(|i| i["key"].as_str().map(str::to_string)));
+        if let Some(now) = now.filter(|n| self.dock_front.as_ref().map(|f| &f.0) != Some(n)) {
+            let prev = self.dock_front.take().map(|f| f.0);
+            self.dock_front = Some((now, prev, Instant::now()));
+        }
     }
 
     /// Is a widget tucked into its edge on every screen it is on (and on one at least)?
@@ -1956,7 +2101,7 @@ impl Frame {
                         measured.push((k.clone(), content_h));
                         items.push(LayoutItem { key: k.clone(), place, rank, want: along, across: across + off, down, join: self.join_now(k) });
                     } else {
-                        let (want, base) = self.sized(&p, k, look, matches!(place, Place::Corner(_)) && !down);
+                        let (want, base) = self.sized(si, &p, k, look, matches!(place, Place::Corner(_)) && !down);
                         sized_now.push((k.clone(), want, base));
                         let _ = w;
                         let edge_depth = if look.horizontal() { m.depth_h } else { m.depth_v };
@@ -2832,6 +2977,8 @@ impl Frame {
         let content_a = self.pops.get(k).map_or(1.0, |m| m.content_a);
         let marks = self.pops.get(k).map(|m| m.strip_a * m.content_a).filter(|a| top > 0.0 && *a > 0.01).map(|a| (pop::bg_index(self.pop_bg(k)), a));
         let vis_h = inner.as_ref().map_or(shape.body.h, |i| i.body.h);
+        // (words too long for their room scroll: whether any did, from here)
+        let _ = crate::draw::take_marquee();
         // (the mouse on its open panel: where, in the panel's own space, for its ghost buttons)
         let hover_at = (t > 0.5 && self.hover.as_ref().is_some_and(|(hs, hk)| *hs == si && hk == k) && self.mouse.0 == si).then(|| (self.mouse.1 - b.x, self.mouse.2 - b.y - top));
         let _ = self.g.draw_surface(&surface, |dc| {
@@ -2893,7 +3040,8 @@ impl Frame {
         if lit {
             self.aura_alive = aura_alive;
         }
-        let alive = alive || typing || is_eyes || (lit && aura_alive) || glow.is_some_and(|(_, _, moves)| moves);
+        let marquee = crate::draw::take_marquee();
+        let alive = alive || typing || marquee || is_eyes || (lit && aura_alive) || glow.is_some_and(|(_, _, moves)| moves);
         // (what can be pressed in a window's panel: under its strip)
         if top > 0.0 {
             for h in &mut hits {
@@ -2934,7 +3082,18 @@ impl Frame {
 
     /// A piece's glow: soft light out of its outline, on the glass under the frame's window (where the mouse goes through it); gone
     /// when it does not glow.
+    /// How long since a widget's glow began, or since it last came out (its rings go out from it for the first few seconds).
+    fn glow_age(&self, k: &str) -> f32 {
+        let Some(w) = self.widgets.get(unpop(k)) else { return 99.0 };
+        match self.shown_at.get(k) {
+            Some(t) if t.elapsed() < w.glow_at.elapsed() => t.elapsed(),
+            _ => w.glow_at.elapsed(),
+        }
+        .as_secs_f32()
+    }
+
     fn render_glow(&mut self, si: usize, k: &str, shape: &crate::shape::Shape, b: Bx, glow: Option<(crate::paint::Color, f32, bool)>) {
+        let age = self.glow_age(k);
         let s = self.screens[si].s;
         let Some((c, strength, _)) = glow else {
             let sc = &mut self.screens[si];
@@ -2961,35 +3120,7 @@ impl Frame {
                 gp.alloc = grow;
             }
         }
-        let _ = gp.place((b.x * s).round() as i32 - m as i32, (b.y * s).round() as i32 - m as i32);
-        let surface = gp.surface.clone();
-        // (its shape, filled, blurred: soft light out of its outline; inside it, the piece covers it). The shape is drawn first, on
-        // its own, into a list of drawing to blur.
-        use windows::core::Interface;
-        use windows::Win32::Graphics::Direct2D::*;
-        let dc = &self.g.dc;
-        let list = unsafe {
-            let Ok(list) = dc.CreateCommandList() else { return };
-            dc.SetTarget(&list);
-            dc.BeginDraw();
-            dc.SetTransform(&windows::Foundation::Numerics::Matrix3x2::translation(m, m));
-            if let Ok(br) = crate::paint::brush(dc, c.alpha(0.55 * strength)) {
-                dc.FillGeometry(&shape.geometry, &br, None);
-            }
-            let _ = dc.EndDraw(None, None);
-            dc.SetTarget(None);
-            let _ = list.Close();
-            list
-        };
-        let _ = self.g.draw_surface(&surface, |dc| unsafe {
-            let Ok(blur) = dc.CreateEffect(&CLSID_D2D1GaussianBlur) else { return };
-            let Ok(img) = list.cast::<ID2D1Image>() else { return };
-            blur.SetInput(0, &img, true);
-            let _ = blur.SetValue(D2D1_GAUSSIANBLUR_PROP_STANDARD_DEVIATION.0 as u32, D2D1_PROPERTY_TYPE_FLOAT, &(GLOW * s / 3.2).to_le_bytes());
-            if let Ok(out) = blur.GetOutput() {
-                dc.DrawImage(&out, None, None, D2D1_INTERPOLATION_MODE_LINEAR, windows::Win32::Graphics::Direct2D::Common::D2D1_COMPOSITE_MODE_SOURCE_OVER);
-            }
-        });
+        paint_glow(&self.g, gp, s, shape, b, c, strength, age);
     }
 
     /// The live pictures of every open panel put again (a menu came over them, or went).
@@ -3105,7 +3236,7 @@ impl Frame {
     fn say(&mut self, plugin: String, say: Value) {
         let priority = say["priority"].as_i64().unwrap_or(0);
         // (a game runs: what can wait, waits — it is let go)
-        if !self.quiet.is_empty() && say["ambient"].as_bool() == Some(true) && priority < 90 {
+        if self.is_quiet() && say["ambient"].as_bool() == Some(true) && priority < 90 && !self.config.quiet_banners.contains(&plugin) {
             return;
         }
         // (one with a key replaces the one of that key)
@@ -3176,7 +3307,7 @@ impl Frame {
         own_pictures(&mut say, &plugin, &hosts);
         let ms = banner_ms(&say);
         self.typed.remove(LIVE_BANNER);
-        self.banner = Some(Banner { plugin, say, since: Instant::now(), ms, slide: Spring { now: 0.0, to: 1.0, vel: 0.0 }, hits: Vec::new(), leaving: false, h: 0.0, at: None, home: None, si: None, typing: false });
+        self.banner = Some(Banner { plugin, say, since: Instant::now(), ms, slide: Spring { now: 0.0, to: 1.0, vel: 0.0 }, hits: Vec::new(), leaving: false, h: 0.0, at: None, home: None, si: None, typing: false, marquee: false, glowing: false });
         self.relayout_with(Some(&HashSet::new()));
         let _ = si;
         self.render_banner();
@@ -3220,10 +3351,8 @@ impl Frame {
         // (on a screen of its own now: its piece there, and gone from the one it was on)
         let was = self.banner.as_ref().and_then(|b| b.si);
         if was != Some(si) {
-            if let Some(p) = was.and_then(|w| self.screens.get(w)).and_then(|s| s.banner_piece.as_ref()) {
-                unsafe {
-                    let _ = p.visual.SetOffsetY2(-1000.0);
-                }
+            if let Some(sc) = was.and_then(|w| self.screens.get(w)) {
+                sc.hide_banner();
             }
             if let Some(b) = &mut self.banner {
                 b.si = Some(si);
@@ -3316,6 +3445,7 @@ impl Frame {
             }
         }
         let p = self.painter(s);
+        let _ = crate::draw::take_marquee();
         // (a banner of Claude's: in Claude's own colour, not the theme's, which would say something else)
         let was_accent = crate::draw::set_accent_now(self.banner.as_ref().filter(|b| b.plugin == "claude").map(|_| crate::draw::CLAUDE));
         let _ = self.g.draw_surface(&surface, |dc| {
@@ -3422,10 +3552,44 @@ impl Frame {
             });
         });
         crate::draw::set_accent_now(was_accent);
+        let marquee = crate::draw::take_marquee();
+        if let Some(b) = self.banner.as_mut() {
+            b.marquee = marquee;
+        }
+        // (its glow, as a widget's as it comes out: strong, then settling, rings going out from it; a banner may refuse it)
+        let glows = say["glow"] != false && pill["glow"] != false;
+        if glows {
+            let c = if self.banner.as_ref().is_some_and(|b| b.plugin == "claude") { crate::draw::CLAUDE } else { crate::draw::accent() };
+            let strength = (GLOW_SETTLED + (GLOW_FRESH - GLOW_SETTLED) * (-age / GLOW_SETTLE_S).exp()) * t;
+            let m = (GLOW * s).round();
+            let gneed = (shape.w.ceil() as u32 + 2 + 2 * m as u32, shape.h.ceil() as u32 + 2 + 2 * m as u32);
+            let sc = &mut self.screens[si];
+            if sc.banner_glow.is_none() {
+                sc.banner_glow = sc.ov.glass_piece(&self.g, gneed.0 + 16, gneed.1 + 16).ok();
+            }
+            if let Some(gp) = sc.banner_glow.as_mut() {
+                if gneed.0 > gp.alloc.0 || gneed.1 > gp.alloc.1 {
+                    let grow = (gneed.0 + 16, gneed.1 + 16);
+                    if let Ok(surface) = self.g.surface(grow.0, grow.1) {
+                        unsafe {
+                            let _ = gp.visual.SetContent(&surface);
+                        }
+                        gp.surface = surface;
+                        gp.alloc = grow;
+                    }
+                }
+                paint_glow(&self.g, gp, s, &shape, sb, c, strength, age);
+            }
+        } else if let Some(gp) = &self.screens[si].banner_glow {
+            unsafe {
+                let _ = gp.visual.SetOffsetY2(-1000.0);
+            }
+        }
         let b = self.banner.as_mut().unwrap();
         b.hits = hits;
         b.h = full_h;
         b.at = Some(sb);
+        b.glowing = glows && age < GLOW_SETTLE_S * 4.0;
     }
 
     // ------------------------------------------------------------------------------------------------------------ time
@@ -3461,6 +3625,7 @@ impl Frame {
     /// One tick of the clock: springs move, the hover opens and closes panels, banners come and go, what lives is drawn again.
     pub fn tick(&mut self) {
         let t0 = Instant::now();
+        self.slid_settle();
         self.tick_inner();
         let e = self.prof.entry("tick".into()).or_default();
         e.0 += 1;
@@ -3510,11 +3675,12 @@ impl Frame {
             self.prof_add("full screen check", tq);
         }
         // the bars of the sound (and the analyzer is listened to while a widget shows them)
-        let want_viz = self.widgets.values().any(|w| w.content["peek"]["viz"].as_bool() == Some(true));
+        let want_viz = self.widgets.values().any(|w| shows_bars(&w.content["peek"]));
         self.pc.want.shell_audio.store(want_viz || !self.faces.is_empty(), Ordering::Relaxed);
         if want_viz {
             self.viz.step(&self.pc, dt);
         }
+        crate::draw::set_lift(if want_viz { self.viz.lift } else { 0.0 });
         // the faces
         let tf = Instant::now();
         let face_drawn = self.step_faces(dt);
@@ -3566,6 +3732,9 @@ impl Frame {
         // the windows (for the dock), twice a second; its meters spring, its sound bars move; Win held, its numbers. Only while the
         // dock shows (hidden at its edge till the mouse comes: nothing is looked at or drawn; as it comes, it is looked at at once)
         let dock_seen = self.dock_placed() && self.seen_anywhere(&key(crate::builtin::PLUGIN, crate::builtin::DOCK));
+        // (the dock at its largest, out: what plays is looked at, for its card)
+        let card = dock_seen && self.large(&key(crate::builtin::PLUGIN, crate::builtin::DOCK));
+        self.pc.want.shell_media.store(card, Ordering::Relaxed);
         // quick settings, placed and seen without the dock: its sound looked at with the windows
         if !dock_seen && self.place_of(crate::builtin::PLUGIN, crate::builtin::QUICK).is_some() && self.seen_anywhere(&key(crate::builtin::PLUGIN, crate::builtin::QUICK)) {
             self.sync_builtins(false);
@@ -3574,6 +3743,22 @@ impl Frame {
             self.sync_builtins(true);
         }
         self.dock_was_seen = dock_seen;
+        // (the app in front changed: its card grows, its ground pops in; the dock drawn again (laid out, at its largest) as it does)
+        let dk = key(crate::builtin::PLUGIN, crate::builtin::DOCK);
+        self.note_front();
+        if dock_seen && self.dock_front.as_ref().is_some_and(|f| f.2.elapsed().as_secs_f32() < DOCK_FRONT_S + 0.05) {
+            if self.large(&dk) {
+                let one: HashSet<String> = [dk.clone()].into_iter().collect();
+                self.relayout_with(Some(&one));
+            } else {
+                for si in 0..self.screens.len() {
+                    if self.screens[si].items.contains_key(&dk) {
+                        self.render(si, &dk);
+                    }
+                }
+            }
+            relayer = true;
+        }
         if dock_seen {
             let held = crate::keyhook::win_held() && self.config.win_launcher();
             if held != self.bi.numbers {
@@ -3598,6 +3783,8 @@ impl Frame {
         if self.reveal(dt) {
             relayer = true;
         }
+        // (which plugins have a widget that can be seen: the others are told, and what comes often comes to them seldom)
+        self.tell_seen();
         // (one coming out after changes made while it, or all, were tucked away: laid out now, with them)
         let coming_out = self.screens.iter().any(|sc| sc.items.values().any(|it| (it.shown.to > 0.5 && it.shown.now < 0.98) || (it.open.to > 0.5 && it.open.now < 0.98)));
         if self.layout_pending && (coming_out || self.edit.is_some() || self.drag.is_some() || self.banner.is_some() || self.menu.is_some()) {
@@ -3766,7 +3953,7 @@ impl Frame {
                 b.leaving = true;
                 b.slide.to = 0.0;
             }
-            let rows = (b.say["pill"]["rows"].is_array() && b.since.elapsed().as_secs_f32() < 2.0) || b.typing;
+            let rows = (b.say["pill"]["rows"].is_array() && b.since.elapsed().as_secs_f32() < 2.0) || b.typing || b.marquee || b.glowing;
             let done = b.leaving && b.slide.now == 0.0;
             if moved || rows {
                 relayer = true;
@@ -3775,12 +3962,8 @@ impl Frame {
             if done {
                 self.banner = None;
                 relayer = true;
-                for si in 0..self.screens.len() {
-                    if let Some(p) = &self.screens[si].banner_piece {
-                        unsafe {
-                            let _ = p.visual.SetOffsetY2(-1000.0);
-                        }
-                    }
+                for sc in &self.screens {
+                    sc.hide_banner();
                 }
                 self.next_banner();
                 if self.banner.is_none() {
@@ -3969,8 +4152,9 @@ impl Frame {
     /// How often to tick: every frame while something moves, else four times a second.
     fn tick_rate(&mut self) {
         let launcher_moves = self.launcher.as_ref().is_some_and(|l| l.moving());
-        let banner_moves = launcher_moves || self.banner.as_ref().is_some_and(|b| b.slide.moving() || b.home.is_some_and(|h| h.moving()) || b.typing || (b.say["pill"]["rows"].is_array() && b.since.elapsed().as_secs_f32() < 2.0));
+        let banner_moves = launcher_moves || self.banner.as_ref().is_some_and(|b| b.slide.moving() || b.home.is_some_and(|h| h.moving()) || b.typing || b.marquee || (b.say["pill"]["rows"].is_array() && b.since.elapsed().as_secs_f32() < 2.0));
         let rolling = self.rolls.borrow().values().any(|r| r.2.elapsed().as_secs_f32() < ROLL_FOR + 0.1);
+        let rolling = rolling || self.dock_front.as_ref().is_some_and(|f| f.2.elapsed().as_secs_f32() < DOCK_FRONT_S + 0.05);
         let moving = banner_moves || rolling || self.scrollbar_moves().is_some() || self.hold.is_some() || self.tip.as_ref().is_some_and(|t| t.grow.moving()) || self.menu.as_ref().is_some_and(|m| m.grow.moving()) || self.ghost.as_ref().is_some_and(|g| g.rest.moving()) || self.screens.iter().any(|s| s.items.values().any(|i| i.open.moving() || i.rest.moving())) || self.pops.values().any(|m| m.anim.is_some() || (m.strip_a > 0.0 && m.strip_a < 1.0)) || self.tear.is_some();
         let alive = self.screens.iter().any(|s| s.items.values().any(|i| (i.alive && i.shown.now > 0.01) || i.shown.moving())) || self.hover.is_some() || self.press.is_some() || self.drag.is_some();
         // (widgets that show as the mouse comes: the mouse is looked at often)
@@ -3996,6 +4180,8 @@ impl Frame {
     /// the graphics driver switch how the game is shown again and again, and that can hang it. With "never", it stays shown.
     /// The top window of each monitor is looked at (focused or not); `raise`: the frame is put back on top where nothing is full screen.
     fn full_screen(&mut self, raise: bool) {
+        // (another app's menu or popup in front, on top of everything: the frame stays under it, not put back over it)
+        let raise = raise && !crate::winlist::other_on_top();
         let fronts = crate::winlist::fronts();
         self.keys_hidden = self.config.hold_key != "none" && crate::winlist::keys_hidden_in_front();
         {
@@ -4079,6 +4265,28 @@ impl Frame {
             if it.open.now > 0.6 {
                 if let Ok((_, b)) = self.shape_now(si, it) {
                     let (lx, ly) = (x - b.x, y - b.y);
+                    // (a slider, or a bar to seek on: its knob jumps here and follows the mouse until let go)
+                    let seek = it.hits.iter().find(|h| lx >= h.rect.x && lx < h.rect.x + h.rect.w && ly >= h.rect.y && ly < h.rect.y + h.rect.h).and_then(|h| match &h.press {
+                        Press::Seek(a) => Some((a.clone(), h.rect)),
+                        _ => None,
+                    });
+                    if let (Some((action, rect)), Some(w)) = (seek, self.widgets.get(unpop(&k))) {
+                        let frac = slide_frac(rect, lx);
+                        let live = blocks::slider_value(&action).is_some();
+                        let plugin = w.plugin.clone();
+                        self.slide = Some(Slide { si, key: k.clone(), plugin: plugin.clone(), action: action.clone(), rect, frac, told: Instant::now(), told_frac: frac, live });
+                        if live {
+                            self.act(plugin, action.clone(), json!({ "fraction": frac }));
+                        }
+                        blocks::set_sliding(Some((action, frac)));
+                        unsafe {
+                            let _ = windows::Win32::UI::Input::KeyboardAndMouse::SetCapture(self.screens[si].ov.hwnd);
+                        }
+                        self.render(si, &k);
+                        self.commit();
+                        self.tick_rate();
+                        return;
+                    }
                     let held = it.hits.iter().find(|h| h.hold && lx >= h.rect.x && lx < h.rect.x + h.rect.w && ly >= h.rect.y && ly < h.rect.y + h.rect.h);
                     if let (Some(h), Some(w)) = (held, self.widgets.get(unpop(&k))) {
                         if let Press::Action(a, _) = &h.press {
@@ -4178,7 +4386,7 @@ impl Frame {
         // (in a corner's row or column, not the corner itself: along that edge, as one of them). Held, it is already the shape and
         // size it will have there: its length for that edge, as deep as it stands there (large, a square icon, the dock's depth)
         let place = drag_look(spot.place, spot.head, spot.down);
-        let (along, depth) = self.sized(&p, k, place, matches!(place, Place::Corner(_)));
+        let (along, depth) = self.sized(si, &p, k, place, matches!(place, Place::Corner(_)));
         let (w, h) = match place {
             Place::Edge(Edge::Left | Edge::Right) => (depth, along + 2.0 * m.fillet),
             Place::Corner(_) => (along + m.fillet, depth + m.fillet),
@@ -4206,7 +4414,7 @@ impl Frame {
 
     /// A widget's size at a place: how long it is along that edge (its peek, measured for it; a square icon as long as it is deep;
     /// in a corner's own place at most so long), and how deep it stands out of it (the dock's own depth, large deeper).
-    fn sized(&self, p: &Painter, k: &str, look: Place, corner: bool) -> (f32, f32) {
+    fn sized(&self, si: usize, p: &Painter, k: &str, look: Place, corner: bool) -> (f32, f32) {
         let m = Metrics::default();
         let Some(w) = self.widgets.get(unpop(k)) else { return (m.depth_h, m.depth_h) };
         let mut want = peek::measure(p, &self.peek_of(k), look.horizontal());
@@ -4225,8 +4433,20 @@ impl Frame {
         } else {
             m.depth_v
         };
-        // (a large one stands out further)
-        let base = if self.large(k) { (base * peek::LARGE).round() } else { base };
+        // (a large one stands out further; the dock's own depths are already its large one's)
+        let base = if self.large(k) && !w.content["peek"]["dock"].is_object() { (base * peek::LARGE).round() } else { base };
+        // (on the edge the taskbar stands on, under the widgets: as deep as it, over all of it)
+        let edge = match look {
+            Place::Edge(e) => e,
+            Place::Corner(Corner::TopLeft | Corner::TopRight) if look.horizontal() => Edge::Top,
+            Place::Corner(Corner::BottomLeft | Corner::BottomRight) if look.horizontal() => Edge::Bottom,
+            Place::Corner(Corner::TopLeft | Corner::BottomLeft) => Edge::Left,
+            Place::Corner(_) => Edge::Right,
+        };
+        let base = match self.screens.get(si).and_then(|sc| sc.bar) {
+            Some((e, d)) if e == edge && !self.floating(k) => base.max(d.round()),
+            _ => base,
+        };
         // (words in more than one line, a subtitle: as deep as they need)
         let base = match peek::depth_of(p, &self.peek_of(k), want) {
             Some(d) if look.horizontal() => d.max(base),
@@ -4402,6 +4622,9 @@ impl Frame {
     }
 
     pub fn mouse_move(&mut self, si: usize, x: f32, y: f32) {
+        if self.slide_move(si, x) {
+            return;
+        }
         if self.pop_move(si, x, y) {
             return;
         }
@@ -4484,6 +4707,45 @@ impl Frame {
         self.tick_rate();
     }
 
+    /// The mouse moved with a slider held: its knob follows (its plugin told, at most every `SLIDE_EVERY`). True when one is held.
+    fn slide_move(&mut self, si: usize, x: f32) -> bool {
+        let Some(sl) = self.slide.as_ref() else { return false };
+        if sl.si != si {
+            return true;
+        }
+        let Some(it) = self.screens[si].items.get(&sl.key) else { return true };
+        let Ok((_, b)) = self.shape_now(si, it) else { return true };
+        let frac = slide_frac(sl.rect, x - b.x);
+        if (frac - sl.frac).abs() < 1e-4 {
+            return true;
+        }
+        let sl = self.slide.as_mut().unwrap();
+        sl.frac = frac;
+        let (key, action, plugin) = (sl.key.clone(), sl.action.clone(), sl.plugin.clone());
+        if sl.live && sl.told.elapsed() >= SLIDE_EVERY {
+            sl.told = Instant::now();
+            sl.told_frac = frac;
+            self.act(plugin, action.clone(), json!({ "fraction": frac }));
+        }
+        blocks::set_sliding(Some((action, frac)));
+        self.render(si, &key);
+        self.commit();
+        true
+    }
+
+    /// A slider let go a moment ago: its knob free again to show what its plugin says.
+    fn slid_settle(&mut self) {
+        let Some((si, k, at)) = self.slid.clone() else { return };
+        if self.slide.is_none() && at.elapsed() > Duration::from_millis(700) {
+            self.slid = None;
+            blocks::set_sliding(None);
+            if self.screens.get(si).is_some_and(|sc| sc.items.contains_key(&k)) {
+                self.render(si, &k);
+                self.commit();
+            }
+        }
+    }
+
     pub fn mouse_leave(&mut self, si: usize) {
         if self.hover.as_ref().is_some_and(|(s, _)| *s == si) {
             let old = self.hover.take();
@@ -4502,6 +4764,22 @@ impl Frame {
     }
 
     pub fn click(&mut self, si: usize, x: f32, y: f32) {
+        // (a slider let go: its plugin told where, its knob kept there until its plugin says)
+        if self.slide.is_some() {
+            self.slide_move(si, x);
+            unsafe {
+                let _ = windows::Win32::UI::Input::KeyboardAndMouse::ReleaseCapture();
+            }
+            let sl = self.slide.take().unwrap();
+            if !sl.live || (sl.told_frac - sl.frac).abs() > 1e-4 {
+                self.act(sl.plugin.clone(), sl.action.clone(), json!({ "fraction": sl.frac }));
+            }
+            self.slid = Some((sl.si, sl.key.clone(), Instant::now()));
+            self.render(sl.si, &sl.key);
+            self.commit();
+            self.press = None;
+            return;
+        }
         // (a held thing let go of before its ring filled: nothing happens)
         if let Some(h) = self.hold.take() {
             match h.key {
@@ -4624,6 +4902,11 @@ impl Frame {
         if self.pop_widget_pressed(&k) {
             return;
         }
+        // (a widget that is a button: pressed, it does its one thing)
+        if let Some(a) = self.widgets.get(unpop(&k)).and_then(|w| w.content["press"].as_str().map(str::to_string)) {
+            self.act(plugin, a, json!({}));
+            return;
+        }
         let has_panel = self.widgets.get(unpop(&k)).is_some_and(|w| w.content["panel"].is_object());
         if has_panel {
             self.open_only(si, &k);
@@ -4657,11 +4940,7 @@ impl Frame {
                 if !hk.is_empty() && self.widgets.get(&hk).is_some_and(|w| w.content["panel"].is_object()) {
                     self.banner = None;
                     for sc in &self.screens {
-                        if let Some(p) = &sc.banner_piece {
-                            unsafe {
-                                let _ = p.visual.SetOffsetY2(-1000.0);
-                            }
-                        }
+                        sc.hide_banner();
                     }
                     self.relayout_with(Some(&HashSet::new()));
                     if let Some(wsi) = (0..self.screens.len()).find(|&i| self.screens[i].items.contains_key(&hk)) {
@@ -5023,12 +5302,16 @@ impl Frame {
         if let Some((r, a)) = it.buttons.iter().find(|(r, a)| !a.is_empty() && inside(r)) {
             // (an app on the dock with windows: a peek of them, their pictures and what the app uses)
             if let Some(app) = a.strip_prefix("app:").and_then(|i| i.parse::<usize>().ok()).and_then(|i| self.bi.dock_apps(&self.config).get(i).cloned()) {
-                let tiles: Vec<Value> = self.widgets.get(unpop(&k)).map(|w| w.content["panel"]["body"][0]["items"].as_array().cloned().unwrap_or_default()).unwrap_or_default().into_iter().filter(|t| t["key"].as_str() == Some(app.key.as_str())).collect();
+                let tiles: Vec<Value> = self.widgets.get(unpop(&k)).map(|w| w.content["tiles"].as_array().cloned().unwrap_or_default()).unwrap_or_default().into_iter().filter(|t| t["key"].as_str() == Some(app.key.as_str())).collect();
                 if !tiles.is_empty() {
-                    let n = tiles.len().min(3) as f32;
-                    let width = 2.0 * 12.0 + n * blocks::WIN_W + (n - 1.0) * blocks::WIN_GAP;
+                    // (its windows' pictures, big enough to read; four at most side by side)
+                    let tiles: Vec<Value> = tiles.into_iter().take(4).collect();
+                    let n = tiles.len() as f32;
+                    let pic = if n <= 1.0 { 300.0 } else if n <= 2.0 { 250.0 } else if n <= 3.0 { 210.0 } else { 180.0 };
+                    let win_w = pic + crate::peek::METERS + crate::peek::PROGRESS;
+                    let width = 2.0 * 12.0 + n * win_w + (n - 1.0) * blocks::WIN_GAP;
                     let anchor = Bx { x: b.x + r.x, y: b.y + r.y, w: r.w, h: r.h };
-                    return Some((hsi, format!("{k}@{a}"), json!({ "width": width, "body": [{ "kind": "windows", "items": tiles }] }), anchor, away));
+                    return Some((hsi, format!("{k}@{a}"), json!({ "width": width, "body": [{ "kind": "windows", "items": tiles, "pic": pic }] }), anchor, away));
                 }
             }
             let words = if let Some(i) = a.strip_prefix("app:").and_then(|i| i.parse::<usize>().ok()) {
@@ -5395,6 +5678,47 @@ impl Frame {
             self.sync_builtins(true);
             return;
         }
+        // (a widget at rest that asks for the wheel: it is told, up or down (Now Playing: its players one after another))
+        if let Some(w) = self.widgets.get(unpop(&k)).filter(|w| w.content["wheel"].is_string()) {
+            if self.screens[si].items.get(&k).is_some_and(|i| i.open.now < 0.6) {
+                let (plugin, a) = (w.plugin.clone(), w.content["wheel"].as_str().unwrap_or("").to_string());
+                self.act(plugin, a, json!({ "up": delta > 0.0 }));
+                return;
+            }
+        }
+        // (the dock at rest, the wheel over an app: its windows one after another)
+        if k == key(crate::builtin::PLUGIN, crate::builtin::DOCK) && self.screens[si].items.get(&k).is_some_and(|i| i.open.now < 0.6) {
+            let it = &self.screens[si].items[&k];
+            if let Ok((_, b)) = self.shape_now(si, it) {
+                let (lx, ly) = (x - b.x, y - b.y);
+                let app = it.buttons.iter().find(|(r, a)| a.starts_with("app:") && lx >= r.x - 4.0 && lx < r.x + r.w + 4.0 && ly >= r.y - 6.0 && ly < r.y + r.h + 6.0).map(|(_, a)| a[4..].to_string());
+                if let Some(i) = app {
+                    self.act(crate::builtin::PLUGIN.to_string(), format!("appwheel:{i}:{}", if delta > 0.0 { "up" } else { "down" }), json!({}));
+                }
+            }
+            return;
+        }
+        // (open, over a slider: it steps, 2% a notch)
+        if let Some(it) = self.screens[si].items.get(&k).filter(|i| i.open.now >= 0.6) {
+            if let Ok((_, b)) = self.shape_now(si, it) {
+                let (lx, ly) = (x - b.x, y - b.y);
+                let on = it.hits.iter().find(|h| lx >= h.rect.x && lx < h.rect.x + h.rect.w && ly >= h.rect.y && ly < h.rect.y + h.rect.h).and_then(|h| match &h.press {
+                    Press::Seek(a) => blocks::slider_value(a).map(|v| (a.clone(), v)),
+                    _ => None,
+                });
+                if let (Some((action, v)), Some(w)) = (on, self.widgets.get(unpop(&k))) {
+                    let base = self.slid.as_ref().filter(|(_, sk, _)| *sk == k).and_then(|_| blocks::sliding_at(&action)).unwrap_or(v);
+                    let to = (((base + if delta > 0.0 { 0.02 } else { -0.02 }) * 50.0).round() / 50.0).clamp(0.0, 1.0);
+                    let plugin = w.plugin.clone();
+                    self.act(plugin, action.clone(), json!({ "fraction": to }));
+                    blocks::set_sliding(Some((action, to)));
+                    self.slid = Some((si, k.clone(), Instant::now()));
+                    self.render(si, &k);
+                    self.commit();
+                    return;
+                }
+            }
+        }
         let it = self.screens[si].items.get_mut(&k).unwrap();
         if it.open.now < 0.6 {
             return;
@@ -5488,7 +5812,7 @@ pub fn paint_piece(p: &Painter, g: &Gfx, dc: &windows::Win32::Graphics::Direct2D
                     }
                 }
             });
-            alive = pk["viz"].as_bool() == Some(true) && p.viz.iter().any(|v| *v > 0.0)
+            alive = shows_bars(pk) && p.viz.iter().any(|v| *v > 0.0)
                 || matches!(pk["live"]["tone"].as_str(), Some("working" | "waiting" | "permission"))
                 || [&pk["image"], &pk["live"]["image"]].iter().any(|v| v.as_str().is_some_and(crate::images::animated));
         }
@@ -5502,6 +5826,11 @@ pub fn paint_piece(p: &Painter, g: &Gfx, dc: &windows::Win32::Graphics::Direct2D
                 let cy = body.y + (PAD + top) / 2.0 + 1.0;
                 let hw = content["\u{0}handle_w"].as_f64().unwrap_or(32.0) as f32;
                 p.round(Rect::new(body.x + body.w / 2.0 - hw / 2.0, cy - 2.0, hw, 4.0), 2.0, draw::DIM.alpha(0.7 * a * ha as f32));
+            }
+            // (washed at its top in a picture's colours (a cover's), fading into the panel)
+            if let Some((r, gr, bl)) = panel["wash"].as_str().and_then(|w| crate::images::tone(p.pc, w)) {
+                let col = crate::paint::Color(r * 0.6, gr * 0.6, bl * 0.6, 0.65 * a);
+                let _ = crate::paint::fill_shape_fade(dc, shape, col, shape.h * 0.55);
             }
             with_opacity(dc, g, a, || unsafe {
                 dc.PushAxisAlignedClip(&p.px(inner).d2d(), windows::Win32::Graphics::Direct2D::D2D1_ANTIALIAS_MODE_ALIASED);
@@ -5572,11 +5901,21 @@ fn peek_shape(p: &Value) -> String {
         return format!("dock{}{}", d.len(), marks);
     }
     if let Some(t) = p["tray"]["items"].as_array() {
-        let words: String = t.iter().map(|i| i["word"].as_str().unwrap_or("")).collect::<Vec<_>>().join("|");
+        let words: String = t.iter().map(|i| i["news"].to_string()).collect::<Vec<_>>().join("|");
         return format!("tray{}+{}{}{}", t.len(), p["tray"]["more"].as_u64().unwrap_or(0), p["tray"]["large"] == true, words);
     }
     if let Some(n) = p["desks"]["n"].as_u64() {
         return format!("desks{n}");
+    }
+    if p["meters"].is_array() {
+        return "meters".into();
+    }
+    if p["song"].is_object() {
+        let s = &p["song"];
+        return format!("song|{}|{}|{}|{}|{}", s["title"], s["artist"], s["alone"], s["stack"].as_array().map_or(0, |a| a.len()), s["left"].is_string());
+    }
+    if let Some(g) = p["graphs"]["items"].as_array() {
+        return format!("graphs{}", g.iter().map(|i| i["text"].as_str().unwrap_or("")).collect::<Vec<_>>().join("|"));
     }
     let lead = ["image", "icon", "live", "ring", "vessel", "bars", "clock", "button", "dot", "viz", "cells", "pad", "roll"].iter().filter(|k| !p[**k].is_null() && p[**k] != "").map(|k| *k).collect::<Vec<_>>().join(",");
     format!("{}|{}", lead, p["text"].as_str().unwrap_or(""))
@@ -5586,6 +5925,101 @@ fn peek_shape(p: &Value) -> String {
 fn tucked(it: &Item, k: &str) -> bool {
     it.shown.now <= 0.005 && it.shown.to <= 0.0 && it.drag_place.is_none() && it.open.now < 0.01 && !is_pop(k)
 }
+
+/// What an app on the dock plays, as its card shows it (the session whose player is that app: by its program's name): its song,
+/// who sings it, its cover, how far along. Nothing when it plays nothing.
+fn media_of(sessions: &Value, it: &Value) -> Option<Value> {
+    let key = it["key"].as_str().unwrap_or("").to_lowercase();
+    let stem = key.rsplit(['\\', '/']).next().unwrap_or("").trim_end_matches(".exe").to_string();
+    let name = it["name"].as_str().unwrap_or("").to_lowercase().replace(' ', "");
+    let s = sessions.as_array()?.iter().find(|s| {
+        let src = s["source"].as_str().unwrap_or("").to_lowercase();
+        (!stem.is_empty() && src.contains(&stem)) || (name.len() > 2 && src.replace(' ', "").contains(&name))
+    })?;
+    let title = s["title"].as_str().unwrap_or("");
+    if title.is_empty() {
+        return None;
+    }
+    let dur = s["duration"].as_f64().unwrap_or(0.0);
+    let art = s["art_id"].as_u64().filter(|a| *a != 0).map(|a| format!("media:{}:{}", s["source"].as_str().unwrap_or(""), a));
+    Some(json!({
+        "title": title, "artist": s["artist"], "art": art, "source": s["source"], "playing": s["playing"],
+        "progress": if dur > 0.0 { json!((s["position"].as_f64().unwrap_or(0.0) / dur).clamp(0.0, 1.0)) } else { Value::Null },
+    }))
+}
+
+/// how long the dock takes to bring the app in front forward (its card growing, its ground popping in)
+const DOCK_FRONT_S: f32 = 0.35;
+
+/// a glow, as it comes out (times today's strength), and settled; how long it takes to settle; its rings: for how long, how often
+/// A glow drawn on its piece (on the glass under the frame): soft light out of a shape, and, while it is fresh, rings going out from it.
+fn paint_glow(g: &Gfx, gp: &mut Piece, s: f32, shape: &Shape, b: Bx, c: crate::paint::Color, strength: f32, age: f32) {
+let m = (GLOW * s).round();
+let _ = gp.place((b.x * s).round() as i32 - m as i32, (b.y * s).round() as i32 - m as i32);
+    let surface = gp.surface.clone();
+    // (its shape, filled, blurred: soft light out of its outline; inside it, the piece covers it). The shape is drawn first, on
+    // its own, into a list of drawing to blur.
+    use windows::core::Interface;
+    use windows::Win32::Graphics::Direct2D::*;
+    let dc = &g.dc;
+    let list = unsafe {
+        let Ok(list) = dc.CreateCommandList() else { return };
+        dc.SetTarget(&list);
+        dc.BeginDraw();
+        dc.SetTransform(&windows::Foundation::Numerics::Matrix3x2::translation(m, m));
+        if let Ok(br) = crate::paint::brush(dc, c.alpha((0.55 * strength).min(1.0))) {
+            dc.FillGeometry(&shape.geometry, &br, None);
+        }
+        let _ = dc.EndDraw(None, None);
+        dc.SetTarget(None);
+        let _ = list.Close();
+        list
+    };
+    let _ = g.draw_surface(&surface, |dc| unsafe {
+        let Ok(blur) = dc.CreateEffect(&CLSID_D2D1GaussianBlur) else { return };
+        let Ok(img) = list.cast::<ID2D1Image>() else { return };
+        blur.SetInput(0, &img, true);
+        let _ = blur.SetValue(D2D1_GAUSSIANBLUR_PROP_STANDARD_DEVIATION.0 as u32, D2D1_PROPERTY_TYPE_FLOAT, &(GLOW * s / 3.2).to_le_bytes());
+        if let Ok(out) = blur.GetOutput() {
+            dc.DrawImage(&out, None, None, D2D1_INTERPOLATION_MODE_LINEAR, windows::Win32::Graphics::Direct2D::Common::D2D1_COMPOSITE_MODE_SOURCE_OVER);
+        }
+        // (just come out: rings go out from it, one after another, fading as they go, as from an app on the dock that wants you)
+        if age < GLOW_RINGS_S {
+            let k = (age / GLOW_RING_EVERY).fract();
+            if k < 0.8 {
+                let k = k / 0.8;
+                let e = k * m * 0.9;
+                let (w, h) = (b.w * s, b.h * s);
+                let r = D2D1_ROUNDED_RECT {
+                    rect: windows::Win32::Graphics::Direct2D::Common::D2D_RECT_F { left: m - e, top: m - e, right: m + w + e, bottom: m + h + e },
+                    radiusX: w.min(h) / 2.0 + e,
+                    radiusY: w.min(h) / 2.0 + e,
+                };
+                if let Ok(br) = crate::paint::brush(dc, c.alpha(0.6 * (1.0 - k).powf(1.5))) {
+                    dc.DrawRoundedRectangle(&r, &br, (2.0 * (1.0 - k) + 0.6) * s, None);
+                }
+            }
+        }
+    });
+}
+
+/// Does a peek show the bars of the sound (so the sound is listened to, and it is drawn again as they move)? Its `viz`, or a song
+/// with a player playing.
+fn shows_bars(peek: &Value) -> bool {
+    peek["viz"].as_bool() == Some(true) || peek["song"]["playing"] == true || peek["song"]["busy"] == true
+}
+
+/// Where on a slider's (or a bar's) press area the mouse is, 0..1, along its track (the area less its ends).
+fn slide_frac(r: Rect, lx: f32) -> f32 {
+    let inset = blocks::SEEK_INSET.min(r.w / 4.0);
+    ((lx - r.x - inset) / (r.w - 2.0 * inset).max(1.0)).clamp(0.0, 1.0)
+}
+
+const GLOW_FRESH: f32 = 2.0;
+const GLOW_SETTLED: f32 = 0.8;
+const GLOW_SETTLE_S: f32 = 1.6;
+const GLOW_RINGS_S: f32 = 4.8;
+const GLOW_RING_EVERY: f32 = 1.6;
 
 /// where a live banner's words are typed in (in `typed`)
 const LIVE_BANNER: &str = "\u{0}banner";
@@ -5597,9 +6031,15 @@ const BACK_TO_NOW: &str = "\u{0}now";
 const SCROLLBAR_FOR: f32 = 1.2;
 
 /// A program's three sound bars (0..1 each) for how loud it is now: quiet sound still stands up.
-fn sound_bars(loud: f32, t: f32) -> [f32; 3] {
+/// (a fourth: how far they are lifted, with how loud it is, as the bass lifts the sound's own)
+fn sound_bars(loud: f32, t: f32) -> [f32; 4] {
     let v = (loud.sqrt() * 1.6).min(1.0);
-    std::array::from_fn(|i| (v * (0.6 + 0.4 * (t * (7.0 + i as f32 * 2.3) + i as f32 * 1.9).sin())).max(0.25))
+    let mut out = [0.0; 4];
+    for (i, o) in out.iter_mut().take(3).enumerate() {
+        *o = (v * (0.6 + 0.4 * (t * (7.0 + i as f32 * 2.3) + i as f32 * 1.9).sin())).max(0.25);
+    }
+    out[3] = v * v * (0.55 + 0.45 * (t * 4.1).sin().max(0.0));
+    out
 }
 
 /// a dock meter's change smaller than this (of its whole) is not shown

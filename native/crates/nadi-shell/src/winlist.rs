@@ -118,6 +118,24 @@ pub struct Front {
 
 /// The top window on each monitor, from the front: what it is. Windows that float over others without being an app's (tool windows,
 /// click-through overlays, small always-on-top ones) are looked past; the desktop is neither.
+/// Is another app's window on top of everything in front now (a menu it opened, from its tray icon or anywhere, or a popup of its
+/// own)? The frame does not put itself back over it while it is.
+pub fn other_on_top() -> bool {
+    unsafe {
+        // (a menu of the system's kind, open anywhere)
+        if FindWindowW(windows::core::w!("#32768"), None).is_ok_and(|m| !m.is_invalid() && IsWindowVisible(m).as_bool()) {
+            return true;
+        }
+        let fg = GetForegroundWindow();
+        if fg.is_invalid() {
+            return false;
+        }
+        let mut pid = 0u32;
+        GetWindowThreadProcessId(fg, Some(&mut pid));
+        pid != 0 && pid != std::process::id() && GetWindowLongW(fg, GWL_EXSTYLE) as u32 & WS_EX_TOPMOST.0 != 0
+    }
+}
+
 pub fn fronts() -> Vec<(isize, Front)> {
     use windows::Win32::Graphics::Gdi::{GetMonitorInfoW, MonitorFromWindow, MONITORINFO, MONITOR_DEFAULTTONULL};
     struct Ctx {

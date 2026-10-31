@@ -25,6 +25,8 @@ const MAX_FILE: u64 = 256 * 1024;
 const BATTERY_EVERY: Duration = Duration::from_secs(5);
 const BATTERY_TOLD: Duration = Duration::from_secs(30);
 const AUDIO_GAP: Duration = Duration::from_millis(40);
+/// a plugin none of whose widgets can be seen: what comes often (the sound, its own ticks) comes no oftener than this
+const UNSEEN_GAP: Duration = Duration::from_secs(1);
 const PROCESSES_EVERY: Duration = Duration::from_secs(2);
 const SYSTEM_EVERY: Duration = Duration::from_secs(2);
 const USAGE_EVERY: Duration = Duration::from_secs(1);
@@ -70,6 +72,8 @@ pub enum Command {
     Action { plugin: String, action: String, args: Value },
     /// the panel of a widget was opened or closed (the plugin is told, and sees which are open with every event)
     Open { plugin: String, widget: String, open: bool },
+    /// whether any widget of a plugin can be seen now (none: what comes often comes to it seldom)
+    Seen { plugin: String, seen: bool },
     /// a banner of the plugin that names an address was pressed: it opens, when the plugin may open it
     OpenUrl { plugin: String, url: String },
     /// look in the plugins folder again
@@ -159,6 +163,8 @@ struct Slot {
     meter: sensors::usage::Meter,
     last_usage: Option<Instant>,
     files: HashMap<PathBuf, SystemTime>,
+    /// when its files were last looked at (once a second)
+    last_files: Option<Instant>,
     /// what it has been told of the browsers' pages, and which it watches
     browser: sensors::browsersensor::Feed,
     /// what came back of its requests and commands, for its next call
@@ -192,6 +198,7 @@ impl Slot {
             meter: sensors::usage::Meter::default(),
             last_usage: None,
             files: HashMap::new(),
+            last_files: None,
             browser: Default::default(),
             results: Arc::default(),
             said: HashMap::new(),
@@ -210,6 +217,8 @@ struct Plugin {
     pressed: VecDeque<(String, Value, bool)>,
     /// its widgets whose panels are open
     open: BTreeMap<String, bool>,
+    /// can any of its widgets be seen (till the shell says otherwise: yes)
+    seen: bool,
     quiet: bool,
     /// its own program, while it is on, and its stops this minute (how many, since when)
     helper: Option<crate::helper::Helper>,
@@ -280,6 +289,30 @@ fn tail_of(path: &Path) -> Option<(SystemTime, String)> {
     let mut buf = Vec::new();
     f.take(MAX_FILE).read_to_end(&mut buf).ok()?;
     Some((meta.modified().ok()?, String::from_utf8_lossy(&buf).into_owned()))
+}
+
+/// The windows as a plugin may see them, from one scan with everything: no titles (nor tool windows) without `titles`, no program
+/// details without `programs`.
+fn windows_for(all: &Value, titles: bool, programs: bool) -> Value {
+    let list = all.as_array().cloned().unwrap_or_default();
+    Value::Array(
+        list.into_iter()
+            .filter(|w| titles || w["tool"] != true)
+            .map(|mut w| {
+                if !titles {
+                    w["title"] = json!("");
+                }
+                if !programs {
+                    if let Some(o) = w.as_object_mut() {
+                        o.remove("full");
+                        o.remove("path");
+                        o.remove("name");
+                    }
+                }
+                w
+            })
+            .collect(),
+    )
 }
 
 /// the windows on the screen, for a plugin that may see them: the one in front first
@@ -363,7 +396,7 @@ impl Host {
             if m.default_on && problem.is_none() && !self.is_on(&m.id) && !self.saved.off.contains(&m.id) {
                 self.saved.on.push(m.id.clone());
             }
-            let fresh = || Plugin { manifest: m.clone(), dir: dir.clone(), problem: problem.clone(), note: None, slot: None, widgets: BTreeMap::new(), pressed: VecDeque::new(), open: BTreeMap::new(), quiet: false, helper: None, helper_stops: (0, Instant::now()), subs: HashSet::new() };
+            let fresh = || Plugin { manifest: m.clone(), dir: dir.clone(), problem: problem.clone(), note: None, slot: None, widgets: BTreeMap::new(), pressed: VecDeque::new(), open: BTreeMap::new(), quiet: false, helper: None, helper_stops: (0, Instant::now()), subs: HashSet::new(), seen: true };
             match self.plugins.iter().position(|p| p.manifest.id == m.id) {
                 Some(i) if self.plugins[i].manifest == m && self.plugins[i].problem == problem => {}
                 Some(i) => {
@@ -540,6 +573,13 @@ impl Host {
     }
 
     /// A widget's panel was opened or closed: the plugin is told with its next step (`open`, with `widget` and `open`).
+    /// Whether any widget of a plugin can be seen now: none, and the sound and its own ticks come to it once a second at most.
+    pub fn set_seen(&mut self, plugin: &str, seen: bool) {
+        if let Some(p) = self.plugins.iter_mut().find(|p| p.manifest.id == plugin) {
+            p.seen = seen;
+        }
+    }
+
     pub fn set_open(&mut self, plugin: &str, widget: &str, open: bool) {
         let Some(p) = self.plugins.iter_mut().find(|p| p.manifest.id == plugin) else { return };
         if !p.manifest.widgets.iter().any(|w| w.id == widget) {
@@ -709,23 +749,35 @@ impl Host {
         let mut out: Vec<(&'static str, Value, bool)> = Vec::new();
         let perms = self.plugins[i].manifest.permissions.clone();
         let id = self.plugins[i].manifest.id.clone();
-        let tick_every = manifest::parse_every(&self.plugins[i].manifest.tick);
+        // (none of its widgets to be seen: what comes often, seldom)
+        let seen = self.plugins[i].seen;
+        let tick_every = manifest::parse_every(&self.plugins[i].manifest.tick).map(|e| if seen { e } else { e.max(UNSEEN_GAP) });
+        let audio_gap = if seen { AUDIO_GAP } else { UNSEEN_GAP };
+        let usage_every = if seen { USAGE_EVERY } else { UNSEEN_GAP * 5 };
         let battery = self.battery_now.clone();
         let system = self.system_now.clone();
         let pc = self.pc.clone();
         let due_proc = perms.processes && self.plugins[i].slot.as_ref().is_some_and(|s| s.last_proc.map_or(true, |t| t.elapsed() >= PROCESSES_EVERY));
+        // (a panel of it open: the busiest programs too, with what the PC uses)
+        let panel_open = self.plugins[i].open.values().any(|o| *o);
+        let mut timed: Vec<(&'static str, f64)> = Vec::new();
+        let tw = Instant::now();
         let windows = if due_proc {
-            match &self.windows_seen {
-                Some((at, t, pr, v)) if at.elapsed() < Duration::from_millis(500) && *t == perms.titles && *pr == perms.programs => v.clone(),
+            let all = match &self.windows_seen {
+                Some((at, _, _, v)) if at.elapsed() < Duration::from_millis(900) => v.clone(),
                 _ => {
-                    let v = windows_now(perms.titles, perms.programs);
-                    self.windows_seen = Some((Instant::now(), perms.titles, perms.programs, v.clone()));
+                    let v = windows_now(true, true);
+                    self.windows_seen = Some((Instant::now(), true, true, v.clone()));
                     v
                 }
-            }
+            };
+            windows_for(&all, perms.titles, perms.programs)
         } else {
             Value::Null
         };
+        if due_proc {
+            timed.push(("windows", tw.elapsed().as_secs_f64() * 1000.0));
+        }
         let s = self.plugins[i].slot.as_mut().unwrap();
         if !s.started {
             s.started = true;
@@ -738,7 +790,7 @@ impl Host {
         }
         if perms.audio {
             let seq = pc.audio_seq.load(Ordering::Relaxed);
-            if seq != s.audio_seq && s.last_audio.map_or(true, |t| t.elapsed() >= AUDIO_GAP) {
+            if seq != s.audio_seq && s.last_audio.map_or(true, |t| t.elapsed() >= audio_gap) {
                 s.audio_seq = seq;
                 s.last_audio = Some(Instant::now());
                 let a = pc.audio_last.lock().unwrap().clone();
@@ -798,11 +850,17 @@ impl Host {
         }
         if perms.system && !system.is_null() && s.last_sys.map_or(true, |t| t.elapsed() >= SYSTEM_EVERY) {
             s.last_sys = Some(Instant::now());
+            let mut system = system.clone();
+            if panel_open {
+                system["top"] = sensors::stats::top(&pc, 3);
+            }
             out.push(("system", json!({ "system": system }), false));
         }
-        if perms.usage && !s.watch.is_empty() && s.last_usage.map_or(true, |t| t.elapsed() >= USAGE_EVERY) {
+        if perms.usage && !s.watch.is_empty() && s.last_usage.map_or(true, |t| t.elapsed() >= usage_every) {
             s.last_usage = Some(Instant::now());
+            let tu = Instant::now();
             let list = sensors::usage::read(&mut s.meter, &s.watch);
+            timed.push(("usage", tu.elapsed().as_secs_f64() * 1000.0));
             out.push(("usage", json!({ "usage": list }), false));
         }
         if perms.steam && s.last_steam.map_or(true, |t| t.elapsed() >= STEAM_EVERY) {
@@ -811,11 +869,15 @@ impl Host {
         }
         if perms.gear && s.last_gear.map_or(true, |t| t.elapsed() >= GEAR_EVERY) {
             s.last_gear = Some(Instant::now());
+            let tg = Instant::now();
             out.push(("gear", sensors::gear::state(), false));
+            timed.push(("gear", tg.elapsed().as_secs_f64() * 1000.0));
         }
         if perms.downloads && s.last_downloads.map_or(true, |t| t.elapsed() >= DOWNLOADS_EVERY) {
             s.last_downloads = Some(Instant::now());
+            let td = Instant::now();
             let seen = s.downloads.poll();
+            timed.push(("downloads", td.elapsed().as_secs_f64() * 1000.0));
             *pc.downloads.lock().unwrap() = (Some(Instant::now()), seen["observed"].as_array().cloned().unwrap_or_default());
             for e in seen["ended"].as_array().into_iter().flatten() {
                 if let Some(path) = e["path"].as_str() {
@@ -837,8 +899,17 @@ impl Host {
             let hooks = if perms.claude_answer { sensors::claudehook::status() } else { Value::Null };
             out.push(("claude", json!({ "claude": sensors::claudesensor::sessions(), "claude_hooks": hooks }), false));
         }
-        for f in &perms.files {
+        let files_due = !perms.files.is_empty() && s.last_files.map_or(true, |t| t.elapsed() >= Duration::from_secs(1));
+        if files_due {
+            s.last_files = Some(Instant::now());
+        }
+        for f in perms.files.iter().filter(|_| files_due) {
             let path = expand(f);
+            // (changed since it was read? Asked of its time first: read only when it did)
+            let Ok(changed) = std::fs::metadata(&path).and_then(|m| m.modified()) else { continue };
+            if s.files.get(&path) == Some(&changed) {
+                continue;
+            }
             if let Some((mtime, text)) = tail_of(&path) {
                 if s.files.get(&path) != Some(&mtime) {
                     s.files.insert(path.clone(), mtime);
@@ -870,6 +941,13 @@ impl Host {
                 out.push(("service", args, false));
             } else {
                 out.push(("action", json!({ "action": action, "args": args }), by_user));
+            }
+        }
+        if let Some((_, _, map)) = &mut self.profile {
+            for (what, ms) in timed {
+                let e = map.entry(format!("~ {what}")).or_default();
+                e.0 += ms;
+                e.2 += 1;
             }
         }
         out.into_iter().map(|(name, extra, by)| (self.event(i, name, now_ms, extra), by)).collect()
@@ -1256,6 +1334,7 @@ pub fn spawn(dir: PathBuf, saved: Option<PathBuf>, pc: Arc<Pc>, wake: impl Fn() 
                         Command::SetValue { id, key, value } => host.set_value(&id, &key, value),
                         Command::Action { plugin, action, args } => host.press(&plugin, &action, args),
                         Command::Open { plugin, widget, open } => host.set_open(&plugin, &widget, open),
+                        Command::Seen { plugin, seen } => host.set_seen(&plugin, seen),
                         Command::OpenUrl { plugin, url } => {
                             if host.may_open(&plugin, &url) {
                                 crate::win::open_url(&url);
@@ -1433,6 +1512,33 @@ mod tests {
             said += h.take_updates().iter().filter(|u| matches!(u, Update::Say { .. })).count();
         }
         assert_eq!(said, 1);
+    }
+
+    #[test]
+    fn a_plugin_none_of_whose_widgets_can_be_seen_is_ticked_seldom() {
+        let m = r#"{ "id": "p", "kind": "luau", "tick": "100ms", "widgets": [{ "id": "w" }] }"#;
+        let d = plugin_dir("seen", &[("p", m, "local n = 0
+function handle(ev) if ev.event == 'tick' then n += 1 end return { note = tostring(n) } end")]);
+        let mut h = Host::new(d, None, Pc::new());
+        h.dry = true;
+        h.set_on("p", true);
+        h.set_seen("p", false);
+        let mut ticks = 0;
+        for k in 0..6 {
+            std::thread::sleep(Duration::from_millis(110));
+            h.step(k * 100);
+            ticks += h.take_updates().len();
+        }
+        let unseen = ticks;
+        h.set_seen("p", true);
+        let mut ticks = 0;
+        for k in 6..12 {
+            std::thread::sleep(Duration::from_millis(110));
+            h.step(k * 100);
+            ticks += h.take_updates().len();
+        }
+        // (unseen: its start, and one tick at most; seen: a tick each step)
+        assert!(unseen <= 3 && ticks >= 5, "unseen {unseen}, seen {ticks}");
     }
 
     #[test]

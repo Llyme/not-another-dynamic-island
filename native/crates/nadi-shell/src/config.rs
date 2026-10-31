@@ -57,7 +57,8 @@ pub struct Config {
     pub widgets: BTreeMap<String, WidgetConfig>,
     /// "follow" (the frame is on the monitor the mouse is on), "primary", or "all"
     pub monitors: String,
-    /// "keep" the Windows taskbar (the frame stays clear of it), or "hide" it
+    /// "keep" the Windows taskbar (the frame stays clear of it), keep it "under" the widgets (they stand at the screen's edge over
+    /// it), or "hide" it
     pub taskbar: String,
     /// the frame's size, times the monitor's own scale
     pub scale: f32,
@@ -78,6 +79,11 @@ pub struct Config {
     pub open_on: String,
     /// the tray icons in the Tray widget's row, in order (by program and number)
     pub tray_pinned: Vec<String>,
+    /// the small banners wait while something full screen is in front (a game, a video, a talk), as they do while a plugin asks
+    /// for quiet
+    pub quiet_full: bool,
+    /// the plugins whose banners come out while it is quiet too (by id)
+    pub quiet_banners: Vec<String>,
     /// the widgets and their edge as one liquid, how much: 0 (none) to 100 (anything else read: the middle, so the rest of the
     /// config still reads)
     #[serde(deserialize_with = "liquid_amount")]
@@ -99,7 +105,7 @@ impl Config {
 
 impl Default for Config {
     fn default() -> Self {
-        Config { widgets: BTreeMap::new(), monitors: "follow".into(), taskbar: "keep".into(), scale: 1.0, auto_hide: "fullscreen".into(), pinned: Vec::new(), win_key: "auto".into(), reveal: "all".into(), hold_key: "none".into(), open_on: "hover".into(), tray_pinned: Vec::new(), liquid: 50.0, theme: "#5ac88c".into() }
+        Config { widgets: BTreeMap::new(), monitors: "follow".into(), taskbar: "keep".into(), scale: 1.0, auto_hide: "fullscreen".into(), pinned: Vec::new(), win_key: "auto".into(), reveal: "all".into(), hold_key: "none".into(), open_on: "hover".into(), tray_pinned: Vec::new(), quiet_full: true, quiet_banners: Vec::new(), liquid: 50.0, theme: "#5ac88c".into() }
     }
 }
 

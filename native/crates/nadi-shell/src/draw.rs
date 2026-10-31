@@ -36,6 +36,19 @@ pub fn set_accent_now(c: Option<Color>) -> Option<Color> {
     ACCENT_NOW.with(|a| a.replace(c))
 }
 
+/// words too long for their room scroll there and back: so long at each end, so fast (logical px a second)
+const MARQUEE_WAIT: f32 = 1.6;
+const MARQUEE_SPEED: f32 = 28.0;
+
+thread_local! {
+    static MARQUEE: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// Did anything drawn since last asked scroll (words too long for their room)? Then it is to be drawn again soon. Asking clears it.
+pub fn take_marquee() -> bool {
+    MARQUEE.with(|m| m.replace(false))
+}
+
 pub fn accent() -> Color {
     if let Some(c) = ACCENT_NOW.with(|a| a.get()) {
         return c;
@@ -92,14 +105,42 @@ impl<'a> Painter<'a> {
         self.words(text, size, weight, max_w).map(|w| w.width / self.s).unwrap_or(0.0)
     }
 
-    /// Words with their left at `x`, centred on `cy`; how wide they came out (logical).
+    /// Words with their left at `x`, centred on `cy`; how wide they came out (logical). Longer than `max_w`: never cut with dots;
+    /// they scroll there and back, a while at each end (what is drawn so asks to be drawn again).
     pub fn text(&self, text: &str, x: f32, cy: f32, size: f32, weight: Weight, max_w: f32, c: Color) -> f32 {
         if text.is_empty() || max_w <= 1.0 {
             return 0.0;
         }
-        let Ok(w) = self.words(text, size, weight, max_w) else { return 0.0 };
-        let _ = crate::paint::draw_words(self.dc, &w, x * self.s, cy * self.s - w.height / 2.0, c);
-        w.width / self.s
+        let Ok(full) = self.words(text, size, weight, 100_000.0) else { return 0.0 };
+        let fw = full.width / self.s;
+        if fw <= max_w + 0.5 {
+            let _ = crate::paint::draw_words(self.dc, &full, x * self.s, cy * self.s - full.height / 2.0, c);
+            return fw;
+        }
+        // (there and back: a while at its start, along to its end, a while there, back to its start; eased at each turn)
+        let over = fw - max_w;
+        let travel = over / MARQUEE_SPEED;
+        let period = 2.0 * (MARQUEE_WAIT + travel);
+        let ph = self.t % period;
+        let ease = |k: f32| k * k * (3.0 - 2.0 * k);
+        let off = if ph < MARQUEE_WAIT {
+            0.0
+        } else if ph < MARQUEE_WAIT + travel {
+            over * ease((ph - MARQUEE_WAIT) / travel)
+        } else if ph < 2.0 * MARQUEE_WAIT + travel {
+            over
+        } else {
+            over * (1.0 - ease((ph - 2.0 * MARQUEE_WAIT - travel) / travel))
+        };
+        unsafe {
+            self.dc.PushAxisAlignedClip(&D2D_RECT_F { left: x * self.s, top: (cy - size * 1.2) * self.s, right: (x + max_w) * self.s, bottom: (cy + size * 1.2) * self.s }, D2D1_ANTIALIAS_MODE_ALIASED);
+        }
+        let _ = crate::paint::draw_words(self.dc, &full, (x - off) * self.s, cy * self.s - full.height / 2.0, c);
+        unsafe {
+            self.dc.PopAxisAlignedClip();
+        }
+        MARQUEE.with(|m| m.set(true));
+        max_w
     }
 
     /// Words, right-aligned to `right`.
@@ -170,6 +211,28 @@ impl<'a> Painter<'a> {
             }
             m.height / self.s
         }
+    }
+
+    /// A graph in `r`: `vals` (each 0..1, the oldest first) as a line, with a faint fill under it.
+    pub fn spark(&self, vals: &[f32], r: Rect, c: Color) {
+        let n = vals.len();
+        if n < 2 {
+            self.round(Rect::new(r.x, r.bottom() - 1.5, r.w, 1.5), 0.75, c.alpha(0.5));
+            return;
+        }
+        let step = r.w / (n - 1) as f32;
+        let y = |v: f32| r.bottom() - 1.0 - (r.h - 2.0) * v.clamp(0.0, 1.0);
+        // (its fill: a thin column under each point)
+        for (i, v) in vals.iter().enumerate() {
+            let top = y(*v);
+            let x = r.x + i as f32 * step - step / 2.0;
+            let (x0, x1) = (x.max(r.x), (x + step).min(r.right()));
+            if x1 > x0 {
+                self.round(Rect::new(x0, top, x1 - x0, r.bottom() - top), 0.0, c.alpha(0.16));
+            }
+        }
+        let pts: Vec<(f32, f32)> = vals.iter().enumerate().map(|(i, v)| (r.x + i as f32 * step, y(*v))).collect();
+        self.line(&pts, 1.6, c);
     }
 
     pub fn icon(&self, name: &str, x: f32, y: f32, size: f32, c: Color) {
@@ -380,7 +443,15 @@ impl<'a> Painter<'a> {
     }
 
     /// Three bars that dance with the sound, `h` tall, from `x`, centred on `cy`; `parts` 0..1 each.
+    /// The three bars of the sound, from `x`, centred on `cy`, at most `h` tall: as tall as their bands, and lifted by the bass
+    /// (the middle one most, a little hop). Paused (`FLAT`): still, low. Its width.
     pub fn viz(&self, x: f32, cy: f32, h: f32, parts: [f32; 3], c: Color) -> f32 {
+        let lift = if parts == FLAT { 0.0 } else { LIFT.with(|l| l.get()) };
+        self.bars(x, cy, h, parts, lift, c)
+    }
+
+    /// The three bars, lifted so much (0..1) — what every set of three bars is drawn with.
+    pub fn bars(&self, x: f32, cy: f32, h: f32, parts: [f32; 3], lift: f32, c: Color) -> f32 {
         let w = (h * 0.24).max(2.0);
         let gap = (h * 0.16).max(1.5);
         for (i, p) in parts.iter().enumerate() {
@@ -388,10 +459,29 @@ impl<'a> Painter<'a> {
                 continue;
             }
             let bh = (h * p).max(w);
-            self.round(Rect::new(x + i as f32 * (w + gap), cy - bh / 2.0, w, bh), w / 2.0, c);
+            let up = lift.clamp(0.0, 1.0) * h * 0.3 * [0.8, 1.0, 0.8][i];
+            self.round(Rect::new(x + i as f32 * (w + gap), cy - bh / 2.0 - up, w, bh), w / 2.0, c);
         }
-        3.0 * w + 2.0 * gap
+        bars_w(h)
     }
+}
+
+/// The three bars while paused: still, low.
+pub const FLAT: [f32; 3] = [0.18, 0.18, 0.18];
+
+/// How wide the three bars are, `h` tall.
+pub fn bars_w(h: f32) -> f32 {
+    3.0 * (h * 0.24).max(2.0) + 2.0 * (h * 0.16).max(1.5)
+}
+
+thread_local! {
+    /// how far the bass lifts the bars of the sound now (0..1)
+    static LIFT: std::cell::Cell<f32> = const { std::cell::Cell::new(0.0) };
+}
+
+/// How far the bass lifts the bars of the sound now.
+pub fn set_lift(v: f32) {
+    LIFT.with(|l| l.set(v));
 }
 
 /// Draw `f` see-through (`a` 0..1) as one: a layer over all of it.

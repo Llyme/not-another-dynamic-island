@@ -15,6 +15,8 @@ pub struct Wants {
     pub audio: AtomicBool,
     /// the shell draws the sound (the bars of a widget): it listens whatever the plugins want
     pub shell_audio: AtomicBool,
+    /// the shell shows what plays (the dock's Now Card): looked at whatever the plugins want, with its pictures
+    pub shell_media: AtomicBool,
     pub notifications: AtomicBool,
 }
 

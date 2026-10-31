@@ -214,14 +214,21 @@ fn cells(p: &Painter, icon: &str, level: Option<f64>, x: f32, cy: f32) {
     }
 }
 
-/// the tray, large: each icon its own size, its word under it
-const TRAY_GAP_LARGE: f32 = 16.0;
-const TRAY_WORD: f32 = 9.5;
-const TRAY_WORD_MAX: f32 = 70.0;
+/// the tray, large: one even row of icons; one with news worth a glance, a chip (its icon and that, short)
+const TRAY_GAP_LARGE: f32 = 8.0;
+const TRAY_ICON_LARGE: f32 = 22.0;
+const TRAY_NEWS: f32 = 11.5;
+const TRAY_CHIP_H: f32 = 30.0;
 
 fn tray_item_w(p: &Painter, it: &Value) -> f32 {
-    let word = it["word"].as_str().unwrap_or("");
-    TRAY_ICON.max(if word.is_empty() { 0.0 } else { p.measure(word, TRAY_WORD, Weight::Regular, TRAY_WORD_MAX) })
+    let news = &it["news"];
+    if news["mark"].is_string() {
+        4.0 + TRAY_ICON_LARGE + 6.0 + 12.0 + 9.0
+    } else if let Some(t) = news["text"].as_str() {
+        4.0 + TRAY_ICON_LARGE + 6.0 + p.measure(t, TRAY_NEWS, Weight::Semibold, 140.0) + 10.0
+    } else {
+        TRAY_ICON_LARGE
+    }
 }
 
 const DOCK_ICON: f32 = 30.0;
@@ -238,26 +245,39 @@ fn tray(p: &Painter, peek: &Value, body: Rect, horizontal: bool) -> Vec<(Rect, S
     let cross = if horizontal { body.y + body.h / 2.0 } else { body.x + body.w / 2.0 };
     let place = |at: f32, w: f32| if horizontal { Rect::new(at, cross - z / 2.0, w, z) } else { Rect::new(cross - w / 2.0, at, w, z) };
     let split = peek["tray"]["split"].as_u64().unwrap_or(0) as usize;
-    // (large: each icon its own size, with what its app says under it)
+    // (large: one even row of icons, bigger; one whose app has news worth a glance grows into a chip: its icon and that, short)
     if peek["tray"]["large"] == true && horizontal {
         let mut at = body.x + 14.0;
         let cy = body.y + body.h / 2.0;
+        let zl = TRAY_ICON_LARGE;
         for it in &items {
             let w = tray_item_w(p, it);
-            let r = Rect::new(at + w / 2.0 - z / 2.0, cy - z / 2.0 - 7.0, z, z);
-            if !p.picture(it["image"].as_str().unwrap_or(""), r, 3.0) {
-                p.round(r, 5.0, SOFT);
+            let news = &it["news"];
+            let chip = !news.is_null();
+            let ix = if chip { at + 4.0 } else { at };
+            if chip {
+                p.round(Rect::new(at, cy - TRAY_CHIP_H / 2.0, w, TRAY_CHIP_H), TRAY_CHIP_H / 2.0, crate::paint::Color(0.106, 0.106, 0.125, 1.0));
             }
-            let word = it["word"].as_str().unwrap_or("");
-            if !word.is_empty() {
-                let ww = p.measure(word, TRAY_WORD, Weight::Regular, TRAY_WORD_MAX);
-                p.text(word, at + w / 2.0 - ww / 2.0, cy + 11.0, TRAY_WORD, Weight::Regular, TRAY_WORD_MAX, DIM);
+            let r = Rect::new(ix, cy - zl / 2.0, zl, zl);
+            if !p.picture(it["image"].as_str().unwrap_or(""), r, 4.0) {
+                p.round(r, 6.0, SOFT);
             }
-            out.push((Rect::new(at - 4.0, cy - z / 2.0 - 11.0, w + 8.0, z + 22.0), it["action"].as_str().unwrap_or("").to_string()));
+            let tx = ix + zl + 6.0;
+            match news["mark"].as_str() {
+                Some("ok") => p.icon("check", tx, cy - 6.0, 12.0, GREEN),
+                Some(_) => p.icon("x", tx, cy - 6.0, 12.0, crate::draw::RED),
+                None => {
+                    if let Some(t) = news["text"].as_str() {
+                        let c = if t.starts_with('↓') || t.starts_with('↑') { crate::paint::Color(0.35, 0.78, 0.9, 1.0) } else { TEXT };
+                        p.text(t, tx, cy, TRAY_NEWS, Weight::Semibold, 140.0, c);
+                    }
+                }
+            }
+            out.push((Rect::new(at - 3.0, cy - TRAY_CHIP_H / 2.0 - 2.0, w + 6.0, TRAY_CHIP_H + 4.0), it["action"].as_str().unwrap_or("").to_string()));
             at += w + TRAY_GAP_LARGE;
         }
         if more > 0 {
-            p.icon("dots", at + z / 2.0 - 8.0, cy - 8.0, 16.0, DIM);
+            p.icon("dots", at + 2.0, cy - 8.0, 16.0, DIM);
         }
         return out;
     }
@@ -287,8 +307,165 @@ const DOCK_GAP: f32 = 8.0;
 /// How much bigger a large widget's peek is drawn.
 pub const LARGE: f32 = 1.375;
 
+/// a song at rest: its cover so big, its words at most so wide, its stacked covers so far apart
+const SONG_COVER: f32 = 24.0;
+const SONG_TEXT: f32 = 150.0;
+const SONG_STACK: f32 = 6.0;
+
+fn song_text_w(p: &Painter, s: &Value) -> f32 {
+    let t = p.measure(s["title"].as_str().unwrap_or(""), 12.0, Weight::Semibold, 10_000.0);
+    let a = p.measure(s["artist"].as_str().unwrap_or(""), 11.0, Weight::Regular, 10_000.0);
+    t.max(a).min(SONG_TEXT)
+}
+
+fn song_w(p: &Painter, peek: &Value) -> f32 {
+    let s = &peek["song"];
+    if s["alone"] == true {
+        return METERS_SQUARE;
+    }
+    let stack = s["stack"].as_array().map_or(0, |a| a.len().min(2)) as f32 * SONG_STACK;
+    12.0 + SONG_COVER + stack + 10.0 + song_text_w(p, s) + 10.0 + 13.0 + 12.0
+}
+
+/// A song at rest: its cover (another player's covers just behind it), the song over who sings it, its three bars in its cover's
+/// colour (flat while paused); large, how long is left under them. Its icon alone: the bars alone, in the middle.
+fn song(p: &Painter, peek: &Value, body: Rect) {
+    let s = &peek["song"];
+    let c = color_of(&peek["color"], TEXT);
+    let playing = s["playing"] == true;
+    let parts = if playing { p.viz } else { crate::draw::FLAT };
+    let cy = body.y + body.h / 2.0;
+    if s["alone"] == true {
+        let h: f32 = 16.0;
+        p.viz(body.x + body.w / 2.0 - crate::draw::bars_w(h) / 2.0, cy + 1.5, h, parts, c);
+        return;
+    }
+    let mut x = body.x + 12.0;
+    let stack: Vec<String> = s["stack"].as_array().map(|a| a.iter().take(2).filter_map(|v| v.as_str().map(str::to_string)).collect()).unwrap_or_default();
+    // (the others' covers just behind the one shown, fainter the further back)
+    for (i, cov) in stack.iter().enumerate().rev() {
+        let off = (i + 1) as f32 * SONG_STACK;
+        let a = if i == 0 { 0.75 } else { 0.5 };
+        crate::draw::faded(p.dc, a, || {
+            if !p.picture(cov, Rect::new(x + off, cy - SONG_COVER / 2.0, SONG_COVER, SONG_COVER), 6.0) {
+                p.round(Rect::new(x + off, cy - SONG_COVER / 2.0, SONG_COVER, SONG_COVER), 6.0, SOFT);
+            }
+        });
+    }
+    let cr = Rect::new(x, cy - SONG_COVER / 2.0, SONG_COVER, SONG_COVER);
+    if !p.picture(s["cover"].as_str().unwrap_or(""), cr, 6.0) {
+        p.round(cr, 6.0, SOFT);
+        p.icon("music", cr.x + 5.0, cr.y + 5.0, 14.0, TEXT);
+    }
+    x += SONG_COVER + stack.len() as f32 * SONG_STACK + 10.0;
+    let tw = song_text_w(p, s);
+    let artist = s["artist"].as_str().unwrap_or("");
+    if artist.is_empty() {
+        p.text(s["title"].as_str().unwrap_or(""), x, cy, 12.0, Weight::Semibold, tw, TEXT);
+    } else {
+        p.text(s["title"].as_str().unwrap_or(""), x, cy - 7.0, 12.0, Weight::Semibold, tw, TEXT);
+        p.text(artist, x, cy + 7.5, 11.0, Weight::Regular, tw, DIM);
+    }
+    x += tw + 10.0;
+    // (large: how long is left, under its bars)
+    let large = peek["scale"].as_f64().unwrap_or(1.0) > 1.01;
+    let left = s["left"].as_str().unwrap_or("");
+    if large && !left.is_empty() {
+        p.viz(x, cy - 4.0, 10.0, parts, c);
+        let lw = p.measure(left, 7.5, Weight::Regular, 40.0);
+        p.text(left, x + 6.5 - lw / 2.0, cy + 6.5, 7.5, Weight::Regular, 40.0, DIM);
+    } else {
+        p.viz(x, cy, 12.0, parts, c);
+    }
+}
+
+/// bars in a square (graphs, their icon alone): so long a side; each bar so thick, so far apart
+const METERS_SQUARE: f32 = 38.0;
+const METER_T: f32 = 4.0;
+const METER_GAP: f32 = 4.0;
+
+/// Bars in a square, each as full as it is now: standing up on an edge along the top or the bottom, lying down on a side edge.
+fn meters(p: &Painter, peek: &Value, body: Rect, horizontal: bool) {
+    let bars = peek["meters"].as_array().cloned().unwrap_or_default();
+    let n = bars.len().max(1) as f32;
+    let span = n * METER_T + (n - 1.0) * METER_GAP;
+    let track = crate::paint::Color(0.106, 0.106, 0.125, 1.0);
+    for (i, b) in bars.iter().enumerate() {
+        let c = crate::draw::color_of(&b["color"], TEXT);
+        let part = b["part"].as_f64().unwrap_or(0.0).clamp(0.0, 1.0) as f32;
+        if horizontal {
+            let len = (body.h - 16.0).max(8.0);
+            let x = body.x + body.w / 2.0 - span / 2.0 + i as f32 * (METER_T + METER_GAP);
+            let foot = body.y + body.h / 2.0 + len / 2.0;
+            p.round(Rect::new(x, foot - len, METER_T, len), METER_T / 2.0, track);
+            let f = (len * part).max(METER_T);
+            p.round(Rect::new(x, foot - f, METER_T, f), METER_T / 2.0, c);
+        } else {
+            let len = (body.w - 16.0).max(8.0);
+            let y = body.y + body.h / 2.0 - span / 2.0 + i as f32 * (METER_T + METER_GAP);
+            let x0 = body.x + body.w / 2.0 - len / 2.0;
+            p.round(Rect::new(x0, y, len, METER_T), METER_T / 2.0, track);
+            p.round(Rect::new(x0, y, (len * part).max(METER_T), METER_T), METER_T / 2.0, c);
+        }
+    }
+}
+
+/// a peek of graphs: each so wide (large: wider, its name over it), so far apart
+const GRAPH_W: f32 = 44.0;
+const GRAPH_W_LARGE: f32 = 52.0;
+const GRAPH_GAP: f32 = 12.0;
+
+fn graph_vals(it: &Value) -> Vec<f32> {
+    it["values"].as_array().map(|a| a.iter().filter_map(|v| v.as_f64().map(|v| v as f32)).collect()).unwrap_or_default()
+}
+
+/// How long a peek of graphs is (its items: values, colour, text, label; large: its name over each).
+fn graphs_w(p: &Painter, peek: &Value) -> f32 {
+    let items = peek["graphs"]["items"].as_array().cloned().unwrap_or_default();
+    let large = peek["scale"].as_f64().unwrap_or(1.0) > 1.01;
+    let n = items.len().max(1) as f32;
+    let each: f32 = items
+        .iter()
+        .map(|it| if large { GRAPH_W_LARGE } else { GRAPH_W + 5.0 + p.measure(it["text"].as_str().unwrap_or(""), 12.0, Weight::Semibold, 60.0) })
+        .sum();
+    12.0 * 2.0 + each + (n - 1.0) * GRAPH_GAP
+}
+
+/// A peek of graphs: each the last while of what it measures, its number now beside it (large: its name and number over it).
+fn graphs(p: &Painter, peek: &Value, body: Rect) {
+    let items = peek["graphs"]["items"].as_array().cloned().unwrap_or_default();
+    let large = peek["scale"].as_f64().unwrap_or(1.0) > 1.01;
+    let cy = body.y + body.h / 2.0;
+    let mut x = body.x + 12.0;
+    for it in &items {
+        let c = crate::draw::color_of(&it["color"], TEXT);
+        let vals = graph_vals(it);
+        let text = it["text"].as_str().unwrap_or("");
+        if large {
+            let lw = p.text(it["label"].as_str().unwrap_or(""), x, cy - 6.5, 8.0, Weight::Semibold, 30.0, DIM);
+            p.text(text, x + lw + 4.0, cy - 6.5, 9.5, Weight::Semibold, 40.0, c);
+            p.spark(&vals, Rect::new(x, cy - 1.0, GRAPH_W_LARGE, 10.0), c);
+            x += GRAPH_W_LARGE + GRAPH_GAP;
+        } else {
+            p.spark(&vals, Rect::new(x, cy - 9.0, GRAPH_W, 18.0), c);
+            let tw = p.text(text, x + GRAPH_W + 5.0, cy, 12.0, Weight::Semibold, 60.0, c);
+            x += GRAPH_W + 5.0 + tw + GRAPH_GAP;
+        }
+    }
+}
+
 /// How long the body of a peek is along its edge (logical px); a large one's (its `scale`), that much longer.
 pub fn measure(p: &Painter, peek: &Value, horizontal: bool) -> f32 {
+    if peek["song"].is_object() {
+        let w = if horizontal { song_w(p, peek) } else { METERS_SQUARE };
+        return w * peek["scale"].as_f64().unwrap_or(1.0) as f32;
+    }
+    if peek["meters"].is_array() {
+        return METERS_SQUARE * peek["scale"].as_f64().unwrap_or(1.0) as f32;
+    }
+    if peek["graphs"].is_object() && horizontal {
+        return graphs_w(p, peek) * peek["scale"].as_f64().unwrap_or(1.0) as f32;
+    }
     if two_rows(peek, horizontal) {
         return two_rows_w(p, peek);
     }
@@ -441,6 +618,7 @@ fn measure_at(p: &Painter, peek: &Value, horizontal: bool) -> f32 {
         let more = if peek["tray"]["more"].as_u64().unwrap_or(0) > 0 { TRAY_ICON + 8.0 + TRAY_GAP } else { 0.0 };
         if peek["tray"]["large"] == true && horizontal {
             let ws: f32 = items.iter().map(|i| tray_item_w(p, i)).sum();
+            let more = if peek["tray"]["more"].as_u64().unwrap_or(0) > 0 { 20.0 + TRAY_GAP_LARGE } else { 0.0 };
             return 14.0 * 2.0 + ws + (n - 1.0).max(0.0) * TRAY_GAP_LARGE + more;
         }
         return 12.0 * 2.0 + n * TRAY_ICON + (n - 1.0).max(0.0) * TRAY_GAP + more;
@@ -450,12 +628,12 @@ fn measure_at(p: &Painter, peek: &Value, horizontal: bool) -> f32 {
         return 12.0 * 2.0 + n * if horizontal { DESK_W } else { DESK_H } + (n - 1.0) * DESK_GAP;
     }
     if let Some(items) = peek["dock"]["items"].as_array() {
-        // (the launcher's button, then each app: a running one with its meters beside it)
-        let n = items.len() as f32 + 1.0;
+        // (each app: a running one with its meters beside it)
+        let n = (items.len() as f32).max(1.0);
         let _ = horizontal;
         let sides: f32 = items.iter().filter(|i| !staged(peek, i)).map(|i| side_room(i)).sum();
-        let stages: f32 = items.iter().filter(|i| staged(peek, i)).map(|_| STAGE_W - DOCK_ICON).sum();
-        return 12.0 * 2.0 + n * DOCK_ICON + (n - 1.0) * DOCK_GAP + 8.0 + sides + stages;
+        let stages: f32 = items.iter().filter(|i| staged(peek, i)).map(|i| stage_w(peek, i) - DOCK_ICON).sum();
+        return 12.0 * 2.0 + n * DOCK_ICON + (n - 1.0) * DOCK_GAP + sides + stages;
     }
     if !horizontal {
         let (text, _) = words_of(peek);
@@ -615,49 +793,138 @@ fn side_room(it: &Value) -> f32 {
     (if it["cpu"].is_null() { 0.0 } else { METERS }) + (if it["progress"].is_null() { 0.0 } else { PROGRESS })
 }
 
-/// the dock at its largest: the app in front on a stage (its name, its sound, what it used lately, and now)
-pub const STAGE_W: f32 = 14.0 + 200.0 + 14.0;
-pub const STAGE_H: f32 = 84.0;
+/// the dock at its largest: the app in front on its card (its icon, or the cover of what it plays; its name and what you are in,
+/// or the song and who sings it; how far along; its use, while it works hard)
+pub const STAGE_W: f32 = 150.0;
+pub const STAGE_H: f32 = 48.0;
 
-/// Is this app on the stage (the dock at its largest, the app in front)?
+/// Is this app on its card (the dock at its largest, the app in front)?
 fn staged(peek: &Value, it: &Value) -> bool {
-    peek["dock"]["large"] == true && it["front"] == true
+    peek["dock"]["large"] == true && (it["front"] == true || leaving_front(peek, it))
 }
 
-fn stage(p: &Painter, it: &Value, x: f32, cy: f32) -> Vec<(Rect, String)> {
-    let r = Rect::new(x, cy - STAGE_H / 2.0, STAGE_W, STAGE_H);
-    p.round(r, 18.0, FAINT);
-    // its name, its sound
-    let tx = r.x + 14.0;
-    let tw = 200.0;
-    let z = 22.0;
-    if !p.picture(it["image"].as_str().unwrap_or(""), Rect::new(tx, r.y + 10.0, z, z), 6.0) {
-        p.round(Rect::new(tx, r.y + 10.0, z, z), 6.0, SOFT);
+/// how far the app in front has come since it changed (0..1: its card grows, the last one's shrinks); and was this the last one?
+fn front_k(peek: &Value) -> f32 {
+    peek["dock"]["front_k"].as_f64().unwrap_or(1.0).clamp(0.0, 1.0) as f32
+}
+
+fn leaving_front(peek: &Value, it: &Value) -> bool {
+    front_k(peek) < 1.0 && it["front"] != true && !it["key"].is_null() && it["key"] == peek["dock"]["front_prev"]
+}
+
+/// How wide a card is now: the new one growing out of its icon, the last one shrinking back into its own.
+fn stage_w(peek: &Value, it: &Value) -> f32 {
+    let k = front_k(peek);
+    let e = 1.0 - (1.0 - k).powi(3);
+    if it["front"] == true {
+        DOCK_ICON + (STAGE_W - DOCK_ICON) * e
+    } else {
+        STAGE_W - (STAGE_W - DOCK_ICON) * e
     }
+}
+
+fn stage(p: &Painter, it: &Value, x: f32, cy: f32, w: f32) -> Vec<(Rect, String)> {
+    let r = Rect::new(x, cy - STAGE_H / 2.0, w, STAGE_H);
+    let mut out = Vec::new();
+    p.round(r, 18.0_f32.min(w / 2.0), crate::paint::Color(0.106, 0.106, 0.125, 1.0));
+    unsafe {
+        p.dc.PushAxisAlignedClip(&p.px(r).d2d(), windows::Win32::Graphics::Direct2D::D2D1_ANTIALIAS_MODE_ALIASED);
+    }
+    let out = stage_inner(p, it, r, cy, &mut out);
+    unsafe {
+        p.dc.PopAxisAlignedClip();
+    }
+    out
+}
+
+fn stage_inner(p: &Painter, it: &Value, r: Rect, cy: f32, out: &mut Vec<(Rect, String)>) -> Vec<(Rect, String)> {
+    let mut out = std::mem::take(out);
+    // (growing out of its icon: the icon where it stood, moving in to its place as the card widens)
+    let inset = ((r.w - DOCK_ICON) / 2.0).clamp(0.0, 9.0);
+    let r = Rect::new(r.x, r.y, STAGE_W, r.h);
+    let media = &it["media"];
+    let playing = media.is_object();
+    // its picture: the cover of what it plays, else its icon, as big as the dock's other icons (an icon drawn bigger blurs)
+    let z = DOCK_ICON;
+    let pic = Rect::new(r.x + inset, r.y + (STAGE_H - z) / 2.0, z, z);
+    let cover = media["art"].as_str().unwrap_or("");
+    let shown = playing && !cover.is_empty() && p.picture(cover, pic, 7.0);
+    if !shown && !p.picture(it["image"].as_str().unwrap_or(""), pic, z * 0.22) {
+        p.round(pic, z * 0.3, SOFT);
+        let letter: String = it["name"].as_str().unwrap_or("?").chars().take(1).collect();
+        let w = p.measure(&letter, 18.0, Weight::Semibold, z);
+        p.text(&letter, pic.x + z / 2.0 - w / 2.0, pic.y + z / 2.0, 18.0, Weight::Semibold, z, TEXT);
+    }
+    if playing {
+        if let Some(src) = media["source"].as_str() {
+            out.push((pic, format!("mediatoggle:{src}")));
+        }
+    }
+    // (several windows: their dots under its picture)
+    window_dots(p, it, pic.x + pic.w / 2.0, pic.bottom() + 5.0);
+    // its use: two bars at its edge, as beside every app that runs
+    let busy = !it["cpu"].is_null();
+    if busy {
+        use_bars(p, it, r.right() - 18.0, r.bottom() - 10.0, STAGE_H - 20.0);
+    }
+    // its words
+    let tx = pic.right() + 10.0;
+    let tw = r.right() - 12.0 - if busy { 16.0 } else { 0.0 } - tx;
+    let (l1, l2) = if playing {
+        (media["title"].as_str().unwrap_or("").to_string(), media["artist"].as_str().unwrap_or("").to_string())
+    } else {
+        (it["name"].as_str().unwrap_or("").to_string(), it["title"].as_str().unwrap_or("").to_string())
+    };
+    let bar = media["progress"].as_f64().map(|f| f as f32);
     let sw = if it["audio"].is_array() { 20.0 } else { 0.0 };
-    p.text(it["name"].as_str().unwrap_or(""), tx + z + 8.0, r.y + 10.0 + z / 2.0, 13.0, Weight::Semibold, tw - z - 8.0 - sw, TEXT);
+    let (y1, y2, yb) = match (l2.is_empty(), bar.is_some()) {
+        (true, false) => (cy, cy, cy),
+        (false, false) => (cy - 8.0, cy + 8.0, cy),
+        (true, true) => (cy - 5.0, cy, cy + 8.0),
+        (false, true) => (cy - 12.0, cy + 2.0, cy + 14.0),
+    };
+    p.text(&l1, tx, y1, 12.5, Weight::Semibold, tw - sw, TEXT);
     if let Some(v) = it["audio"].as_array() {
-        sound_bars(p, v, tx + tw - 8.0, r.y + 10.0 + z / 2.0, 11.0);
+        sound_bars(p, v, tx + tw - 8.0, y1, 11.0);
     }
-    // what it used lately: two lines, its share of the processor (the colour of how heavy it is now) and of the memory
-    let hist: Vec<(f32, f32)> = it["hist"].as_array().map(|a| a.iter().map(|v| (v[0].as_f64().unwrap_or(0.0) as f32, v[1].as_f64().unwrap_or(0.0) as f32)).collect()).unwrap_or_default();
-    let (gy, gh) = (r.y + 38.0, 22.0);
-    let n = 60usize;
-    let step = tw / (n - 1) as f32;
-    let first = n.saturating_sub(hist.len());
-    let at = |i: usize, v: f32, full: f32| (tx + (first + i) as f32 * step, gy + gh - gh * (v / full).min(1.0));
-    let cpu_line: Vec<(f32, f32)> = hist.iter().enumerate().map(|(i, (c, _))| at(i, *c, 0.4)).collect();
-    let ram_line: Vec<(f32, f32)> = hist.iter().enumerate().map(|(i, (_, m))| at(i, *m, 0.5)).collect();
-    p.line(&ram_line, 1.6, PURPLE);
-    p.line(&cpu_line, 1.6, load_color(it["cpu"].as_f64().unwrap_or(0.0) as f32));
-    // now: its share of the processor, its memory
-    let cpu = it["cpu"].as_f64().unwrap_or(0.0) as f32;
-    let a = format!("{:.0}%", cpu * 100.0);
-    let aw = p.text(&a, tx, r.bottom() - 13.0, 12.0, Weight::Semibold, 60.0, load_color(cpu));
-    p.text("CPU", tx + aw + 4.0, r.bottom() - 13.0, 10.5, Weight::Regular, 40.0, DIM);
-    let mem = it["mem_text"].as_str().unwrap_or("");
-    p.text(mem, tx + 70.0, r.bottom() - 13.0, 12.0, Weight::Semibold, 90.0, PURPLE);
-    Vec::new()
+    if !l2.is_empty() {
+        p.text(&l2, tx, y2, 11.0, Weight::Regular, tw, DIM);
+    }
+    if let Some(f) = bar {
+        p.round(Rect::new(tx, yb - 1.5, tw, 3.0), 1.5, crate::paint::Color(0.149, 0.149, 0.173, 1.0));
+        p.round(Rect::new(tx, yb - 1.5, tw * f.clamp(0.0, 1.0), 3.0), 1.5, crate::draw::accent());
+    }
+    out
+}
+
+/// Under an app with several windows: a dot for each (three at most), centred on `cx`, the one in front in the theme's colour.
+fn window_dots(p: &Painter, it: &Value, cx: f32, cy: f32) {
+    let n = it["windows"].as_u64().unwrap_or(0) as usize;
+    if n < 2 {
+        return;
+    }
+    let shown = n.min(3);
+    let front = it["front_i"].as_u64().map(|i| (i as usize).min(shown - 1));
+    let gap = 6.0;
+    let x0 = cx - (shown - 1) as f32 * gap / 2.0;
+    for i in 0..shown {
+        let c = if Some(i) == front { crate::draw::accent() } else { crate::paint::Color(0.43, 0.43, 0.46, 1.0) };
+        p.circle(x0 + i as f32 * gap, cy, 1.8, c);
+    }
+}
+
+/// Under an app with several windows that makes sound: its dots as moving bars, a bar each (three at most), the one in front in the
+/// theme's colour.
+fn window_bars(p: &Painter, it: &Value, v: &[Value], cx: f32, cy: f32, h: f32) {
+    let n = (it["windows"].as_u64().unwrap_or(0) as usize).clamp(1, 3);
+    let front = it["front_i"].as_u64().map(|i| (i as usize).min(n - 1));
+    let sound = crate::paint::Color(0.35, 0.78, 0.9, 1.0);
+    let x0 = cx - (n - 1) as f32 * 6.0 / 2.0 - 1.5;
+    for i in 0..n {
+        let len = (h * v.get(i % v.len().max(1)).and_then(|b| b.as_f64()).unwrap_or(0.0) as f32).clamp(2.0, h);
+        let c = if Some(i) == front { crate::draw::accent() } else { sound };
+        p.round(Rect::new(x0 + i as f32 * 6.0, cy - len / 2.0, 3.0, len), 1.5, c);
+    }
 }
 
 /// a dock app's meters (two thin bars, their gap, and the room to its icon), and its download's bar
@@ -687,10 +954,9 @@ pub fn progress_bar(p: &Painter, f: f32, x: f32, foot: f32, h: f32) {
 /// The sound a program makes: three small bars that move (`v`: each 0..1), `w` wide, centred on `cx`, their middle at `cy`.
 pub fn sound_bars(p: &Painter, v: &[Value], cx: f32, cy: f32, h: f32) {
     let c = crate::paint::Color(0.35, 0.78, 0.9, 1.0);
-    for (i, b) in v.iter().take(3).enumerate() {
-        let len = (h * b.as_f64().unwrap_or(0.0) as f32).clamp(2.0, h);
-        p.round(Rect::new(cx - 6.5 + i as f32 * 5.0, cy - len / 2.0, 3.0, len), 1.5, c);
-    }
+    let at = |i: usize| v.get(i).and_then(|b| b.as_f64()).unwrap_or(0.0) as f32;
+    // (the same three bars as the sound's everywhere: as tall as it is loud, lifted as it swells)
+    p.bars(cx - crate::draw::bars_w(h) / 2.0, cy, h, [at(0), at(1), at(2)], at(3), c);
 }
 
 /// How heavy a share of the processor reads: blue when light, amber when busy, red when heavy.
@@ -732,20 +998,15 @@ fn dock(p: &Painter, peek: &Value, body: Rect, horizontal: bool) -> Vec<(Rect, S
         _ => body.y + body.h / 2.0,
     };
     let place = |at: f32| if horizontal { Rect::new(at, cross - z / 2.0, z, z) } else { Rect::new(cross - z / 2.0, at, z, z) };
-    // the launcher
-    let r = place(at);
-    p.round(r, z * 0.3, FAINT);
-    p.icon("grid", r.x + z * 0.22, r.y + z * 0.22, z * 0.56, TEXT);
-    out.push((r, "launcher".to_string()));
-    at += z + DOCK_GAP + 4.0;
     for (i, it) in items.iter().enumerate() {
         // (the app in front, at the dock's largest: on its stage)
         if staged(peek, it) && horizontal {
-            for (r, a) in stage(p, it, at, cross) {
+            let sw = stage_w(peek, it);
+            for (r, a) in stage(p, it, at, cross, sw) {
                 out.push((r, a));
             }
-            out.push((Rect::new(at, cross - STAGE_H / 2.0, STAGE_W, STAGE_H), format!("app:{i}")));
-            at += STAGE_W + DOCK_GAP;
+            out.push((Rect::new(at, cross - STAGE_H / 2.0, sw, STAGE_H), format!("app:{i}")));
+            at += sw + DOCK_GAP;
             continue;
         }
         // (running: its use on its left; its download on its right; only as tall as each is)
@@ -788,11 +1049,33 @@ fn dock(p: &Painter, peek: &Value, body: Rect, horizontal: bool) -> Vec<(Rect, S
         if downloading && horizontal {
             progress_bar(p, it["progress"].as_f64().unwrap_or(0.0) as f32, at + z + 5.0, foot, z - 6.0);
         }
-        // (making sound: small bars under it, moving with it)
+        // (several windows: a dot under it for each, the one in front lit; making sound, the dots are the sound: a bar each, moving
+        // with it (one window: its three bars, as ever))
+        // (at its largest there is room: the bars as big as the Now Playing widget's)
+        let (bh, by) = if peek["dock"]["large"] == true { (12.0, 8.5) } else { (8.0, 6.5) };
         if let (Some(v), true) = (it["audio"].as_array(), horizontal) {
-            sound_bars(p, v, r.x + z / 2.0, r.bottom() + 6.5, 8.0);
+            if it["windows"].as_u64().unwrap_or(0) >= 2 {
+                window_bars(p, it, v, r.x + z / 2.0, r.bottom() + by, bh);
+            } else {
+                sound_bars(p, v, r.x + z / 2.0, r.bottom() + by, bh);
+            }
+        } else if horizontal {
+            window_dots(p, it, r.x + z / 2.0, r.bottom() + 5.0);
         }
-        if it["key"].as_str() == Some(hovered) {
+        // (the app in front: a ground of the theme's colour behind it; the one under the mouse, a grey one)
+        // (as it comes to the front: its ground pops in, a little too far, and settles; the last one's fades)
+        let fk = front_k(peek);
+        if it["front"] == true || leaving_front(peek, it) {
+            let (sc, a) = if it["front"] == true {
+                let t = fk - 1.0;
+                (0.6 + 0.4 * (1.0 + 2.70158 * t * t * t + 1.70158 * t * t), fk.min(1.0))
+            } else {
+                (1.0, 1.0 - fk)
+            };
+            let (gw, gh) = ((r.w + 8.0) * sc, (r.h + 8.0) * sc);
+            let (cx, cy) = (r.x + r.w / 2.0, r.y + r.h / 2.0);
+            p.round(Rect::new(cx - gw / 2.0, cy - gh / 2.0, gw, gh), gh * 0.3, crate::draw::accent().alpha(0.22 * a));
+        } else if it["key"].as_str() == Some(hovered) {
             p.round(Rect::new(r.x - 3.0, r.y - 3.0, r.w + 6.0, r.h + 6.0), (z + 6.0) * 0.3, FAINT);
         }
         let img = it["image"].as_str().unwrap_or("");
@@ -820,6 +1103,17 @@ fn dock(p: &Painter, peek: &Value, body: Rect, horizontal: bool) -> Vec<(Rect, S
 /// The peek of a widget shown as its icon alone: what leads it; no words, no marks (something new, it glows instead). (A peek with
 /// nothing to lead it stays as it is.)
 pub fn icon_only(peek: &Value) -> Value {
+    // (a song, its icon alone: its bars alone)
+    if peek["song"].is_object() {
+        let mut o = peek.clone();
+        o["song"]["alone"] = serde_json::json!(true);
+        return o;
+    }
+    // (graphs, their icon alone: a bar for each, as full as it is now)
+    if let Some(items) = peek["graphs"]["items"].as_array() {
+        let bars: Vec<Value> = items.iter().map(|it| serde_json::json!({ "part": graph_vals(it).last().copied().unwrap_or(0.0), "color": it["color"] })).collect();
+        return serde_json::json!({ "meters": bars });
+    }
     // (the tray, its icon alone: its first four icons, small, in a square)
     if let Some(items) = peek["tray"]["items"].as_array() {
         let firsts: Vec<Value> = items.iter().take(4).map(|i| serde_json::json!({ "image": i["image"] })).collect();
@@ -848,6 +1142,25 @@ pub fn icon_only(peek: &Value) -> Value {
 }
 
 fn draw_at(p: &Painter, peek: &Value, body: Rect, horizontal: bool, dot: bool) -> Vec<(Rect, String)> {
+    if peek["song"].is_object() {
+        // (on a side edge: its bars alone)
+        if !horizontal && peek["song"]["alone"] != true {
+            let mut o = peek.clone();
+            o["song"]["alone"] = serde_json::json!(true);
+            song(p, &o, body);
+        } else {
+            song(p, peek, body);
+        }
+        return Vec::new();
+    }
+    if peek["meters"].is_array() {
+        meters(p, peek, body, horizontal);
+        return Vec::new();
+    }
+    if peek["graphs"].is_object() && horizontal {
+        graphs(p, peek, body);
+        return Vec::new();
+    }
     if peek["face"].is_string() {
         return Vec::new();
     }

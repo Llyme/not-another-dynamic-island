@@ -8,6 +8,7 @@
 mod apps;
 mod blocks;
 mod builtin;
+mod context;
 mod aura;
 mod config;
 mod director;

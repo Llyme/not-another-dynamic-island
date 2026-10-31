@@ -115,6 +115,7 @@ impl Frame {
         }
         // (NADI's own: the dock and quick settings while the dock is on, the tray while NADI holds it)
         let own = [
+            (crate::builtin::APPS, "Apps", true),
             (crate::builtin::DOCK, "Dock", true),
             (crate::builtin::QUICK, "Quick Settings", true),
             (crate::builtin::TRAY, "Tray", self.tray_held()),

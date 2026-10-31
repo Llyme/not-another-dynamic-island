@@ -6,7 +6,7 @@ use crate::draw::*;
 use crate::paint::Weight;
 use crate::shape::Rect;
 use serde_json::{json, Value};
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 /// What a press on a box of the panel does.
 #[derive(Clone, Debug, PartialEq)]
@@ -46,8 +46,10 @@ pub struct Ctx<'a, 'b> {
 
 /// a window in the dock's row (its live picture's width, with its meters beside it) and the room between two
 pub const WIN_PIC: f32 = 132.0;
-pub const WIN_W: f32 = WIN_PIC + crate::peek::METERS + crate::peek::PROGRESS;
 pub const WIN_GAP: f32 = 12.0;
+/// the dock open: each window's picture so wide, so tall
+pub const APPWIN_W: f32 = 132.0;
+pub const APPWIN_H: f32 = 82.0;
 const SP: f32 = 10.0;
 
 fn s<'v>(v: &'v Value, k: &str) -> &'v str {
@@ -61,6 +63,43 @@ fn f(v: &Value, k: &str) -> f32 {
 thread_local! {
     /// where the mouse is over the panel being drawn (its own space), if it is: its buttons are ghosts, with a ground only under it
     static HOVER: std::cell::Cell<Option<(f32, f32)>> = const { std::cell::Cell::new(None) };
+}
+
+/// a bar to seek on, or a slider: its press area this much wider than its track at each end (its knob goes that far past it)
+pub const SEEK_INSET: f32 = 8.0;
+const SLIDER_TRACK: crate::paint::Color = crate::paint::Color(0.165, 0.165, 0.188, 1.0);
+const SLIDER_DIM: crate::paint::Color = crate::paint::Color(0.29, 0.29, 0.32, 1.0);
+
+thread_local! {
+    /// the bar being dragged (its action) and where its knob is, ahead of its plugin
+    static SLIDING: std::cell::RefCell<Option<(String, f32)>> = const { std::cell::RefCell::new(None) };
+    /// each slider drawn: its value, as its plugin gave it (the wheel steps from it)
+    static SLIDERS: std::cell::RefCell<HashMap<String, f32>> = std::cell::RefCell::new(HashMap::new());
+}
+
+/// The bar being dragged, and where its knob is (none: none is).
+pub fn set_sliding(at: Option<(String, f32)>) {
+    SLIDING.with(|s| *s.borrow_mut() = at);
+}
+
+/// Where a dragged (or wheeled) bar's knob is now, ahead of its plugin.
+pub fn sliding_at(action: &str) -> Option<f32> {
+    sliding(action)
+}
+
+fn sliding(action: &str) -> Option<f32> {
+    SLIDING.with(|s| s.borrow().as_ref().filter(|(a, _)| a == action).map(|(_, v)| *v))
+}
+
+fn note_slider(action: &str, v: f32) {
+    SLIDERS.with(|s| {
+        s.borrow_mut().insert(action.to_string(), v);
+    });
+}
+
+/// A slider's value, as last drawn (none: it is not a slider, a bar to seek on).
+pub fn slider_value(action: &str) -> Option<f32> {
+    SLIDERS.with(|s| s.borrow().get(action).copied())
 }
 
 /// Where the mouse is over the panel about to be drawn (none: not on it).
@@ -150,6 +189,14 @@ impl<'a, 'b> Ctx<'a, 'b> {
         }
     }
 
+    /// A block's colour: its own (`color`), else its picture's (`color_from`, a cover's), else `or`.
+    fn tint(&self, b: &Value, or: crate::paint::Color) -> crate::paint::Color {
+        if let Some((r, g, bl)) = b["color_from"].as_str().and_then(|i| crate::images::tone(self.p.pc, i)) {
+            return crate::paint::Color(r, g, bl, 1.0);
+        }
+        color_of(&b["color"], or)
+    }
+
     /// A person's mark: their animal (any words: an emoji) on a disc of their tint, `d` across, its middle at `cx`, `cy`; a ring of the
     /// theme's colour round it while they talk.
     fn avatar(&self, a: &str, tint: crate::paint::Color, cx: f32, cy: f32, d: f32, ring: bool) {
@@ -187,6 +234,10 @@ impl<'a, 'b> Ctx<'a, 'b> {
                     n as f32 * 30.0 + (n.max(1) - 1) as f32 * 2.0 + 4.0
                 }
                 "meter" => it["w"].as_f64().unwrap_or(90.0) as f32,
+                "seg" => {
+                    let ts = it["items"].as_array().cloned().unwrap_or_default();
+                    ts.iter().map(|t| c.p.measure(s(t, "label"), 11.0, Weight::Semibold, 80.0) + 18.0).sum::<f32>() + 2.0 * (ts.len().max(1) - 1) as f32 + 4.0
+                }
                 _ => 0.0,
             }
         };
@@ -275,6 +326,27 @@ impl<'a, 'b> Ctx<'a, 'b> {
                         self.hit_tip(r, Press::Action(action, it["args"].clone()), tip);
                     } else if !tip.is_null() {
                         self.hit_tip(r, Press::Action(String::new(), Value::Null), tip);
+                    }
+                }
+                "seg" => {
+                    // (a choice of a few words, on its track, the chosen one filled)
+                    let ts = it["items"].as_array().cloned().unwrap_or_default();
+                    self.round(Rect::new(cx, cy - 14.0, iw, 28.0), 10.0, TRACK);
+                    let mut tx = cx + 2.0;
+                    for t in &ts {
+                        let lw = self.p.measure(s(t, "label"), 11.0, Weight::Semibold, 80.0) + 18.0;
+                        let r = Rect::new(tx, cy - 12.0, lw, 24.0);
+                        let on = t["on"] == true;
+                        if on {
+                            self.round(r, 8.0, CHOSEN);
+                        } else if self.draw && hovered(r) {
+                            self.round(r, 8.0, LIT);
+                        }
+                        self.text(s(t, "label"), tx + 9.0, cy, 11.0, Weight::Semibold, 80.0, if on { TEXT } else { DIM });
+                        if !s(t, "action").is_empty() {
+                            self.hit(r, Press::Action(s(t, "action").to_string(), t["args"].clone()));
+                        }
+                        tx += lw + 2.0;
                     }
                 }
                 "meter" => {
@@ -510,6 +582,108 @@ impl<'a, 'b> Ctx<'a, 'b> {
             }
             "table" => self.table(b, x, y, w),
             "toolbar" => self.toolbar(b, x, y, w),
+            // (the players playing: a chip each, its cover, its app, its bars (or a pause mark); the one shown filled. The chip:
+            // shown; its bars: played or paused)
+            "players" => {
+                let mut cx = x;
+                for it in b["items"].as_array().cloned().unwrap_or_default() {
+                    let name = s(&it, "name");
+                    let nw = self.p.measure(name, 11.0, Weight::Semibold, 120.0);
+                    let cw = 4.0 + 20.0 + 6.0 + nw + 6.0 + 16.0 + 8.0;
+                    let r = Rect::new(cx, y, cw, 28.0);
+                    let on = it["on"] == true;
+                    self.round(r, 14.0, if on { CHOSEN } else if hovered(r) { LIT } else { TRACK });
+                    if self.draw && !self.p.picture(s(&it, "image"), Rect::new(cx + 4.0, y + 4.0, 20.0, 20.0), 5.0) {
+                        self.p.round(Rect::new(cx + 4.0, y + 4.0, 20.0, 20.0), 5.0, GROUND);
+                    }
+                    self.text(name, cx + 30.0, y + 14.0, 11.0, Weight::Semibold, 120.0, if on { TEXT } else { DIM });
+                    let mx = cx + 30.0 + nw + 6.0;
+                    if self.draw {
+                        let c = color_of(&it["color"], accent());
+                        if it["playing"] == true {
+                            self.p.viz(mx, y + 14.0, 10.0, self.p.viz, if on { c } else { DIM });
+                        } else {
+                            self.p.round(Rect::new(mx + 2.0, y + 9.5, 3.0, 9.0), 1.0, DIM);
+                            self.p.round(Rect::new(mx + 7.5, y + 9.5, 3.0, 9.0), 1.0, DIM);
+                        }
+                    }
+                    // (its bars, pressed: played or paused, not shown)
+                    if !s(&it, "toggle").is_empty() {
+                        self.hit_tip(Rect::new(mx - 3.0, y, 20.0, 28.0), Press::Action(s(&it, "toggle").to_string(), it["args"].clone()), json!(if it["playing"] == true { "Pause" } else { "Play" }));
+                    }
+                    self.hit(r, Press::Action(s(&it, "action").to_string(), it["args"].clone()));
+                    cx += cw + 6.0;
+                }
+                28.0
+            }
+            // (a cover, large, in the middle, glowing softly in its colours)
+            "cover" => {
+                let z = b["size"].as_f64().map_or(w.min(200.0), |v| (v as f32).min(w));
+                let r = Rect::new(x + w / 2.0 - z / 2.0, y, z, z);
+                if self.draw {
+                    if let Some((cr, cg, cb)) = crate::images::tone(self.p.pc, s(b, "image")) {
+                        let c = crate::paint::Color(cr, cg, cb, 1.0);
+                        for i in 0..8 {
+                            let e = 2.0 + i as f32 * 3.0;
+                            self.p.round(Rect::new(r.x - e, r.y - e + 6.0, r.w + 2.0 * e, r.h + 2.0 * e), 16.0 + e, c.alpha(0.05));
+                        }
+                    }
+                    if !self.p.picture(s(b, "image"), r, 16.0) {
+                        self.p.round(r, 16.0, GROUND);
+                        self.icon("music", r.x + z / 2.0 - 16.0, r.y + z / 2.0 - 16.0, 32.0, DIM);
+                    }
+                }
+                if !s(b, "press").is_empty() {
+                    self.hit(r, Press::Action(s(b, "press").to_string(), Value::Null));
+                }
+                z
+            }
+            // (a song's head: its name, big, who sings it and its album under it; its bars at its end)
+            "songhead" => {
+                let bw = if b["viz"].is_boolean() { 22.0 } else { 0.0 };
+                self.text(s(b, "title"), x, y + 11.0, 16.0, Weight::Semibold, w - bw, TEXT);
+                self.text(s(b, "sub"), x, y + 31.0, 12.5, Weight::Regular, w - bw, DIM);
+                if self.draw && b["viz"].is_boolean() {
+                    let parts = if b["viz"] == true { self.p.viz } else { FLAT };
+                    self.p.viz(x + w - 16.0, y + 20.0, 14.0, parts, self.tint(b, accent()));
+                }
+                42.0
+            }
+            // (a graph of a while: its name, its number now in its colour, a word at its end; then the graph)
+            "chart" => {
+                let c = color_of(&b["color"], TEXT);
+                let nw = self.text(s(b, "label"), x, y + 12.0, 10.5, Weight::Semibold, 40.0, DIM).max(30.0);
+                self.text(s(b, "text"), x + nw + 6.0, y + 12.0, 20.0, Weight::Semibold, 100.0, c);
+                self.text_end(s(b, "sub"), x + w, y + 12.0, 11.0, Weight::Regular, w * 0.5, DIM);
+                let gh = b["height"].as_f64().unwrap_or(40.0) as f32;
+                if self.draw {
+                    let vals: Vec<f32> = b["values"].as_array().map(|a| a.iter().filter_map(|v| v.as_f64().map(|v| v as f32)).collect()).unwrap_or_default();
+                    self.p.spark(&vals, Rect::new(x, y + 26.0, w, gh), c);
+                }
+                26.0 + gh
+            }
+            // (programs and how much each uses: its picture, its name, a bar, a number)
+            "usage" => {
+                let rows = b["rows"].as_array().cloned().unwrap_or_default();
+                for (n, r) in rows.iter().enumerate() {
+                    let cy = y + n as f32 * 28.0 + 13.0;
+                    let pic = Rect::new(x, cy - 11.0, 22.0, 22.0);
+                    if self.draw && !self.p.picture(s(r, "image"), pic, 5.0) {
+                        self.p.round(pic, 6.0, GROUND);
+                    }
+                    let bw = 90.0;
+                    let tx = x + 30.0;
+                    self.text(s(r, "name"), tx, cy, 12.5, Weight::Regular, (w - 30.0 - bw - 50.0).max(20.0), TEXT);
+                    let bx = x + w - bw - 44.0;
+                    self.round(Rect::new(bx, cy - 3.0, bw, 6.0), 3.0, TRACK);
+                    let v = f(r, "value").clamp(0.0, 1.0);
+                    if v > 0.0 {
+                        self.round(Rect::new(bx, cy - 3.0, (bw * v).max(6.0), 6.0), 3.0, color_of(&r["color"], accent()));
+                    }
+                    self.text_end(s(r, "text"), x + w, cy, 12.0, Weight::Semibold, 44.0, TEXT);
+                }
+                (rows.len() as f32 * 28.0 - 4.0).max(0.0)
+            }
             "script" => self.script(b, x, y, w),
             // (things to pick from, in a grid: animals, people; the chosen one on a grey of its own)
             "picker" => {
@@ -876,11 +1050,20 @@ impl<'a, 'b> Ctx<'a, 'b> {
                     self.button(bt, rx, cy, false);
                     rx -= 8.0;
                 }
-                let bar = Rect::new(lx + 4.0, cy - 2.5, (rx - lx - 8.0).max(10.0), 5.0);
+                let bar = Rect::new(lx + 4.0, cy - 3.0, (rx - lx - 8.0).max(10.0), 6.0);
                 if self.draw {
-                    self.p.bar(bar, f(b, "value"), TEXT);
+                    // (its own colour, when it gives one (a cover's); a knob where it is)
+                    let c = self.tint(b, TEXT);
+                    let v = sliding(s(b, "action")).unwrap_or(f(b, "value")).clamp(0.0, 1.0);
+                    self.p.round(bar, 3.0, GROUND);
+                    if v > 0.0 {
+                        self.p.round(Rect::new(bar.x, bar.y, (bar.w * v).max(6.0), bar.h), 3.0, c);
+                    }
+                    if b["color"].is_string() || b["color_from"].is_string() {
+                        self.p.circle(bar.x + bar.w * v, cy, 6.0, TEXT);
+                    }
                 }
-                self.hit(Rect::new(bar.x, cy - 10.0, bar.w, 20.0), Press::Seek(s(b, "action").to_string()));
+                self.hit(Rect::new(bar.x - SEEK_INSET, cy - 10.0, bar.w + 2.0 * SEEK_INSET, 20.0), Press::Seek(s(b, "action").to_string()));
                 let fmt = |sec: f32| {
                     let t = sec.max(0.0) as u64;
                     if t >= 3600 {
@@ -901,6 +1084,31 @@ impl<'a, 'b> Ctx<'a, 'b> {
             }
             "controls" => {
                 let items = b["items"].as_array().cloned().unwrap_or_default();
+                // (one of them the main one (play): big, filled, in the middle)
+                if items.iter().any(|i| i["main"] == true) {
+                    let size = |i: &Value| if i["main"] == true { 52.0 } else { 40.0 };
+                    let total: f32 = items.iter().map(size).sum::<f32>() + (items.len().saturating_sub(1)) as f32 * 18.0;
+                    let mut cx = x + w / 2.0 - total / 2.0;
+                    let cy = y + 26.0;
+                    for it in &items {
+                        let d = size(it);
+                        let r = Rect::new(cx, cy - d / 2.0, d, d);
+                        if it["main"] == true {
+                            if self.draw {
+                                self.p.circle(cx + d / 2.0, cy, d / 2.0, if hovered(r) { TEXT.alpha(0.85) } else { TEXT });
+                            }
+                            self.icon(s(it, "icon"), cx + d / 2.0 - 11.0, cy - 11.0, 22.0, FACE);
+                        } else {
+                            if self.draw && hovered(r) {
+                                self.p.circle(cx + d / 2.0, cy, d / 2.0, LIT);
+                            }
+                            self.icon(s(it, "icon"), cx + d / 2.0 - 10.0, cy - 10.0, 20.0, TEXT);
+                        }
+                        self.hit_tip(r, Press::Action(s(it, "action").to_string(), it["args"].clone()), json!(s(it, "label")));
+                        cx += d + 18.0;
+                    }
+                    return 52.0;
+                }
                 let total = items.len() as f32 * 34.0 + (items.len().saturating_sub(1)) as f32 * 14.0;
                 let mut cx = x + w / 2.0 - total / 2.0;
                 for it in &items {
@@ -1212,6 +1420,98 @@ impl<'a, 'b> Ctx<'a, 'b> {
                 let rows = items.len().div_ceil(cols);
                 rows as f32 * row_h + (rows - 1) as f32 * 10.0
             }
+            // (the dock open: each app, its name over its windows (each its live picture, its title under it), the apps in rows; at
+            // the foot, its pinned ones that are closed)
+            "appwindows" => {
+                let groups = b["groups"].as_array().cloned().unwrap_or_default();
+                let pins = b["pins"].as_array().cloned().unwrap_or_default();
+                let gw = |g: &Value| {
+                    let n = g["windows"].as_array().map_or(1, |w| w.len()) as f32;
+                    n * APPWIN_W + (n - 1.0) * 8.0
+                };
+                let head = 22.0;
+                let row_h = head + APPWIN_H + 22.0;
+                let (mut cx, mut cy) = (x, y);
+                for g in &groups {
+                    let w_g = gw(g);
+                    if cx > x && cx + w_g > x + w {
+                        cx = x;
+                        cy += row_h + 14.0;
+                    }
+                    // its name
+                    let pic = Rect::new(cx, cy + 2.0, 16.0, 16.0);
+                    if self.draw && !self.p.picture(s(g, "image"), pic, 4.0) {
+                        self.round(pic, 4.0, GROUND);
+                    }
+                    self.text(s(g, "name"), cx + 22.0, cy + 10.0, 11.5, Weight::Semibold, (w_g - 22.0).max(40.0), TEXT);
+                    // its windows
+                    let mut wx = cx;
+                    for it in g["windows"].as_array().cloned().unwrap_or_default() {
+                        let r = Rect::new(wx, cy + head, APPWIN_W, APPWIN_H);
+                        if self.draw {
+                            if it["attention"] == true {
+                                self.p.round(Rect::new(r.x - 4.0, r.y - 4.0, r.w + 8.0, r.h + 8.0), 13.0, crate::draw::AMBER.alpha(0.35));
+                            }
+                            // (the one you were in: ringed in the theme's colour)
+                            if it["front"] == true {
+                                self.p.round(Rect::new(r.x - 2.5, r.y - 2.5, r.w + 5.0, r.h + 5.0), 12.0, accent());
+                                self.p.round(Rect::new(r.x - 0.5, r.y - 0.5, r.w + 1.0, r.h + 1.0), 10.0, FACE);
+                            }
+                            if hovered(r) {
+                                self.p.round(Rect::new(r.x - 1.0, r.y - 1.0, r.w + 2.0, r.h + 2.0), 10.0, LIT);
+                            }
+                            self.p.round(r, 10.0, GROUND);
+                        }
+                        let hwnd = it["hwnd"].as_i64().unwrap_or(0) as isize;
+                        if hwnd != 0 {
+                            if self.draw {
+                                self.thumbs.push((hwnd, Rect::new(r.x + 2.0, r.y + 2.0, r.w - 4.0, r.h - 4.0)));
+                            }
+                        } else if self.draw {
+                            let z = 32.0;
+                            let pr = Rect::new(r.x + r.w / 2.0 - z / 2.0, r.y + r.h / 2.0 - z / 2.0, z, z);
+                            if !self.p.picture(s(&it, "image"), pr, 8.0) {
+                                self.icon("dot", pr.x + 8.0, pr.y + 8.0, 16.0, DIM);
+                            }
+                        }
+                        // (working hard: its use stands up on its edge)
+                        if self.draw && it["cpu"].as_f64().unwrap_or(0.0) >= 0.10 {
+                            crate::peek::use_bars(self.p, &it, r.right() - 13.0, r.bottom() - 5.0, r.h - 14.0);
+                        }
+                        // its title (without its app's name), scrolling when long; its sound at its end
+                        let t = if s(&it, "short").is_empty() { s(&it, "title") } else { s(&it, "short") };
+                        let mw = if it["audio"].is_array() { 16.0 } else { 0.0 };
+                        self.text(t, r.x + 2.0, r.bottom() + 11.0, 10.5, Weight::Regular, r.w - 4.0 - mw, DIM);
+                        if let (Some(v), true) = (it["audio"].as_array(), self.draw) {
+                            crate::peek::sound_bars(self.p, v, r.right() - 6.0, r.bottom() + 11.0, 8.0);
+                        }
+                        self.hit_tip(r, Press::Action(s(&it, "action").to_string(), Value::Null), it["title"].clone());
+                        self.last_hit(false, it["menu"].clone());
+                        wx += APPWIN_W + 8.0;
+                    }
+                    cx += w_g + 16.0;
+                }
+                let mut h = if groups.is_empty() { 0.0 } else { cy - y + row_h };
+                // its pinned ones, closed: a row of icons, under a thin line
+                if !pins.is_empty() {
+                    if !groups.is_empty() {
+                        self.round(Rect::new(x, y + h + 6.0, w, 1.0), 0.5, TRACK);
+                        h += 14.0;
+                    }
+                    let mut px = x;
+                    for p in &pins {
+                        let r = Rect::new(px, y + h, 30.0, 30.0);
+                        self.ghost(Rect::new(r.x - 3.0, r.y - 3.0, r.w + 6.0, r.h + 6.0), 9.0);
+                        if self.draw && !self.p.picture(s(p, "image"), Rect::new(r.x + 3.0, r.y + 3.0, 24.0, 24.0), 6.0) {
+                            self.round(Rect::new(r.x + 3.0, r.y + 3.0, 24.0, 24.0), 6.0, GROUND);
+                        }
+                        self.hit_tip(r, Press::Action(s(p, "action").to_string(), Value::Null), p["name"].clone());
+                        px += 40.0;
+                    }
+                    h += 30.0;
+                }
+                h
+            }
             "windows" => {
                 // windows side by side, centred, as many rows as they need: each its live picture (else its app's picture), and under
                 // it its app's small picture and its title
@@ -1220,19 +1520,22 @@ impl<'a, 'b> Ctx<'a, 'b> {
                 if n == 0 {
                     return 0.0;
                 }
-                let cols = (((w + WIN_GAP) / (WIN_W + WIN_GAP)).floor() as usize).max(1);
+                // (each picture this wide: the dock's own, else as big as it asks (a peek of an app's windows))
+                let pic = b["pic"].as_f64().map_or(WIN_PIC, |v| (v as f32).clamp(80.0, 480.0));
+                let win_w = pic + crate::peek::METERS + crate::peek::PROGRESS;
+                let cols = (((w + WIN_GAP) / (win_w + WIN_GAP)).floor() as usize).max(1);
                 let rows = n.div_ceil(cols);
-                let ph = (WIN_PIC * 0.625).round();
+                let ph = (pic * 0.625).round();
                 let row_h = ph + 24.0;
                 for (i, it) in items.iter().enumerate() {
                     let (row, col) = (i / cols, i % cols);
                     let in_row = (n - row * cols).min(cols) as f32;
-                    let x0 = x + (w - (in_row * WIN_W + (in_row - 1.0) * WIN_GAP)) / 2.0;
-                    let cell = x0 + col as f32 * (WIN_W + WIN_GAP);
+                    let x0 = x + (w - (in_row * win_w + (in_row - 1.0) * WIN_GAP)) / 2.0;
+                    let cell = x0 + col as f32 * (win_w + WIN_GAP);
                     let by = y + row as f32 * (row_h + WIN_GAP);
                     // (its use on the picture's left, how far its download is on its right)
                     let bx = cell + crate::peek::METERS;
-                    let r = Rect::new(bx, by, WIN_PIC, ph);
+                    let r = Rect::new(bx, by, pic, ph);
                     // (it wants you: it glows)
                     if self.draw && it["attention"] == true {
                         self.p.round(Rect::new(r.x - 4.0, r.y - 4.0, r.w + 8.0, r.h + 8.0), 13.0, crate::draw::AMBER.alpha(0.35));
@@ -1244,7 +1547,11 @@ impl<'a, 'b> Ctx<'a, 'b> {
                         crate::peek::progress_bar(self.p, f as f32, r.right() + 5.0, r.bottom() - 6.0, ph - 12.0);
                     }
                     let hwnd = it["hwnd"].as_i64().unwrap_or(0) as isize;
-                    // (a ghost; the window in front: a dot under it, in the theme colour)
+                    // (a ghost; the window in front: ringed in the theme's colour)
+                    if it["front"] == true && self.draw {
+                        self.p.round(Rect::new(r.x - 2.5, r.y - 2.5, r.w + 5.0, r.h + 5.0), 12.0, accent());
+                        self.p.round(Rect::new(r.x - 0.5, r.y - 0.5, r.w + 1.0, r.h + 1.0), 10.0, FACE);
+                    }
                     self.ghost(r, 10.0);
                     if it["front"] == true && self.draw {
                         self.p.circle(r.x + r.w / 2.0, r.bottom() + 3.0, 1.8, accent());
@@ -1311,43 +1618,71 @@ impl<'a, 'b> Ctx<'a, 'b> {
                 h
             }
             "slider" => {
-                // a bar to set a value on (pressed where it should be), with its icon (which may do something of its own)
-                let cy = y + 14.0;
+                // a thin track with a white knob, pressed or dragged where it should be (the knob follows the mouse at once); under the
+                // mouse it thickens, held it rings; its icon a ghost button of its own, left of it (pressed: muted); its value at the
+                // right. Muted: the level kept, dim, the icon red
+                let h = 32.0;
+                let cy = y + h / 2.0;
+                let action = s(b, "action");
+                let given = f(b, "value").clamp(0.0, 1.0);
+                note_slider(action, given);
+                let held = sliding(action);
+                let v = held.unwrap_or(given).clamp(0.0, 1.0);
                 let icon = s(b, "icon");
                 let image = s(b, "image");
-                let mut bx = x;
-                if !icon.is_empty() || !image.is_empty() {
-                    if self.draw {
-                        self.p.circle(x + 13.0, cy, 13.0, FAINT);
-                    }
-                    let muted = b["muted"] == true;
-                    if !image.is_empty() && self.draw {
-                        if !self.p.picture(image, Rect::new(x + 5.0, cy - 8.0, 16.0, 16.0), 3.0) {
-                            self.icon("music", x + 5.0, cy - 8.0, 16.0, TEXT);
-                        }
-                        // (muted: a line through it)
-                        if muted {
-                            self.p.round(Rect::new(x + 3.0, cy - 1.0, 20.0, 2.0), 1.0, RED);
-                        }
-                    } else if !icon.is_empty() {
-                        self.icon(icon, x + 5.0, cy - 8.0, 16.0, TEXT);
-                    }
-                    if !s(b, "press").is_empty() {
-                        self.hit(Rect::new(x, cy - 13.0, 26.0, 26.0), Press::Action(s(b, "press").to_string(), Value::Null));
-                    }
-                    bx += 36.0;
-                }
-                let t = s(b, "text");
-                let tw = self.p.measure(t, 11.5, Weight::Semibold, 70.0).max(34.0);
-                let bar = Rect::new(bx, cy - 3.0, w - (bx - x) - tw - 10.0, 6.0);
+                let muted = b["muted"] == true;
+                let has_icon = !icon.is_empty() || !image.is_empty();
+                let left = if has_icon { x + 40.0 } else { x };
+                let vw = 36.0;
+                let hit = Rect::new(left, y, (x + w - vw - 6.0 - left).max(20.0), h);
+                let track = Rect::new(hit.x + SEEK_INSET, cy, (hit.w - 2.0 * SEEK_INSET).max(4.0), 0.0);
+                let over = hovered(hit) && held.is_none();
                 if self.draw {
-                    self.p.bar(bar, f(b, "value"), TEXT);
-                    let kx = bar.x + bar.w * f(b, "value").clamp(0.0, 1.0);
-                    self.p.circle(kx, cy, 7.0, TEXT);
+                    let th = if held.is_some() || over { 6.0 } else { 4.0 };
+                    self.p.round(Rect::new(track.x, cy - th / 2.0, track.w, th), th / 2.0, SLIDER_TRACK);
+                    let fill = if muted { SLIDER_DIM } else { accent() };
+                    let kx = track.x + track.w * v;
+                    if v > 0.0 {
+                        self.p.round(Rect::new(track.x, cy - th / 2.0, kx - track.x, th), th / 2.0, fill);
+                    }
+                    let kr = if held.is_some() { 9.0 } else if over { 8.0 } else { 7.0 };
+                    if held.is_some() {
+                        self.p.circle(kx, cy, kr + 5.0, accent().alpha(0.22));
+                    }
+                    self.p.circle(kx, cy + 1.0, kr + 0.5, crate::paint::Color(0.0, 0.0, 0.0, 0.35));
+                    self.p.circle(kx, cy, kr, if muted { DIM } else { crate::paint::Color(1.0, 1.0, 1.0, 1.0) });
                 }
-                self.hit(Rect::new(bar.x - 6.0, cy - 13.0, bar.w + 12.0, 26.0), Press::Seek(s(b, "action").to_string()));
-                self.text(t, x + w - tw, cy, 11.5, Weight::Semibold, 70.0, TEXT);
-                28.0
+                if has_icon {
+                    let ib = Rect::new(x, y, 32.0, 32.0);
+                    let press = s(b, "press");
+                    if self.draw {
+                        if !press.is_empty() && hovered(ib) {
+                            self.p.circle(x + 16.0, cy, 16.0, LIT);
+                        }
+                        let c = if muted { RED } else { TEXT };
+                        if !image.is_empty() {
+                            if !self.p.picture(image, Rect::new(x + 7.0, cy - 9.0, 18.0, 18.0), 4.0) {
+                                self.icon("music", x + 8.0, cy - 8.0, 16.0, c);
+                            }
+                        } else {
+                            self.icon(icon, x + 8.0, cy - 8.0, 16.0, c);
+                        }
+                        // (muted: a line through it, but where its icon says so itself)
+                        if muted && icon != "volume-x" {
+                            self.p.round(Rect::new(x + 5.0, cy - 1.0, 22.0, 2.0), 1.0, RED);
+                        }
+                    }
+                    if !press.is_empty() {
+                        self.hit_tip(ib, Press::Action(press.to_string(), Value::Null), Value::String(if muted { "Unmute" } else { "Mute" }.into()));
+                    }
+                }
+                let t = if held.is_some() { format!("{}%", (v * 100.0).round() as i32) } else { s(b, "text").to_string() };
+                if self.draw {
+                    let c = if muted && held.is_none() { RED } else if held.is_some() || over { TEXT } else { DIM };
+                    self.p.text_end(&t, x + w, cy, 11.5, Weight::Semibold, vw + 20.0, c);
+                }
+                self.hit(hit, Press::Seek(action.to_string()));
+                h + 2.0
             }
             _ => 0.0,
         }

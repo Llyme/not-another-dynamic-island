@@ -178,7 +178,7 @@ fn snapshots_now() -> Vec<MediaSnapshot> {
 
 /// What a module that may see what is playing is told (never the picture, and the position only to the second).
 fn publish_for_plugins(state: &Pc, snaps: &[MediaSnapshot]) {
-    if !state.want.media.load(Ordering::Relaxed) {
+    if !state.want.media.load(Ordering::Relaxed) && !state.want.shell_media.load(Ordering::Relaxed) {
         return;
     }
     // (a picture is told once for each change: its id says which it is, and `media_arts` holds the pictures)
@@ -227,11 +227,12 @@ pub fn spawn(state: Arc<Pc>) {
                 let _ = CoInitializeEx(None, COINIT_MULTITHREADED);
             }
             loop {
-                if !state.want.media.load(Ordering::Relaxed) {
+                let shell = state.want.shell_media.load(Ordering::Relaxed);
+                if !state.want.media.load(Ordering::Relaxed) && !shell {
                     std::thread::sleep(Duration::from_millis(POLL_MS));
                     continue;
                 }
-                WANT_ART.store(state.want.media_art.load(Ordering::Relaxed), Ordering::Relaxed);
+                WANT_ART.store(state.want.media_art.load(Ordering::Relaxed) || shell, Ordering::Relaxed);
                 let snaps = snapshots_now();
                 publish_for_plugins(&state, &snaps);
                 std::thread::sleep(Duration::from_millis(POLL_MS));

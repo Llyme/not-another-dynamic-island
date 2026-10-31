@@ -39,6 +39,22 @@ pub fn fill_shape(dc: &ID2D1DeviceContext, shape: &Shape, c: Color) -> Result<()
     Ok(())
 }
 
+/// A shape filled from its top in `c`, fading to nothing by `to_y` (its own pixels down).
+pub fn fill_shape_fade(dc: &ID2D1DeviceContext, shape: &Shape, c: Color, to_y: f32) -> Result<()> {
+    unsafe {
+        let stops = [
+            D2D1_GRADIENT_STOP { position: 0.0, color: D2D1_COLOR_F { r: c.0, g: c.1, b: c.2, a: c.3 } },
+            D2D1_GRADIENT_STOP { position: 1.0, color: D2D1_COLOR_F { r: c.0, g: c.1, b: c.2, a: 0.0 } },
+        ];
+        let coll = dc.CreateGradientStopCollection(&stops, D2D1_COLOR_SPACE_SRGB, D2D1_COLOR_SPACE_SRGB, D2D1_BUFFER_PRECISION_8BPC_UNORM, D2D1_EXTEND_MODE_CLAMP, D2D1_COLOR_INTERPOLATION_MODE_STRAIGHT)?;
+        let coll: ID2D1GradientStopCollection = windows::core::Interface::cast(&coll)?;
+        let props = D2D1_LINEAR_GRADIENT_BRUSH_PROPERTIES { startPoint: D2D_POINT_2F { x: 0.0, y: 0.0 }, endPoint: D2D_POINT_2F { x: 0.0, y: to_y.max(1.0) } };
+        let br = dc.CreateLinearGradientBrush(&props, None, &coll)?;
+        dc.FillGeometry(&shape.geometry, &br, None);
+    }
+    Ok(())
+}
+
 pub fn fill_round(dc: &ID2D1DeviceContext, r: Rect, radius: f32, c: Color) -> Result<()> {
     let b = brush(dc, c)?;
     unsafe { dc.FillRoundedRectangle(&D2D1_ROUNDED_RECT { rect: r.d2d(), radiusX: radius, radiusY: radius }, &b) };
