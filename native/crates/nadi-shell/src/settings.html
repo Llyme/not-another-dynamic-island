@@ -1,0 +1,571 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>NADI Settings</title>
+<style>
+:root {
+  --bg: #0b0b0d; --rail: #0b0b0d; --card: #141418; --card2: #1b1b20; --hover: #1f1f25; --line: #18181c;
+  --text: #f2f2f5; --dim: #9a9aa4; --faint: #6d6d75; --accent: #5ac88c; --green: #5ac88c; --amber: #e8b04a; --red: #e87a7a;
+}
+* { box-sizing: border-box; }
+html, body { margin: 0; height: 100%; background: var(--bg); color: var(--text); font: 13px/1.45 "Segoe UI Variable Text", "Segoe UI", sans-serif; user-select: none; }
+body { display: flex; overflow: hidden; }
+::-webkit-scrollbar { width: 10px; } ::-webkit-scrollbar-thumb { background: #26262c; border-radius: 6px; border: 3px solid var(--bg); }
+svg.i { width: 20px; height: 20px; fill: none; stroke: currentColor; stroke-width: 1.7; stroke-linecap: round; stroke-linejoin: round; display: block; }
+svg.s { width: 15px; height: 15px; }
+/* the rail: an icon a page; the page you are on marked in the theme colour */
+#rail { width: 64px; flex: none; background: var(--rail); border-right: 1px solid var(--line); display: flex; flex-direction: column; align-items: center; gap: 6px; padding: 14px 0; }
+#rail .logo { width: 28px; height: 28px; margin-bottom: 12px; }
+#rail button { all: unset; position: relative; display: grid; place-items: center; width: 40px; height: 40px; border-radius: 12px; color: var(--dim); }
+#rail button:hover { background: var(--hover); color: var(--text); }
+#rail button.on { color: var(--accent); }
+#rail button.on::before { content: ""; position: absolute; left: -12px; top: 12px; width: 3px; height: 16px; border-radius: 2px; background: var(--accent); }
+#rail .gap { flex: 1; }
+main { flex: 1; overflow-y: auto; padding: 22px 26px 60px; min-width: 0; }
+.grid2 { display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap: 12px; }
+.card { background: var(--card); border-radius: 14px; padding: 14px; display: flex; flex-direction: column; gap: 10px; }
+.k { font-size: 11px; font-weight: 600; color: var(--faint); letter-spacing: .02em; }
+.row { display: flex; align-items: center; gap: 10px; min-height: 30px; }
+.grow { flex: 1; min-width: 0; }
+.dim { color: var(--dim); } .faint { color: var(--faint); }
+.small { font-size: 11px; }
+.name { font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.sub { color: var(--faint); font-size: 11px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+/* picture tiles: a choice among a few, each its little picture */
+.tiles { display: grid; gap: 8px; }
+.tile { all: unset; display: flex; flex-direction: column; align-items: center; gap: 6px; padding: 9px 6px 8px; border-radius: 10px; background: var(--card2); color: var(--dim); font-size: 11px; text-align: center; }
+.tile:hover { background: var(--hover); color: var(--text); }
+.tile.on { background: #24242a; color: var(--text); box-shadow: inset 0 0 0 1.5px var(--accent); }
+.tile svg { display: block; }
+/* toggle groups keep their track, the one chosen filled */
+.seg { display: inline-flex; background: var(--card2); border-radius: 10px; padding: 3px; gap: 2px; flex: none; }
+.seg button { all: unset; padding: 4px 11px; border-radius: 8px; color: var(--dim); font-size: 12px; }
+.seg button:hover { color: var(--text); background: var(--hover); }
+.seg button.on { background: var(--text); color: #000; font-weight: 600; }
+/* ghost buttons: no ground until the mouse is on one */
+.gh { all: unset; display: inline-flex; align-items: center; gap: 6px; padding: 6px 10px; border-radius: 9px; font-size: 12px; font-weight: 600; color: var(--text); white-space: nowrap; flex: none; }
+.gh:hover { background: var(--hover); }
+.gh.acc { color: var(--accent); }
+.gh.no { color: var(--red); }
+.gh[disabled] { opacity: .45; pointer-events: none; }
+.switch { position: relative; width: 34px; height: 20px; border-radius: 10px; background: #2a2a30; flex: none; transition: background .2s; }
+.switch::after { content: ""; position: absolute; left: 3px; top: 3px; width: 14px; height: 14px; border-radius: 50%; background: #fff; transition: transform .25s cubic-bezier(.3, 1.6, .5, 1); }
+.switch.on { background: var(--accent); }
+.switch.on::after { transform: translateX(14px); }
+input[type=text], input[type=number], select { all: unset; background: var(--card2); padding: 6px 10px; border-radius: 9px; min-width: 150px; color: var(--text); font-size: 12px; }
+select option { background: #1b1b20; }
+input[type=range] { accent-color: var(--accent); flex: 1; min-width: 80px; }
+.swatches { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.swatch { all: unset; width: 22px; height: 22px; border-radius: 11px; box-shadow: inset 0 0 0 1px rgba(255,255,255,.12); }
+.swatch.on { box-shadow: 0 0 0 2px var(--bg), 0 0 0 4px #f2f2f5; }
+.swatch-pick { width: 24px; height: 24px; border: none; padding: 0; background: none; }
+/* plugins */
+.search { display: flex; align-items: center; gap: 8px; flex: 1; height: 32px; padding: 0 12px; border-radius: 10px; background: var(--card2); color: var(--faint); }
+.search input { all: unset; flex: 1; color: var(--text); font-size: 12px; }
+.chips { display: flex; gap: 4px; flex-wrap: wrap; align-items: center; }
+.chip.on { background: #24242a; box-shadow: inset 0 0 0 1.5px var(--accent); }
+.chip .n { color: var(--faint); font-weight: 400; }
+.dot { width: 14px; height: 14px; border-radius: 7px; flex: none; }
+.plugs { display: grid; grid-template-columns: repeat(auto-fill, minmax(230px, 1fr)); gap: 10px; }
+.pc { background: var(--card); border-radius: 14px; padding: 12px; display: flex; flex-direction: column; gap: 8px; cursor: pointer; transition: background .15s, box-shadow .15s; }
+.pc:hover { background: #18181d; box-shadow: inset 0 0 0 1.5px #2e2e36; }
+.pc .foot { display: flex; align-items: flex-end; gap: 8px; }
+.pc .open { color: var(--faint); flex: none; transition: color .15s, transform .15s; }
+.pc:hover .open { color: var(--text); transform: translateX(2px); }
+.av { width: 36px; height: 36px; border-radius: 10px; display: grid; place-items: center; font-weight: 700; font-size: 15px; flex: none; }
+.av.big { width: 46px; height: 46px; border-radius: 12px; font-size: 19px; }
+.desc { color: var(--dim); font-size: 11.5px; line-height: 1.5; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+.perm { display: flex; align-items: center; gap: 8px; font-size: 12px; }
+.tags { display: flex; gap: 6px; flex-wrap: wrap; }
+.tag { display: inline-flex; align-items: center; gap: 5px; padding: 2px 8px; border-radius: 7px; background: var(--card2); font-size: 10.5px; color: var(--dim); }
+.tag i { width: 6px; height: 6px; border-radius: 3px; background: var(--accent); }
+.tag.warn { color: var(--amber); }
+.note { padding: 9px 12px; border-radius: 10px; background: var(--card2); color: var(--dim); font-size: 12px; }
+.note.bad { color: var(--red); background: rgba(232, 122, 122, .1); }
+.empty { color: var(--faint); padding: 18px 4px; }
+.spin { width: 13px; height: 13px; border-radius: 50%; border: 2px solid #333; border-top-color: var(--accent); animation: s .8s linear infinite; flex: none; }
+@keyframes s { to { transform: rotate(360deg); } }
+.wtile { all: unset; display: flex; flex-direction: column; align-items: center; gap: 6px; padding: 10px; border-radius: 10px; background: var(--card2); color: var(--dim); font-size: 11px; min-width: 110px; }
+.wtile:hover { background: var(--hover); }
+.wtile.on { color: var(--text); }
+/* a sheet over the page */
+#sheet { position: fixed; inset: 0; background: rgba(0,0,0,.55); display: none; align-items: center; justify-content: center; }
+#sheet.on { display: flex; }
+#sheet .box { width: 400px; background: var(--card); border-radius: 16px; padding: 16px; display: flex; flex-direction: column; gap: 12px; box-shadow: 0 0 0 1px #24242a; }
+.tip { position: fixed; pointer-events: none; background: #26262c; color: var(--text); padding: 7px 10px; border-radius: 9px; font-size: 12px; max-width: 320px; opacity: 0; transition: opacity .15s; z-index: 9; white-space: pre-wrap; }
+</style>
+</head>
+<body>
+<div id="rail"></div>
+<main id="main"></main>
+<div id="sheet"><div class="box" id="sheetbox"></div></div>
+<div class="tip" id="tip"></div>
+<script>
+"use strict";
+const LOGO = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAEAAAABACAYAAACqaXHeAAABjklEQVR42u2bP06EQBSHOcFibIyJCbGyXAsLC221k2obE8MBjNnOAxhLL+ApvIAHsJsjcIQ9wnPeBiJuwHFYjCzvI/l18P58zAzM5L0kibxms73Ma+n15uW85J/lqlg0piz5q8sbL0aS8G+AFEMmnnuVO5D4pjTmfJvE02poyY5Lc0j7JO8mkHxzWqQxya8mlHytVRDCBN983EiYyJwPrgk/rfZiRHkbgNIQgLLtJ0eMqWgCcAYBuOa/vRhVllSbCKsAllY+fd2fRKPz/2sdMJz8WgAAAAAAAIChtH94IPPiSs7ub9Y6vphvbVNt1PbUtvoYJYCj0xNZvD/L7cfLN10+3fW2qc9u2lMf6mtUAPSttCVf6/xxEW1Tn+myp76GGgmDANCh2RVsrZiA9d6QPfU5GgDXrw/BgGPWA703ZE99AgAAAAAAAAAAAAAAAAAAYDPEdpgDEY7EOBQFAAAAAAAA9ABgvkDCfImM+SIp22Vy5gslKZWlWJpyeRomaJmhaYq2ORonaZ2ledpm+/wnzoRKik7vJtwAAAAASUVORK5CYII=";
+// (the rail's pictures, 24 box)
+const ICONS = {
+  plugins: "M9 3v5M15 3v5M6 8h12v3a6 6 0 0 1-12 0zM12 17v4",
+  look: "M12 3.5a8.5 8.5 0 1 0 0 17c1.4 0 2-1 1.6-2.1-.4-1.1.3-2.2 1.5-2.2h1.7a3.2 3.2 0 0 0 3.3-3.3C20 7 16.5 3.5 12 3.5zM7.5 12h.01M10 8h.01M14.5 8h.01",
+  frame: "M3 5.5A2.5 2.5 0 0 1 5.5 3h13A2.5 2.5 0 0 1 21 5.5v10a2.5 2.5 0 0 1-2.5 2.5h-13A2.5 2.5 0 0 1 3 15.5zM9 3v3h6V3M8 21h8",
+  about: "M12 3.5a8.5 8.5 0 1 0 0 17 8.5 8.5 0 0 0 0-17zM12 11v5.5M12 7.5v.5",
+  exit: "M12 3v8M6.4 6.4a8 8 0 1 0 11.2 0",
+  back: "M15 6l-6 6 6 6",
+  plus: "M12 5v14M5 12h14",
+  search: "M11 5a6 6 0 1 0 0 12 6 6 0 0 0 0-12zM16 16l4 4",
+  refresh: "M20 12a8 8 0 1 1-2.3-5.6M20 4v5h-5",
+  link: "M14 4h6v6M20 4l-9 9M18 14v4a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4",
+  net: "M12 3.5a8.5 8.5 0 1 0 0 17 8.5 8.5 0 0 0 0-17zM3.5 12h17M12 3.5c2.5 2.6 2.5 14.4 0 17M12 3.5c-2.5 2.6-2.5 14.4 0 17",
+  shield: "M12 3l7 3v6c0 4.5-3 7.5-7 9-4-1.5-7-4.5-7-9V6z",
+  taskbar: "M3 15h18v5H3zM6 17.5h2",
+  win: "M4 5l7-1v7H4zM13 4l7-1v8h-7zM4 13h7v7l-7-1zM13 13h7v8l-7-1z",
+  power: "M12 3v8M6.4 6.4a8 8 0 1 0 11.2 0",
+  folder: "M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z",
+};
+const PAGES = [["plugins", "Plugins"], ["look", "Look"], ["frame", "Frame"]];
+const DEFAULT_REPO = "Llyme/nadi-plugins";
+let S = { plugins: [], config: {}, widgets: [], repos: {}, busy: {}, errors: {} };
+const store = { get(k) { try { return localStorage.getItem(k); } catch (_) { return null; } }, set(k, v) { try { localStorage.setItem(k, v); } catch (_) {} } };
+let page = store.get("page") || "plugins";
+if (!["plugins", "look", "frame", "about"].includes(page)) page = "plugins";
+// (on the plugins page: the list, a plugin's own page, or a source's)
+let view = { kind: "list" };
+let filter = "all", source = "all", query = "";
+let adding = null;
+
+const send = (cmd, o = {}) => window.chrome.webview.postMessage(JSON.stringify({ cmd, ...o }));
+const el = (tag, cls, text) => { const e = document.createElement(tag); if (cls) e.className = cls; if (text != null) e.textContent = text; return e; };
+const icon = (name, cls) => { const s = document.createElementNS("http://www.w3.org/2000/svg", "svg"); s.setAttribute("viewBox", "0 0 24 24"); s.setAttribute("class", "i" + (cls ? " " + cls : "")); const p = document.createElementNS("http://www.w3.org/2000/svg", "path"); p.setAttribute("d", ICONS[name] || name); s.append(p); return s; };
+const pic = (html, w, h) => { const d = el("div"); d.innerHTML = `<svg width="${w}" height="${h}" viewBox="0 0 64 40">${html}</svg>`; return d.firstChild; };
+// (a tip: beside it (`side`: "right", the rail's), else under it, or over it where there is no room under; always inside the window)
+function tipOn(node, text, side) {
+  const t = document.getElementById("tip");
+  node.addEventListener("mouseenter", () => {
+    t.textContent = text; t.style.opacity = 1;
+    const r = node.getBoundingClientRect(), tw = t.offsetWidth, th = t.offsetHeight;
+    let x, y;
+    if (side === "right") { x = r.right + 8; y = r.top + r.height / 2 - th / 2; }
+    else { x = r.left; y = r.bottom + 6; if (y + th > innerHeight - 6) y = r.top - th - 6; }
+    t.style.left = Math.max(6, Math.min(x, innerWidth - tw - 6)) + "px";
+    t.style.top = Math.max(6, Math.min(y, innerHeight - th - 6)) + "px";
+  });
+  node.addEventListener("mouseleave", () => t.style.opacity = 0);
+}
+function seg(options, value, onPick) {
+  const s = el("div", "seg");
+  for (const [v, label] of options) { const b = el("button", v === value ? "on" : "", label); b.onclick = () => onPick(v); s.append(b); }
+  return s;
+}
+function sw(on, onFlip) { const s = el("div", "switch" + (on ? " on" : "")); s.onclick = e => { e.stopPropagation(); onFlip(!on); }; return s; }
+function gh(text, cls, onClick, ico) { const b = el("button", "gh" + (cls ? " " + cls : "")); if (ico) b.append(icon(ico, "s")); if (text) b.append(document.createTextNode(text)); b.onclick = e => { e.stopPropagation(); onClick(); }; return b; }
+function tiles(cols, items, value, onPick) {
+  const t = el("div", "tiles"); t.style.gridTemplateColumns = `repeat(${cols}, 1fr)`;
+  for (const [v, label, art] of items) { const b = el("button", "tile" + (v === value ? " on" : "")); b.append(pic(art, 56, 35), document.createTextNode(label)); b.onclick = () => onPick(v); t.append(b); }
+  return t;
+}
+function card(name, ...kids) { const c = el("div", "card"); if (name) c.append(el("div", "k", name)); c.append(...kids); return c; }
+function row(label, control, ico) { const r = el("div", "row"); if (ico) { const i = icon(ico, "s"); i.style.color = "var(--dim)"; r.append(i); } r.append(el("span", "grow", label), control); return r; }
+// (a plugin's own colour, from its name: its picture is its first letter on it)
+const HUES = ["#d97757", "#e8b04a", "#5ac88c", "#3fb6c6", "#4f8ff0", "#a77bf3", "#e86a9a"];
+function avatar(name, big) {
+  let h = 0; for (const c of name || "?") h = (h * 31 + c.charCodeAt(0)) >>> 0;
+  const col = HUES[h % HUES.length];
+  const a = el("div", "av" + (big ? " big" : ""), (name || "?").trim().charAt(0).toUpperCase());
+  a.style.color = col; a.style.background = col + "22";
+  return a;
+}
+
+function rail() {
+  const r = document.getElementById("rail");
+  r.replaceChildren();
+  const logo = el("img", "logo"); logo.src = LOGO; logo.alt = ""; r.append(logo);
+  const b = (id, label, ico, onClick) => { const x = el("button", page === id ? "on" : ""); x.append(icon(ico)); tipOn(x, label, "right"); x.onclick = onClick || (() => { page = id; view = { kind: "list" }; store.set("page", id); draw(); }); r.append(x); };
+  for (const [id, label] of PAGES) b(id, label, id);
+  r.append(el("div", "gap"));
+  b("about", "About", "about");
+  // (quits NADI: with the taskbar hidden, its tray icon is not there to)
+  b("exit", "Exit", "exit", () => send("exit"));
+}
+
+function draw() {
+  rail();
+  const m = document.getElementById("main");
+  const keep = m.scrollTop;
+  const focus = document.activeElement && document.activeElement.dataset.keep;
+  m.replaceChildren();
+  ({ plugins: pagePlugins, look: pageLook, frame: pageFrame, about: pageAbout })[page](m);
+  m.scrollTop = keep;
+  if (focus) { const f = m.querySelector(`[data-keep="${focus}"]`); if (f) { f.focus(); f.setSelectionRange(f.value.length, f.value.length); } }
+  drawSheet();
+}
+
+// -------------------------------------------------------------------------------------------------------------- plugins
+function verLess(a, b) {
+  const pa = String(a || "").replace(/^v/, "").split(/[.-]/).map(Number), pb = String(b || "").replace(/^v/, "").split(/[.-]/).map(Number);
+  for (let i = 0; i < Math.max(pa.length, pb.length); i++) { const x = pa[i] || 0, y = pb[i] || 0; if (x !== y) return x < y; }
+  return false;
+}
+function repos() { const r = Object.keys(S.repos); if (!r.includes(DEFAULT_REPO)) r.unshift(DEFAULT_REPO); return r; }
+// (every plugin: the ones you have, and every one your sources offer; one entry each)
+function catalog() {
+  const out = [];
+  const offer = new Map();
+  for (const repo of repos()) for (const f of (S.repos[repo] && S.repos[repo].plugins) || []) if (!f.problem && !offer.has(f.id)) offer.set(f.id, { repo, f });
+  for (const p of S.plugins) {
+    const o = offer.get(p.id);
+    const repo = (p.from && repos().find(r => p.from.toLowerCase().startsWith(r.toLowerCase()))) || (o && o.repo) || null;
+    const upd = o && repo && o.repo === repo && verLess(p.version, o.f.version) ? o : null;
+    out.push({ id: p.id, name: p.name, desc: p.description, repo, mine: p, update: upd, offer: o && o.f, provides: p.provides || {}, needs: p.needs || {} });
+  }
+  for (const [id, { repo, f }] of offer) if (!S.plugins.some(p => p.id === id)) out.push({ id, name: f.name, desc: f.description, repo, mine: null, offer: f, provides: f.provides || {}, needs: f.needs || {} });
+  return out;
+}
+function pagePlugins(m) {
+  if (view.kind === "plugin") return pluginPage(m, view.id);
+  if (view.kind === "source") return sourcePage(m, view.repo);
+  const all = catalog();
+  const updates = all.filter(e => e.update);
+  const bar = el("div", "row"); bar.style.marginBottom = "10px";
+  bar.append(seg([["all", "All"], ["installed", "Installed"], ["uninstalled", "Uninstalled"]], filter, f => { filter = f; draw(); }));
+  const s = el("label", "search"); s.append(icon("search", "s"));
+  const q = el("input"); q.placeholder = "Search Plugins"; q.value = query; q.dataset.keep = "q"; q.oninput = () => { query = q.value; draw(); };
+  s.append(q); bar.append(s);
+  if (updates.length) bar.append(gh(`Update ${updates.length}`, "acc", () => updateAll(updates)));
+  m.append(bar);
+  // (the sources: each filters the list to it; pressed again, its page; the + adds one)
+  const chips = el("div", "chips"); chips.style.marginBottom = "12px";
+  const chip = (id, label, n, col) => {
+    const c = gh(null, "chip" + (source === id ? " on" : ""), () => { if (source === id && id !== "all") view = { kind: "source", repo: id }; else source = id; draw(); });
+    if (col) { const d = el("span", "dot"); d.style.background = col; c.append(d); }
+    c.append(document.createTextNode(label)); c.append(el("span", "n", String(n)));
+    if (id !== "all" && S.busy[id]) c.append(el("span", "spin"));
+    return c;
+  };
+  chips.append(chip("all", "All", all.length));
+  for (const repo of repos()) chips.append(chip(repo, repo, all.filter(e => e.repo === repo).length, avatarColor(repo)));
+  const add = gh(null, "", () => { adding = { text: "" }; drawSheet(); }, "plus"); tipOn(add, "Add a Source"); chips.append(add);
+  m.append(chips);
+  const ql = query.trim().toLowerCase();
+  const list = all.filter(e => (filter === "all" || (filter === "installed") === !!e.mine) && (source === "all" || e.repo === source) && (!ql || (e.name + " " + (e.desc || "")).toLowerCase().includes(ql)));
+  list.sort((a, b) => (!!b.update - !!a.update) || (!!b.mine - !!a.mine) || a.name.localeCompare(b.name));
+  for (const repo of repos()) if (S.errors[repo] && (source === "all" || source === repo)) m.append(el("div", "note bad", `${repo}: ${S.errors[repo]}`));
+  if (!list.length) { m.append(el("div", "empty", ql ? "No results." : filter === "installed" ? "No plugins installed." : "No plugins.")); return; }
+  const g = el("div", "plugs");
+  for (const e of list) g.append(plugCard(e));
+  m.append(g);
+}
+function avatarColor(name) { let h = 0; for (const c of name) h = (h * 31 + c.charCodeAt(0)) >>> 0; return HUES[h % HUES.length]; }
+function plugCard(e) {
+  const c = el("div", "pc");
+  const r = el("div", "row");
+  const g = el("div", "grow"); g.append(el("div", "name", e.name), el("div", "sub", e.repo || "Local"));
+  r.append(avatar(e.name), g);
+  if (e.mine) {
+    if (e.update) { const u = gh("Update", "acc", () => send("repo_get", { repo: e.update.repo, ids: [e.id], keep_on: true })); tipOn(u, `${e.mine.version} → ${e.update.f.version}`); if (S.busy[e.update.repo]) u.disabled = true; r.append(u); }
+    if (e.mine.problem) { const w = el("span", "small", "!"); w.style.color = "var(--amber)"; tipOn(w, e.mine.problem); r.append(w); }
+    r.append(sw(e.mine.on, on => send("set_on", { id: e.id, on })));
+  } else {
+    const g = gh("Get", "", () => get(e));
+    if (S.busy[e.repo]) g.disabled = true;
+    if (e.offer && e.offer.needs_newer) { g.disabled = true; tipOn(g, "Requires a newer version of NADI"); }
+    r.append(g);
+  }
+  c.append(r);
+  const tags = serviceTags(e); if (tags) c.append(tags);
+  // (its words, and a chevron: pressed, its own page)
+  const foot = el("div", "foot");
+  const d = el("div", "desc grow", e.desc || ""); foot.append(d);
+  const ch = icon("M9 6l6 6-6 6", "s open"); foot.append(ch);
+  c.append(foot);
+  tipOn(ch, e.mine ? "Settings" : "Details");
+  c.onclick = () => { view = { kind: "plugin", id: e.id }; draw(); document.getElementById("main").scrollTop = 0; };
+  return c;
+}
+const title = s => String(s).replace(/(^|[-_. ])(\w)/g, (_, a, b) => (a ? " " : "") + b.toUpperCase());
+// (the installed plugins that need a service, and whether one that gives it is installed)
+function usersOf(service) { return S.plugins.filter(p => p.needs && service in p.needs); }
+function hasProvider(service) { return S.plugins.some(p => p.provides && service in p.provides); }
+// Get: it, and for each service it needs that nothing installed gives, a plugin that gives it (from the same source if it can)
+function get(e) {
+  const by = {}; const add = (repo, id) => { (by[repo] = by[repo] || []).includes(id) || by[repo].push(id); };
+  add(e.repo, e.id);
+  for (const service in e.needs || {}) {
+    if (hasProvider(service)) continue;
+    const all = catalog().filter(x => !x.mine && x.provides && service in x.provides);
+    const pick = all.find(x => x.repo === e.repo) || all[0];
+    if (pick) add(pick.repo, pick.id);
+  }
+  for (const repo in by) send("repo_get", { repo, ids: by[repo], keep_on: false });
+}
+function serviceTags(e) {
+  const t = el("div", "tags");
+  for (const service in e.provides || {}) {
+    const g = el("span", "tag"); g.append(el("i"), document.createTextNode("Provides " + title(service))); t.append(g);
+    const n = usersOf(service).length; if (n) t.append(el("span", "tag", "Used by " + n));
+  }
+  for (const service in e.needs || {}) t.append(el("span", "tag" + (e.mine && !hasProvider(service) ? " warn" : ""), "Needs " + title(service)));
+  return t.childNodes.length ? t : null;
+}
+function updateAll(updates) {
+  const by = {};
+  for (const u of updates) (by[u.update.repo] = by[u.update.repo] || []).push(u.id);
+  for (const repo in by) send("repo_get", { repo, ids: by[repo], keep_on: true });
+}
+function back(m, label) {
+  const r = el("div", "row"); r.style.marginBottom = "12px";
+  r.append(gh(null, "", () => { view = { kind: "list" }; draw(); }, "back"));
+  m.append(r);
+  return r;
+}
+// (a mini screen, where a widget stands on it: lit, or faint while hidden)
+function placeArt(place, on) {
+  const c = on ? (S.config.theme || "#5ac88c") : "#6d6d75";
+  const spots = { top: `<rect x="22" y="1" width="20" height="6" rx="3" fill="${c}"/>`, bottom: `<rect x="22" y="33" width="20" height="6" rx="3" fill="${c}"/>`, left: `<rect x="1" y="13" width="6" height="14" rx="3" fill="${c}"/>`, right: `<rect x="57" y="13" width="6" height="14" rx="3" fill="${c}"/>`, "top-left": `<rect x="1" y="1" width="16" height="7" rx="3" fill="${c}"/>`, "top-right": `<rect x="47" y="1" width="16" height="7" rx="3" fill="${c}"/>`, "bottom-left": `<rect x="1" y="32" width="16" height="7" rx="3" fill="${c}"/>`, "bottom-right": `<rect x="47" y="32" width="16" height="7" rx="3" fill="${c}"/>` };
+  return `<rect x="1" y="1" width="62" height="38" rx="5" fill="none" stroke="#3a3a42" stroke-width="1.5"/>${spots[place] || ""}`;
+}
+function pluginPage(m, id) {
+  const e = catalog().find(x => x.id === id);
+  if (!e) { view = { kind: "list" }; return pagePlugins(m); }
+  const p = e.mine;
+  const head = back(m);
+  const g = el("div", "grow"); g.append(el("div", "name", e.name));
+  g.firstChild.style.fontSize = "15px";
+  g.append(el("div", "sub", [e.repo || "Local", (p ? p.version : e.offer && e.offer.version) && "v" + (p ? p.version : e.offer.version)].filter(Boolean).join("   ")));
+  head.append(avatar(e.name, true), g);
+  if (p) {
+    if (e.update) head.append(gh("Update", "acc", () => send("repo_get", { repo: e.update.repo, ids: [id], keep_on: true })));
+    head.append(sw(p.on, on => send("set_on", { id, on })));
+  } else {
+    const g = gh("Get", "acc", () => get(e));
+    if (S.busy[e.repo] || (e.offer && e.offer.needs_newer)) g.disabled = true;
+    head.append(g);
+  }
+  if (e.desc) { const d = el("p", "dim", e.desc); d.style.margin = "0 0 12px"; m.append(d); }
+  if (p && p.problem) m.append(el("div", "note bad", p.problem));
+  if (p && p.note) m.append(el("div", "note", p.note));
+  const grid = el("div", "grid2"); grid.style.marginTop = "10px";
+  const left = el("div"); left.style.display = "flex"; left.style.flexDirection = "column"; left.style.gap = "12px";
+  // its widgets: where each stands; pressed, hidden or shown again
+  const specs = p ? p.widgets || [] : [];
+  if (specs.length) {
+    const w = el("div", "row"); w.style.flexWrap = "wrap";
+    for (const spec of specs) {
+      const key = id + "/" + spec.id;
+      const now = S.widgets.find(x => x.key === key);
+      const place = now ? now.place : spec.place;
+      const on = place && place !== "off";
+      const t = el("button", "wtile" + (on ? " on" : ""));
+      t.append(pic(placeArt(on ? place : spec.place, on), 70, 40), document.createTextNode(spec.name || spec.id));
+      tipOn(t, on ? "Hide" : "Show");
+      t.onclick = () => send("widget", { key, place: on ? "off" : (spec.place || "top") });
+      w.append(t);
+    }
+    left.append(card("Widgets", w));
+  } else if (!p && e.offer && e.offer.adds && e.offer.adds.length) {
+    left.append(card("Widgets", el("div", "dim", e.offer.adds.join(", "))));
+  }
+  const svc = Object.keys(e.provides || {}).length + Object.keys(e.needs || {}).length;
+  if (svc || (p && p.helper)) {
+    const c = card("Services");
+    for (const service in e.provides || {}) { const users = usersOf(service).map(u => u.name); c.append(row(`Provides ${title(service)} ${e.provides[service]}`, el("span", "sub", users.length ? users.join(", ") : "Not used yet"))); }
+    for (const service in e.needs || {}) { const by = S.plugins.find(x => x.on && x.provides && service in x.provides); c.append(row(`Needs ${title(service)}`, el("span", "sub", by ? by.name : "Not installed"))); }
+    if (p && p.helper) c.append(row("Program", el("span", "sub", (p.helper.running ? "Running" : "Stopped") + "   " + p.helper.file)));
+    left.append(c);
+  }
+  if (p && (p.settings || []).length) {
+    const c = card("Settings");
+    for (const s of p.settings) c.append(settingField(p, s));
+    left.append(c);
+  }
+  grid.append(left);
+  const right = el("div"); right.style.display = "flex"; right.style.flexDirection = "column"; right.style.gap = "12px";
+  const perms = p ? p.permissions : e.offer && e.offer.permissions;
+  if (perms && perms.length) {
+    const c = card("Permissions");
+    for (const x of perms) { const r = el("div", "perm"); const i = icon(/network|internet/i.test(x.name) ? "net" : "shield", "s"); i.style.color = "var(--dim)"; r.append(i, el("span", "grow", x.name)); if (x.detail) r.append(el("span", "sub", x.detail)); tipOn(r, x.why || x.detail || x.name); c.append(r); }
+    right.append(c);
+  }
+  if (p && (p.actions || []).length) {
+    const c = card("Actions"); const r = el("div", "row"); r.style.flexWrap = "wrap";
+    for (const a of p.actions) r.append(...actionField(p, a));
+    c.append(r); right.append(c);
+  }
+  if (p) { const r = el("div", "row"); r.append(el("span", "grow"), gh("Uninstall", "no", () => { send("plugin_remove", { id }); view = { kind: "list" }; })); right.append(r); }
+  grid.append(right);
+  m.append(grid);
+}
+function settingField(p, s) {
+  const put = v => send("set_value", { id: p.id, key: s.key, value: v });
+  let control;
+  if (s.type === "toggle") control = sw(!!s.value, put);
+  else if (s.type === "choice") {
+    if ((s.options || []).length <= 3) control = seg(s.options.map(o => [JSON.stringify(o.value), o.label]), JSON.stringify(s.value), v => put(JSON.parse(v)));
+    else {
+      control = el("select");
+      for (const o of s.options) { const op = el("option", "", o.label); op.value = JSON.stringify(o.value); if (JSON.stringify(o.value) === JSON.stringify(s.value)) op.selected = true; control.append(op); }
+      control.onchange = () => put(JSON.parse(control.value));
+    }
+  } else if (s.type === "range") {
+    control = el("div", "row"); control.style.width = "200px";
+    const r = el("input"); r.type = "range"; r.min = s.min ?? 0; r.max = s.max ?? 100; r.step = s.step ?? 1; r.value = s.value;
+    const t = el("span", "sub", s.value + (s.unit || "")); t.style.width = "48px"; t.style.textAlign = "right";
+    r.oninput = () => t.textContent = r.value + (s.unit || "");
+    r.onchange = () => put(Number(r.value));
+    control.append(r, t);
+  } else {
+    control = el("input"); control.type = s.type === "number" ? "number" : "text"; control.value = s.value ?? "";
+    control.onchange = () => put(s.type === "number" ? Number(control.value) : control.value);
+  }
+  return row(s.label, control);
+}
+function actionField(p, a) {
+  if (a.ask) {
+    const i = el("input"); i.type = "text"; i.placeholder = a.ask; i.style.flex = "1";
+    return [gh(a.label, "", () => send("action", { id: p.id, action: a.id, text: "" })), i, gh("Send", "acc", () => { send("action", { id: p.id, action: a.then || a.id, text: i.value }); i.value = ""; })];
+  }
+  return [gh(a.label, "", () => send("action", { id: p.id, action: a.id, text: "" }))];
+}
+function sourcePage(m, repo) {
+  const head = back(m);
+  const d = el("div", "av big"); d.style.background = avatarColor(repo) + "22"; d.style.color = avatarColor(repo); d.textContent = repo.charAt(0).toUpperCase();
+  const g = el("div", "grow"); g.append(el("div", "name", repo), el("div", "sub", S.busy[repo] ? "Checking…" : S.repos[repo] ? `${((S.repos[repo] || {}).plugins || []).length} plugins` : "Not Checked"));
+  head.append(d, g);
+  const again = gh(null, "", () => send("repo_sync", { repo }), "refresh"); tipOn(again, "Refresh"); if (S.busy[repo]) again.disabled = true;
+  const open = gh(null, "", () => send("open", { what: "repo", repo }), "link"); tipOn(open, "Open on GitHub");
+  head.append(again, open);
+  if (repo !== DEFAULT_REPO) head.append(gh("Remove", "no", () => { send("repo_remove", { repo }); view = { kind: "list" }; source = "all"; }));
+  if (S.errors[repo]) m.append(el("div", "note bad", S.errors[repo]));
+  const g2 = el("div", "plugs"); g2.style.marginTop = "6px";
+  for (const e of catalog().filter(x => x.repo === repo)) g2.append(plugCard(e));
+  m.append(g2);
+}
+// (adding a source: owner/repository, or a link to it; looked at right away)
+function drawSheet() {
+  const sh = document.getElementById("sheet"), box = document.getElementById("sheetbox");
+  sh.classList.toggle("on", !!adding);
+  if (!adding) return;
+  box.replaceChildren();
+  const repo = repoOf(adding.text);
+  const s = el("label", "search"); s.append(icon("link", "s"));
+  const i = el("input"); i.placeholder = "owner/repository or GitHub URL"; i.value = adding.text;
+  i.oninput = () => { adding.text = i.value; };
+  i.onkeydown = e => { if (e.key === "Enter") go(); if (e.key === "Escape") { adding = null; drawSheet(); } };
+  s.append(i); box.append(s);
+  if (adding.looked && repo) {
+    const r = el("div", "row");
+    const list = (S.repos[repo] || {}).plugins;
+    r.append(el("span", "grow dim", S.busy[repo] ? "Checking…" : S.errors[repo] ? S.errors[repo] : list ? `${list.length} plugins: ${list.map(x => x.name).join(", ")}` : ""));
+    if (S.busy[repo]) r.append(el("span", "spin"));
+    box.append(r);
+  }
+  const r = el("div", "row"); r.append(el("span", "grow"), gh("Cancel", "", () => { adding = null; drawSheet(); }), gh(adding.looked && repo && S.repos[repo] ? "Done" : "Add", "acc", go));
+  box.append(r);
+  function go() {
+    const repo = repoOf(i.value);
+    if (!repo) return;
+    if (adding.looked && S.repos[repo]) { adding = null; source = repo; draw(); return; }
+    adding = { text: i.value, looked: true };
+    send("repo_sync", { repo });
+    drawSheet();
+  }
+  setTimeout(() => i.focus(), 0);
+}
+function repoOf(t) {
+  const m = String(t || "").trim().replace(/\.git$/, "").match(/(?:github\.com\/)?([\w.-]+\/[\w.-]+)\/?$/);
+  return m ? m[1] : null;
+}
+
+// ----------------------------------------------------------------------------------------------------------------- look
+function pageLook(m) {
+  const c = S.config;
+  const set = patch => send("config", { patch });
+  const theme = (c.theme || "#5ac88c").toLowerCase();
+  const sws = el("div", "swatches");
+  for (const col of ["#5ac88c", "#3fb6c6", "#4f8ff0", "#a77bf3", "#e86a9a", "#d97757", "#e8b04a", "#f2f2f5"]) { const d = el("button", "swatch" + (col === theme ? " on" : "")); d.style.background = col; d.onclick = () => set({ theme: col }); sws.append(d); }
+  const pick = el("input"); pick.type = "color"; pick.value = theme; pick.className = "swatch-pick"; tipOn(pick, "Custom Color"); pick.onchange = () => set({ theme: pick.value }); sws.append(pick);
+  // (a slider, a picture at each end, and its value after it, as it is moved)
+  const slider = (min, max, step, value, put, lo, hi, fmt) => {
+    const r = el("div", "row");
+    const s = el("input"); s.type = "range"; s.min = min; s.max = max; s.step = step; s.value = value;
+    const v = el("span", "sub", fmt(Number(value))); v.style.width = "40px"; v.style.textAlign = "right"; v.style.color = "var(--dim)";
+    s.oninput = () => v.textContent = fmt(Number(s.value));
+    s.onchange = () => put(Number(s.value));
+    r.append(lo, s, hi, v); return r;
+  };
+  const liquidLo = pic(`<rect x="0" y="0" width="64" height="8" fill="#3a3a42"/><rect x="10" y="6" width="18" height="16" rx="7" fill="#3a3a42"/><rect x="36" y="6" width="18" height="16" rx="7" fill="#3a3a42"/>`, 40, 25);
+  const liquidHi = pic(`<rect x="0" y="0" width="64" height="8" fill="${c.theme || "#5ac88c"}"/><path d="M6 6h52v6a10 10 0 0 1-10 10H16A10 10 0 0 1 6 12z" fill="${c.theme || "#5ac88c"}"/>`, 40, 25);
+  const a = el("span", "faint", "A"), A = el("span", "faint", "A"); a.style.fontSize = "10px"; A.style.fontSize = "17px";
+  const grid = el("div", "grid2");
+  grid.append(card("Theme", sws), card("Liquid", slider(0, 100, 1, c.liquid ?? 50, v => set({ liquid: v }), liquidLo, liquidHi, v => v < 1 ? "Off" : String(Math.round(v))), el("div", "k", "Size"), slider(0.75, 1.5, 0.05, c.scale || 1, v => set({ scale: v }), a, A, v => Math.round(v * 100) + "%")));
+  m.append(grid);
+}
+
+// ---------------------------------------------------------------------------------------------------------------- frame
+const MINI = `<rect x="1" y="1" width="62" height="38" rx="5" fill="none" stroke="#3a3a42" stroke-width="1.5"/>`;
+const CUR = (x, y) => `<path d="M${x} ${y}l0 7 2-2 1.5 3 1.5-.6-1.5-3 3 0z" fill="#f2f2f5"/>`;
+function pageFrame(m) {
+  const c = S.config;
+  const set = patch => send("config", { patch });
+  const lit = (S.config.theme || "#5ac88c"), grey = "#6d6d75";
+  const grid = el("div", "grid2");
+  const reveal = c.reveal || "all";
+  grid.append(card("Show Widgets",
+    tiles(4, [
+      ["all", "Always", `${MINI}<rect x="20" y="1" width="24" height="5" rx="2" fill="${lit}"/><rect x="1" y="14" width="5" height="12" rx="2" fill="${lit}"/><rect x="24" y="34" width="16" height="5" rx="2" fill="${lit}"/>`],
+      ["edges", "Any Edge", `${MINI}<rect x="20" y="1" width="24" height="5" rx="2" fill="${grey}"/><rect x="1" y="14" width="5" height="12" rx="2" fill="${grey}"/><rect x="24" y="34" width="16" height="5" rx="2" fill="${grey}"/>${CUR(50, 30)}`],
+      ["edge", "Hovered Edge", `${MINI}<rect x="24" y="34" width="16" height="5" rx="2" fill="${grey}"/>${CUR(33, 26)}`],
+      ["near", "Near Mouse", `${MINI}<rect x="24" y="34" width="9" height="5" rx="2" fill="${grey}"/><circle cx="29" cy="30" r="9" fill="none" stroke="#3a3a42" stroke-dasharray="2 2"/>${CUR(27, 24)}`],
+    ], reveal, v => set({ reveal: v })),
+    row("Open Widgets On", seg([["hover", "Hover"], ["click", "Click"]], c.open_on || "hover", v => set({ open_on: v }))),
+    row("Hold to Show", seg([["none", "None"], ["alt", "Alt"], ["ctrl", "Ctrl"]], c.hold_key || "none", v => set({ hold_key: v })))));
+  const twin = (a, b, bar) => `<rect x="1" y="6" width="28" height="18" rx="3" fill="none" stroke="${a}" stroke-width="1.5"/><rect x="35" y="6" width="28" height="18" rx="3" fill="none" stroke="${b}" stroke-width="1.5"/>${bar}`;
+  grid.append(card("Monitors",
+    tiles(3, [
+      ["follow", "Follow Mouse", twin("#3a3a42", lit, `<rect x="44" y="6" width="10" height="3" rx="1.5" fill="${lit}"/>${CUR(48, 15)}`)],
+      ["all", "All Monitors", twin(grey, grey, `<rect x="10" y="6" width="10" height="3" rx="1.5" fill="${grey}"/><rect x="44" y="6" width="10" height="3" rx="1.5" fill="${grey}"/>`)],
+      ["primary", "Main Monitor", twin(grey, "#3a3a42", `<rect x="10" y="6" width="10" height="3" rx="1.5" fill="${grey}"/><circle cx="15" cy="30" r="1.8" fill="${grey}"/>`)],
+    ], c.monitors || "follow", v => set({ monitors: v })),
+    el("div", "k", "Auto-Hide"),
+    tiles(3, [
+      ["never", "Never", `<rect x="8" y="5" width="48" height="28" rx="3" fill="none" stroke="${grey}" stroke-width="1.5"/><rect x="26" y="5" width="12" height="4" rx="2" fill="${grey}"/>`],
+      ["fullscreen", "Full Screen", `<rect x="8" y="5" width="48" height="28" rx="3" fill="none" stroke="${grey}" stroke-width="1.5"/><path d="M14 11V9h3M50 11V9h-3M14 27v2h3M50 27v2h-3" stroke="${grey}" stroke-width="1.5" fill="none"/>`],
+      ["maximized", "Maximized", `<rect x="8" y="5" width="48" height="28" rx="3" fill="none" stroke="${grey}" stroke-width="1.5"/><rect x="12" y="9" width="40" height="20" rx="2" fill="none" stroke="${grey}" stroke-width="1.5"/>`],
+    ], c.auto_hide || "fullscreen", v => set({ auto_hide: v }))));
+  grid.append(card("Windows",
+    row("Taskbar", seg([["keep", "Keep"], ["hide", "Hide"]], c.taskbar || "keep", v => set({ taskbar: v })), "taskbar"),
+    row("Windows Key", seg([["auto", "Auto"], ["launcher", "Launcher"], ["start", "Start"]], c.win_key || "auto", v => set({ win_key: v })), "win"),
+    row("Start With Windows", sw(!!S.autostart, on => send("autostart", { on })), "power")));
+  m.append(grid);
+}
+
+// ---------------------------------------------------------------------------------------------------------------- about
+function pageAbout(m) {
+  const head = el("div", "row"); head.style.marginBottom = "12px";
+  const logo = el("img"); logo.src = LOGO; logo.style.width = "40px"; logo.style.height = "40px";
+  const g = el("div", "grow"); g.append(el("div", "name", "NADI"), el("div", "sub", S.version || ""));
+  head.append(logo, g);
+  m.append(head);
+  m.append(card(null, row("Plugins Folder", gh("Open", "", () => send("open", { what: "plugins" }), "folder")), row("Data Folder", gh("Open", "", () => send("open", { what: "data" }), "folder"))));
+}
+
+window.chrome.webview.addEventListener("message", e => {
+  const msg = e.data;
+  if (msg.type === "state") {
+    S = Object.assign(S, msg); S.busy = msg.busy || {}; S.errors = msg.errors || {};
+    if (S.config && S.config.theme) document.documentElement.style.setProperty("--accent", S.config.theme);
+    // (asked to open on a page: a plugin's own, from a widget's menu)
+    if (msg.goto) {
+      const [kind, id] = String(msg.goto).split(":");
+      if (kind === "plugin" && id) { page = "plugins"; view = { kind: "plugin", id }; }
+      else if (["plugins", "look", "frame", "about"].includes(kind)) { page = kind; view = { kind: "list" }; }
+      send("goto_done");
+    }
+    draw();
+  }
+});
+send("ready");
+draw();
+</script>
+</body>
+</html>

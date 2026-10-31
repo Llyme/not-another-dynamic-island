@@ -1,0 +1,17 @@
+# NADI, native: the shell (the frame of widgets at the screen's edges, the dock, the launcher) and its core (the sensors and the plugins).
+[workspace]
+members = ["crates/nadi-core", "crates/nadi-shell", "crates/nadi-setup"]
+# (the installer carries a built nadi.exe: installer.ps1 builds it after NADI)
+default-members = ["crates/nadi-core", "crates/nadi-shell"]
+resolver = "2"
+
+[workspace.dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = { version = "1", features = ["preserve_order"] }
+
+[profile.release]
+opt-level = 3
+lto = "thin"
+codegen-units = 4
+panic = "abort"
+strip = true
