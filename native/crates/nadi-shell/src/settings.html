@@ -131,6 +131,7 @@ const ICONS = {
   moon: "M19.5 14.5A8 8 0 0 1 9.5 4.5a8 8 0 1 0 10 10z",
   bell: "M6 16v-5a6 6 0 0 1 12 0v5l1.5 2h-15zM10 20.5a2.2 2.2 0 0 0 4 0",
   folder: "M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z",
+  grid: "M4 4h6v6H4zM14 4h6v6h-6zM4 14h6v6H4zM14 14h6v6h-6z",
 };
 const PAGES = [["plugins", "Plugins"], ["look", "Look"], ["frame", "Frame"]];
 const DEFAULT_REPO = "Llyme/nadi-plugins";
@@ -562,6 +563,7 @@ function pageFrame(m) {
   grid.append(card("Windows",
     hintRow("Taskbar", "Keep: widgets stay clear of it. Under: widgets stand at the screen's edge, the taskbar under them. Hide: hidden.", seg([["keep", "Keep"], ["under", "Under"], ["hide", "Hide"]], c.taskbar || "keep", v => set({ taskbar: v })), "taskbar"),
     row("Windows Key", seg([["auto", "Auto"], ["launcher", "Launcher"], ["start", "Start"]], c.win_key || "auto", v => set({ win_key: v })), "win"),
+    hintRow("Launcher Shows Widgets", "Opening the launcher brings every widget out, over a game too.", sw(!!c.launcher_reveal, on => set({ launcher_reveal: on })), "grid"),
     row("Start With Windows", sw(!!S.autostart, on => send("autostart", { on })), "power")));
   m.append(grid);
 }

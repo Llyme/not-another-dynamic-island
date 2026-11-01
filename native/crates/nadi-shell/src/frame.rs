@@ -931,8 +931,11 @@ impl Frame {
             let edges_at: Vec<Edge> = [Edge::Top, Edge::Bottom, Edge::Left, Edge::Right].into_iter().filter(|e| at(*e)).collect();
             // (a maximized window in front on this monitor, and the setting says so: the widgets get out of its way till the mouse
             // comes to an edge)
-            let maxed = (self.config.auto_hide != "never" && sc.full) || (self.config.auto_hide == "maximized" && sc.maxed);
+            // (the launcher open on this monitor: over a game too, the widgets come as they do on the desktop, the mouse being yours)
+            let launcher_here = si == self.active && self.launcher.as_ref().is_some_and(|l| l.shown);
+            let maxed = !launcher_here && ((self.config.auto_hide != "never" && sc.full) || (self.config.auto_hide == "maximized" && sc.maxed));
             let (all, mode) = if all && maxed { (false, "edges".to_string()) } else { (all, mode.clone()) };
+            let all = all || (launcher_here && self.config.launcher_reveal);
             // (out of the way, and a key is to be held: the edges bring nothing out without it)
             let edges_at = if maxed && !held { Vec::new() } else { edges_at };
             let keys: Vec<String> = sc.items.keys().cloned().collect();
@@ -1023,6 +1026,10 @@ impl Frame {
                         sc.ov.raise();
                         if let Some(ib) = &self.input {
                             ib.raise();
+                        }
+                        // (the launcher stays over them)
+                        if let Some(l) = &self.launcher {
+                            l.raise();
                         }
                     }
                 }

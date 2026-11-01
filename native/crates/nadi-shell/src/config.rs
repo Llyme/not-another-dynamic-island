@@ -116,6 +116,8 @@ pub struct Config {
     /// the desktops' map: where each desktop is (by its id), as columns and rows; and whether Win + Ctrl + arrows follow it
     pub desk_map: BTreeMap<String, (i32, i32)>,
     pub desk_keys: bool,
+    /// the launcher open brings every widget out (over a game too)
+    pub launcher_reveal: bool,
 }
 
 impl Config {
@@ -131,7 +133,7 @@ impl Config {
 
 impl Default for Config {
     fn default() -> Self {
-        Config { widgets: BTreeMap::new(), monitors: "follow".into(), taskbar: "keep".into(), scale: 1.0, auto_hide: "fullscreen".into(), pinned: Vec::new(), launcher_pins: None, launcher_foot: None, win_key: "auto".into(), reveal: "all".into(), hold_key: "none".into(), open_on: "hover".into(), tray_pinned: Vec::new(), quiet_full: true, quiet_banners: Vec::new(), liquid: 50.0, theme: "#5ac88c".into(), theme2: "#e8b04a".into(), desk_map: BTreeMap::new(), desk_keys: true }
+        Config { widgets: BTreeMap::new(), monitors: "follow".into(), taskbar: "keep".into(), scale: 1.0, auto_hide: "fullscreen".into(), pinned: Vec::new(), launcher_pins: None, launcher_foot: None, win_key: "auto".into(), reveal: "all".into(), hold_key: "none".into(), open_on: "hover".into(), tray_pinned: Vec::new(), quiet_full: true, quiet_banners: Vec::new(), liquid: 50.0, theme: "#5ac88c".into(), theme2: "#e8b04a".into(), desk_map: BTreeMap::new(), desk_keys: true, launcher_reveal: false }
     }
 }
 
