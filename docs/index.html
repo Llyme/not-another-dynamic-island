@@ -3,293 +3,1225 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>NADI — Not Another Dynamic Island</title>
-<meta name="description" content="A living pill at the top of your Windows screen. It shows what is playing, which game you are in, what is downloading, which Claude Code session needs you, and what time it is. Try it on the mock desktop.">
-<meta name="theme-color" content="#09090b">
-<meta property="og:title" content="NADI — Not Another Dynamic Island">
-<meta property="og:description" content="A Dynamic Island for the Windows desktop. Try the live demo.">
+<title>NADI</title>
+<meta name="description" content="Widgets that live on the edges of your Windows screen. Try them on a pretend PC: hover, open, drag and play with everything.">
+<meta name="theme-color" content="#000000">
+<meta property="og:title" content="NADI: Not Another Dynamic Island">
+<meta property="og:description" content="Widgets on the edges of your Windows screen. Try them on a pretend PC.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Outfit:wght@500;600;700&display=swap" rel="stylesheet">
 <style>
-/* Layout: one dark page. The first section is a mock desktop with a working island you can play with,
-   then a feature grid, the Claude Code section, the theme colour, install steps. Every colour comes
-   from --accent so the swatches (here and in the demo's settings) recolour everything. */
+/* The page is a pretend Windows screen with NADI on it: a wallpaper, desktop icons, windows, a taskbar, and NADI's widgets merged
+   into the screen's edges. Everything is drawn here; nothing to scroll (on a phone, the screen shrinks to fit, and the download
+   sits under it). */
 :root {
   color-scheme: dark;
-  --bg: #09090b;
-  --panel: #111114;
-  --line: #1f1f26;
-  --fg: #f2f2f5;
-  --dim: #9a9aa2;
-  --mute: #6a6a72;
-  --accent: #5ac88c;
-  --accent-rgb: 90, 200, 140;
-  --accent-deep: #3a8f63;
-  --amber: #e8b04a;
+  --acc: #5ac88c;
+  --two: #e8b04a;
   --claude: #e08a5a;
-  --spring: cubic-bezier(0.34, 1.56, 0.64, 1);
-  --font: "Segoe UI Variable Text", "Segoe UI", system-ui, -apple-system, sans-serif;
-  --display: "Segoe UI Variable Display", "Segoe UI", system-ui, -apple-system, sans-serif;
+  --red: #e87a7a;
+  --teal: #5ac8e6;
+  --text: #f2f2f5;
+  --dim: #8e8e96;
+  --mute: #5c5c64;
+  --track: #141519;
+  --lit: #1f1f25;
+  --spring: cubic-bezier(.3, 1.32, .5, 1);
+  --soft: cubic-bezier(.2, .9, .3, 1);
+  --tb: 46px;
 }
 * { box-sizing: border-box; }
-html { scroll-behavior: smooth; }
-body { margin: 0; background: var(--bg); color: var(--fg); font: 16px/1.6 var(--font); padding-inline: 20px; -webkit-font-smoothing: antialiased; }
+html, body { margin: 0; height: 100%; background: #000; color: var(--text); font-family: Inter, "Segoe UI", system-ui, sans-serif; font-size: 13px; }
+body { overflow: hidden; }
+body.small { overflow: auto; height: auto; }
+button { font: inherit; color: inherit; background: none; border: 0; padding: 0; cursor: default; }
 a { color: inherit; }
-.wrap { max-width: 1040px; margin: 0 auto; }
-svg { display: block; }
-button { font: inherit; color: inherit; }
-:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; border-radius: 6px; }
+#wrap { position: relative; width: 100vw; height: 100vh; overflow: hidden; }
+#screen { position: absolute; left: 0; top: 0; width: 100vw; height: 100vh; overflow: hidden; transform-origin: 0 0; user-select: none; -webkit-user-select: none; touch-action: none; }
+.ic { display: inline-block; flex: none; }
+.ic svg { display: block; width: 100%; height: 100%; }
+.tab { font-variant-numeric: tabular-nums; }
+.out { font-family: Outfit, Inter, sans-serif; }
 
-nav { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding-block: 18px; }
-.brand { display: flex; align-items: center; gap: 10px; font-weight: 700; letter-spacing: 0.08em; text-decoration: none; }
-.brand i { width: 26px; height: 16px; border-radius: 9px; background: #000; border: 1px solid var(--line); position: relative; display: block; }
-.brand i::before, .brand i::after { content: ""; position: absolute; top: 4px; width: 3px; height: 6px; border-radius: 2px; background: #fff; }
-.brand i::before { left: 7px; } .brand i::after { right: 7px; }
-nav .links { display: flex; gap: 22px; align-items: center; font-size: 14px; color: var(--dim); }
-nav .links a { text-decoration: none; } nav .links a:hover { color: var(--fg); }
-@media (max-width: 640px) { nav .links a.hide-s { display: none; } }
-.btn { display: inline-flex; align-items: center; gap: 8px; padding: 11px 20px; border-radius: 999px; font-weight: 600; font-size: 15px; text-decoration: none; border: 0; cursor: pointer; transition: transform 0.35s var(--spring), background 0.2s ease; }
-.btn:hover { transform: translateY(-2px); }
-.btn.pri { background: var(--accent); color: #07110b; }
-.btn.sec { background: rgba(255,255,255,0.07); color: var(--fg); } .btn.sec:hover { background: rgba(255,255,255,0.11); }
+/* the wallpaper: a soft bloom of blues */
+#wall { position: absolute; inset: 0; background:
+  radial-gradient(42% 52% at 68% 56%, #8fb6ff 0%, #5d8ff0 22%, transparent 60%),
+  radial-gradient(60% 70% at 74% 62%, #2f5fd0 0%, transparent 65%),
+  radial-gradient(50% 60% at 30% 90%, #3a2a8a 0%, transparent 70%),
+  radial-gradient(70% 80% at 12% 6%, #142456 0%, transparent 70%),
+  linear-gradient(160deg, #0b1534, #13275c 55%, #091128); }
 
-.hero { text-align: center; padding-block: 28px 12px; }
-.hero h1 { margin: 0 auto; max-width: 18ch; font: 700 clamp(36px, 6.4vw, 62px)/1.05 var(--display); letter-spacing: -0.03em; text-wrap: balance; }
-.hero h1 em { font-style: normal; color: var(--accent); }
-.hero p.sub { margin: 16px auto 0; max-width: 56ch; color: var(--dim); font-size: 18px; text-wrap: balance; }
-.cta { display: flex; gap: 12px; justify-content: center; flex-wrap: wrap; margin-top: 22px; }
+/* desktop icons */
+#icons { position: absolute; left: 52px; top: 54px; display: flex; flex-direction: column; gap: 6px; z-index: 2; }
+.dk { width: 84px; padding: 8px 4px 6px; border-radius: 6px; display: flex; flex-direction: column; align-items: center; gap: 6px; font-size: 11.5px; color: #fff; text-shadow: 0 1px 3px #000c; text-align: center; line-height: 1.25; }
+.dk:hover { background: #ffffff1a; }
+.dk .ib { width: 44px; height: 44px; border-radius: 11px; display: grid; place-items: center; box-shadow: 0 6px 16px #0006; color: #fff; }
+.dk .ib .ic { width: 22px; height: 22px; }
 
-/* ================= the live demo ================= */
-.hero .demo-wrap { margin-top: 30px; text-align: left; }
-.li { width: 15px; height: 15px; fill: none; stroke: currentColor; stroke-width: 1.6; stroke-linecap: round; stroke-linejoin: round; flex: none; }
-/* the session cards of the Claude section */
-.tile { flex: none; width: 26px; height: 26px; border-radius: 9px; display: grid; place-items: center; font-weight: 700; font-size: 11px; color: #0e0e10; position: relative; margin: 0 4px; }
-.tile.claude { background: var(--claude); }
-.cr { position: absolute; inset: -4px; width: calc(100% + 8px); height: calc(100% + 8px); transform: rotate(-90deg); }
-.cr circle { fill: none; stroke-width: 2.4; } .cr .b { stroke: rgba(255,255,255,0.1); } .cr .f { stroke-linecap: round; stroke-dasharray: 113; }
-.col { min-width: 0; flex: 1; display: flex; flex-direction: column; line-height: 1.25; }
-.t { font-size: 12px; font-weight: 600; color: #f2f2f5; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.s { font-size: 10.5px; color: #8e8e96; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.ico { display: grid; place-items: center; width: 22px; height: 22px; flex: none; color: var(--dim); } .ico.amber { color: var(--amber); } .ico.green { color: var(--accent); }
-.ico.amber .li { animation: ring 1.1s ease-in-out infinite; transform-origin: 50% 65%; }
-@keyframes ring { 0%, 60%, 100% { transform: rotate(0); } 10%, 30%, 50% { transform: rotate(-14deg); } 20%, 40% { transform: rotate(14deg); } }
-.spin { width: 14px; height: 14px; border-radius: 50%; border: 2px solid rgba(255,255,255,.14); border-top-color: var(--accent); animation: dspin .9s linear infinite; display: block; } @keyframes dspin { to { transform: rotate(360deg); } }
-.hcard { display: flex; align-items: center; gap: 10px; padding: 8px 10px; border-radius: 14px; min-width: 0; }
-.hcard.needs { background: rgba(232, 176, 74, 0.1); }
-.hcard .right { margin-left: auto; display: flex; align-items: center; gap: 8px; color: var(--dim); }
+/* windows */
+#wins { position: absolute; inset: 0; z-index: 5; pointer-events: none; }
+.win { position: absolute; pointer-events: auto; display: flex; flex-direction: column; background: #1e1f25f2; border: 1px solid #ffffff16; border-radius: 9px; box-shadow: 0 24px 60px #0009, 0 2px 8px #0005; overflow: hidden; z-index: 10; transition: opacity .18s, transform .22s var(--soft); backdrop-filter: blur(24px); -webkit-backdrop-filter: blur(24px); }
+.win.gone { opacity: 0; transform: translateY(16px) scale(.96); pointer-events: none; }
+.wbar { height: 34px; flex: none; display: flex; align-items: center; padding-left: 12px; gap: 9px; font-size: 12px; color: #d6d6dc; }
+.wbar .ic { width: 15px; height: 15px; }
+.wbar .sp { flex: 1; }
+.wbar button { width: 44px; height: 34px; display: grid; place-items: center; color: #c9c9d1; }
+.wbar button .ic { width: 13px; height: 13px; }
+.wbar button:hover { background: #ffffff14; }
+.wbar button.cl:hover { background: #c42b1c; color: #fff; }
+.wbody { flex: 1; min-height: 0; overflow: auto; }
+.wbody::-webkit-scrollbar { width: 10px; }
+.wbody::-webkit-scrollbar-thumb { background: #ffffff22; border-radius: 5px; border: 3px solid transparent; background-clip: padding-box; }
 
-/* ================= the rest of the page ================= */
-section { padding-block: 84px 0; }
-.eyebrow { font-size: 12px; letter-spacing: 0.14em; text-transform: uppercase; color: var(--accent); font-weight: 700; }
-h2 { margin: 8px 0 0; font: 700 clamp(28px, 4.4vw, 42px)/1.1 var(--display); letter-spacing: -0.02em; text-wrap: balance; max-width: 20ch; }
-.lead { color: var(--dim); max-width: 60ch; margin: 14px 0 0; font-size: 17px; }
-.grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 300px), 1fr)); gap: 16px; margin-top: 40px; }
-.feat { background: var(--panel); border: 1px solid var(--line); border-radius: 20px; padding: 22px; display: grid; gap: 10px; align-content: start; transition: transform 0.4s var(--spring), border-color 0.2s ease; }
-.feat:hover { transform: translateY(-3px); border-color: rgba(var(--accent-rgb), 0.35); }
-.feat .mark { width: 38px; height: 38px; border-radius: 12px; background: rgba(var(--accent-rgb), 0.13); color: var(--accent); display: grid; place-items: center; } .feat .mark .li { width: 19px; height: 19px; }
-.feat h3 { margin: 4px 0 0; font: 650 18px/1.25 var(--display); } .feat p { margin: 0; color: var(--dim); font-size: 15px; }
-.split { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 40px; align-items: center; } @media (max-width: 820px) { .split { grid-template-columns: 1fr; } }
-.stack { display: grid; gap: 4px; background: #0b0b0d; border-radius: 24px; padding: 12px; border: 1px solid var(--line); max-width: 420px; justify-self: center; width: 100%; }
-.ticks { list-style: none; padding: 0; margin: 20px 0 0; display: grid; gap: 10px; color: var(--dim); } .ticks li { display: flex; gap: 10px; align-items: flex-start; } .ticks .li { margin-top: 4px; color: var(--accent); }
-.swatches { display: flex; flex-wrap: wrap; gap: 12px; margin-top: 26px; }
-.swatches .sw { width: 34px; height: 34px; opacity: 0.8; transition: transform 0.35s var(--spring), opacity 0.15s ease; } .swatches .sw:hover { transform: scale(1.15); opacity: 1; } .swatches .sw[aria-pressed="true"] { opacity: 1; box-shadow: 0 0 0 3px var(--bg), 0 0 0 5px rgba(255,255,255,0.6); }
-.facts { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 16px; margin-top: 36px; } .fact { border-top: 1px solid var(--line); padding-top: 14px; } .fact b { display: block; font: 700 28px/1.1 var(--display); letter-spacing: -0.02em; } .fact span { color: var(--dim); font-size: 14px; }
-.steps { counter-reset: s; display: grid; gap: 14px; margin: 30px 0 0; padding: 0; list-style: none; max-width: 720px; } .steps li { counter-increment: s; display: grid; grid-template-columns: 34px 1fr; gap: 14px; align-items: start; color: var(--dim); }
-.steps li::before { content: counter(s); width: 34px; height: 34px; border-radius: 50%; display: grid; place-items: center; background: rgba(var(--accent-rgb), 0.14); color: var(--accent); font-weight: 700; } .steps b { color: var(--fg); }
-pre { margin: 14px 0 0; padding: 16px 18px; border-radius: 14px; background: var(--panel); border: 1px solid var(--line); overflow-x: auto; color: #cfd0d6; font: 13.5px/1.6 ui-monospace, "Cascadia Code", Consolas, monospace; max-width: 720px; }
-footer { margin-top: 96px; padding-block: 28px 44px; border-top: 1px solid var(--line); display: flex; flex-wrap: wrap; gap: 14px 28px; justify-content: space-between; color: var(--mute); font-size: 14px; } footer a { color: var(--dim); text-decoration: none; } footer a:hover { color: var(--fg); }
-@media (prefers-reduced-motion: reduce) { *, *::before, *::after { animation: none !important; transition: none !important; } html { scroll-behavior: auto; } }
+/* the taskbar */
+#taskbar { position: absolute; left: 0; right: 0; bottom: 0; height: var(--tb); z-index: 40; background: #1c1d24e0; border-top: 1px solid #ffffff10; backdrop-filter: blur(30px) saturate(1.4); -webkit-backdrop-filter: blur(30px) saturate(1.4); display: flex; align-items: center; justify-content: center; gap: 4px; }
+.tk { position: relative; width: 40px; height: 40px; border-radius: 6px; display: grid; place-items: center; }
+.tk:hover { background: #ffffff12; }
+.tk .ib { width: 24px; height: 24px; border-radius: 6px; display: grid; place-items: center; color: #fff; }
+.tk .ib .ic { width: 15px; height: 15px; }
+.tk::after { content: ""; position: absolute; bottom: 2px; left: 50%; width: 0; height: 3px; border-radius: 2px; background: #9a9aa6; transform: translateX(-50%); transition: width .2s var(--soft); }
+.tk.run::after { width: 6px; }
+.tk.front::after { width: 16px; background: var(--acc); }
+#tray { position: absolute; right: 8px; top: 0; bottom: 0; display: flex; align-items: center; gap: 2px; }
+#tray .tt { height: 38px; padding: 0 8px; border-radius: 6px; display: flex; align-items: center; gap: 9px; font-size: 11.5px; color: #e4e4ea; }
+#tray .tt:hover { background: #ffffff12; }
+#tray .tt .ic { width: 15px; height: 15px; }
+#clock { text-align: right; line-height: 1.35; }
+
+/* NADI: each widget a piece of black merged into its edge, with a fillet each side where it meets the edge */
+#nadi { position: absolute; inset: 0; z-index: 50; pointer-events: none; }
+.w { position: absolute; background: #000; pointer-events: auto; --r: 17px; --f: 9px;
+  transition: left .42s var(--spring), top .42s var(--spring), width .42s var(--spring), height .42s var(--spring), border-radius .32s var(--soft), box-shadow .4s; }
+.w.open, .w.ban { --r: 26px; --f: 12px; }
+.w.sw { transition-duration: .3s, .3s, .3s, .3s, .32s, .4s; }
+.w::before, .w::after { content: ""; position: absolute; width: var(--f); height: var(--f); pointer-events: none; transition: width .3s, height .3s; }
+.e-top { border-radius: 0 0 var(--r) var(--r); }
+.e-top::before { top: 0; left: calc(-1 * var(--f) + .5px); background: radial-gradient(circle at 0 100%, transparent calc(var(--f) - .5px), #000 var(--f)); }
+.e-top::after { top: 0; right: calc(-1 * var(--f) + .5px); background: radial-gradient(circle at 100% 100%, transparent calc(var(--f) - .5px), #000 var(--f)); }
+.e-bottom { border-radius: var(--r) var(--r) 0 0; }
+.e-bottom::before { bottom: 0; left: calc(-1 * var(--f) + .5px); background: radial-gradient(circle at 0 0, transparent calc(var(--f) - .5px), #000 var(--f)); }
+.e-bottom::after { bottom: 0; right: calc(-1 * var(--f) + .5px); background: radial-gradient(circle at 100% 0, transparent calc(var(--f) - .5px), #000 var(--f)); }
+.e-left { border-radius: 0 var(--r) var(--r) 0; }
+.e-left::before { left: 0; top: calc(-1 * var(--f) + .5px); background: radial-gradient(circle at 100% 0, transparent calc(var(--f) - .5px), #000 var(--f)); }
+.e-left::after { left: 0; bottom: calc(-1 * var(--f) + .5px); background: radial-gradient(circle at 100% 100%, transparent calc(var(--f) - .5px), #000 var(--f)); }
+.e-right { border-radius: var(--r) 0 0 var(--r); }
+.e-right::before { right: 0; top: calc(-1 * var(--f) + .5px); background: radial-gradient(circle at 0 0, transparent calc(var(--f) - .5px), #000 var(--f)); }
+.e-right::after { right: 0; bottom: calc(-1 * var(--f) + .5px); background: radial-gradient(circle at 0 100%, transparent calc(var(--f) - .5px), #000 var(--f)); }
+.w.gone::before, .w.gone::after { width: 0; height: 0; }
+.w.drag { border-radius: 999px !important; transition: width .3s var(--spring), height .3s var(--spring), border-radius .2s; box-shadow: 0 14px 34px #000a; z-index: 5; }
+.w.drag::before, .w.drag::after { display: none; }
+.clip { position: absolute; inset: 0; border-radius: inherit; overflow: hidden; }
+.peek { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; gap: 8px; padding: 0 14px; white-space: nowrap; font-weight: 600; font-size: 12.5px; transition: opacity .22s .1s; }
+.v .peek { flex-direction: column; padding: 10px 0; gap: 7px; }
+.w.open .peek, .w.ban .peek, .w.gone .peek { opacity: 0; transition: opacity .1s; }
+.body, .bnr { position: absolute; left: 0; top: 0; opacity: 0; pointer-events: none; transition: opacity .12s; }
+.e-bottom .body, .e-bottom .bnr { top: auto; bottom: 0; }
+.e-right .body, .e-right .bnr { left: auto; right: 0; }
+.w.open .body, .w.ban .bnr { opacity: 1; pointer-events: auto; transition: opacity .26s .14s; }
+.body { padding: 14px; display: flex; flex-direction: column; gap: 12px; }
+#meas { position: absolute; left: -9999px; top: 0; visibility: hidden; }
+#meas.h { display: inline-flex; align-items: center; gap: 8px; padding: 0 14px; height: 38px; white-space: nowrap; font-weight: 600; font-size: 12.5px; }
+#meas.vv { display: flex; flex-direction: column; align-items: center; gap: 7px; padding: 10px 0; width: 40px; font-weight: 600; font-size: 12.5px; }
+
+/* what goes in them */
+.dot { width: 6px; height: 6px; border-radius: 3px; background: var(--acc); flex: none; }
+.dot.pulse { animation: pulse 1.6s ease-in-out infinite; }
+@keyframes pulse { 50% { transform: scale(1.5); opacity: .55; } }
+.bars { display: flex; gap: 2px; align-items: flex-end; height: 13px; }
+.bars i { display: block; width: 3px; height: 4px; border-radius: 2px; background: var(--acc); animation: bar .8s ease-in-out infinite alternate; }
+.bars i:nth-child(2) { animation-delay: -.5s; animation-duration: .7s; }
+.bars i:nth-child(3) { animation-delay: -.2s; animation-duration: .9s; }
+.bars.still i { animation: none; height: 4px; background: var(--mute); }
+@keyframes bar { to { height: 13px; } }
+.mq { max-width: 120px; overflow: hidden; -webkit-mask: linear-gradient(90deg, #000 85%, transparent); mask: linear-gradient(90deg, #000 85%, transparent); }
+.mq.fits { -webkit-mask: none; mask: none; }
+.mq > span { display: inline-block; }
+.mq > span.go { animation: mq var(--d, 6s) ease-in-out infinite alternate; }
+@keyframes mq { 0%, 18% { transform: translateX(0); } 82%, 100% { transform: translateX(var(--x)); } }
+.burst { color: var(--claude); }
+.burst.spin .ic { animation: spin 3s linear infinite; }
+@keyframes spin { to { transform: rotate(360deg); } }
+.flow { display: inline-block; width: 8px; height: 12px; overflow: hidden; -webkit-mask: linear-gradient(transparent, #000 30%, #000 70%, transparent); mask: linear-gradient(transparent, #000 30%, #000 70%, transparent); vertical-align: -1px; flex: none; }
+.flow svg { display: block; width: 8px; height: 24px; fill: none; stroke: currentColor; stroke-width: 1.7; stroke-linecap: round; stroke-linejoin: round; }
+.flow.dn svg { animation: fdn .7s linear infinite; }
+.flow.up svg { animation: fup .7s linear infinite; }
+@keyframes fdn { from { transform: translateY(-12px); } to { transform: translateY(-6px); } }
+@keyframes fup { from { transform: translateY(-6px); } to { transform: translateY(-12px); } }
+.eyes { display: flex; gap: 6px; align-items: center; --ex: 0px; --ey: 0px; }
+.v .eyes { flex-direction: column; gap: 5px; }
+.eyes i { display: block; width: 6px; height: 13px; border-radius: 3px; background: var(--text); transform: translate(var(--ex), var(--ey)); transition: transform .12s, height .1s; }
+.v .eyes i { width: 13px; height: 6px; }
+.eyes.blink i { height: 1.5px; }
+.v .eyes.blink i { width: 1.5px; height: 6px; }
+.eyes.happy i { height: 5px; border-radius: 6px 6px 0 0; }
+
+/* panel parts */
+.gb { height: 30px; min-width: 30px; padding: 0 10px; border-radius: 15px; display: inline-flex; align-items: center; justify-content: center; gap: 6px; font-size: 12px; font-weight: 600; color: #d6d6dc; }
+.gb:hover { background: var(--lit); }
+.gb .ic { width: 15px; height: 15px; }
+.gb.on { color: var(--acc); }
+.sb { height: 32px; padding: 0 16px; border-radius: 16px; font-size: 12.5px; font-weight: 600; display: inline-flex; align-items: center; justify-content: center; gap: 6px; }
+.lab { font-size: 11px; font-weight: 600; color: var(--dim); margin: 2px 2px -4px; }
+.mut { color: var(--dim); }
+.row { width: 100%; text-align: left; display: flex; align-items: center; gap: 10px; min-height: 40px; padding: 4px 8px; margin: 0 -6px; border-radius: 12px; }
+.row.go:hover { background: var(--lit); }
+.row .tx { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.row .tt { font-weight: 600; font-size: 12.5px; white-space: nowrap; overflow: hidden; }
+.row .ts { font-size: 11.5px; color: var(--dim); white-space: nowrap; overflow: hidden; }
+.row .rt { font-size: 11.5px; color: var(--dim); white-space: nowrap; }
+.row .ic { width: 16px; height: 16px; }
+.toggles { display: flex; gap: 4px; padding: 3px; border-radius: 14px; background: var(--track); }
+.toggles button { flex: 1; height: 30px; border-radius: 11px; display: flex; align-items: center; justify-content: center; gap: 7px; font-size: 11.5px; font-weight: 600; color: var(--dim); }
+.toggles button:hover { background: var(--lit); }
+.toggles button.on { background: #24252c; color: var(--text); }
+.toggles button.on .ic { color: var(--acc); }
+.toggles .ic { width: 16px; height: 16px; }
+.bar { height: 5px; border-radius: 3px; background: #1d1e24; overflow: hidden; position: relative; }
+.bar > i { position: absolute; left: 0; top: 0; bottom: 0; border-radius: 3px; background: var(--c, var(--acc)); overflow: hidden; transition: width .9s linear; }
+.bar > i::after { content: ""; position: absolute; inset: 0; background: linear-gradient(90deg, transparent, #ffffff48, transparent); animation: shine 2.6s ease-in-out infinite; transform: translateX(-100%); }
+@keyframes shine { 60%, 100% { transform: translateX(100%); } }
+.card { background: var(--track); border-radius: 18px; padding: 12px; display: flex; gap: 12px; align-items: center; }
+
+/* calendar */
+.dayhead { display: flex; align-items: flex-end; justify-content: space-between; padding: 2px 4px 0; }
+.dayhead .big { font-family: Outfit, sans-serif; font-size: 40px; font-weight: 600; line-height: .95; letter-spacing: -.5px; }
+.dayhead .big small { font-size: 14px; font-weight: 600; color: var(--dim); margin-left: 5px; letter-spacing: 0; }
+.dayhead .dr { text-align: right; display: flex; flex-direction: column; gap: 2px; padding-bottom: 3px; }
+.dayhead .dr b { font-size: 13px; }
+.dayhead .dr span { font-size: 12px; color: var(--dim); }
+.week { display: grid; grid-template-columns: repeat(7, 1fr); gap: 2px; }
+.week button { height: 54px; border-radius: 14px; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 3px; }
+.week button:hover { background: var(--lit); }
+.week small { font-size: 10px; color: var(--dim); font-weight: 600; }
+.week b { font-size: 14px; font-family: Outfit, sans-serif; font-weight: 600; width: 26px; height: 26px; border-radius: 13px; display: grid; place-items: center; }
+.week .today b { color: var(--acc); }
+.week .on b { background: var(--acc); color: #04130b; }
+.week .ds { display: flex; gap: 2px; height: 4px; }
+.week .ds i { width: 4px; height: 4px; border-radius: 2px; background: var(--acc); }
+.tl { display: flex; flex-direction: column; gap: 2px; }
+.tl .ev { display: flex; gap: 10px; align-items: stretch; padding: 6px 6px; border-radius: 12px; }
+.tl .ev.past { opacity: .45; }
+.tl .tm { width: 54px; font-size: 11.5px; color: var(--dim); padding-top: 1px; }
+.tl .cb { width: 3px; border-radius: 2px; background: var(--acc); }
+.tl .now { height: 0; border-top: 1.5px solid var(--red); margin: 2px 6px 2px 58px; position: relative; }
+.tl .now::before { content: ""; position: absolute; left: -4px; top: -4.5px; width: 7px; height: 7px; border-radius: 4px; background: var(--red); }
+
+/* the launcher */
+#launch { position: absolute; z-index: 60; width: 560px; background: #000; border-radius: 26px; padding: 14px; display: flex; flex-direction: column; gap: 12px; box-shadow: 0 24px 70px #000a; opacity: 0; transform: translateY(18px) scale(.92); pointer-events: none; transition: opacity .18s, transform .38s var(--spring); }
+#launch.show { opacity: 1; transform: none; pointer-events: auto; }
+.search { height: 42px; border-radius: 21px; background: var(--track); display: flex; align-items: center; gap: 10px; padding: 0 6px 0 16px; }
+.search .ic { width: 16px; height: 16px; color: var(--dim); }
+.search input { flex: 1; min-width: 0; background: none; border: 0; outline: 0; color: var(--text); font: inherit; font-size: 13.5px; caret-color: var(--acc); }
+.search input::placeholder { color: var(--mute); }
+.pins { display: grid; grid-template-columns: repeat(6, 1fr); gap: 4px; }
+.pin { height: 84px; border-radius: 16px; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 8px; font-size: 11.5px; color: #d6d6dc; }
+.pin:hover { background: var(--lit); }
+.pin .ib, .row .ib { width: 40px; height: 40px; border-radius: 11px; display: grid; place-items: center; color: #fff; flex: none; }
+.pin .ib .ic { width: 20px; height: 20px; }
+.row .ib { width: 30px; height: 30px; border-radius: 8px; }
+.row .ib .ic { width: 15px; height: 15px; }
+.foot { display: flex; justify-content: flex-end; gap: 2px; border-top: 1px solid #ffffff10; padding-top: 10px; }
+.foot .gb { width: 38px; height: 38px; border-radius: 19px; padding: 0; }
+.foot .gb .ic { width: 17px; height: 17px; }
+.list { display: flex; flex-direction: column; max-height: 340px; overflow: auto; }
+.list .row { margin: 0; }
+
+/* menu, tip, modal, screens over all */
+#menu { position: absolute; z-index: 70; min-width: 190px; background: #000; border-radius: 16px; padding: 6px; box-shadow: 0 16px 44px #000b; display: none; flex-direction: column; transform-origin: top left; animation: grow .22s var(--spring); }
+#menu.show { display: flex; }
+@keyframes grow { from { transform: scale(.85); opacity: 0; } }
+#menu button { height: 34px; padding: 0 12px; border-radius: 11px; display: flex; align-items: center; gap: 10px; font-size: 12.5px; text-align: left; }
+#menu button:hover { background: var(--lit); }
+#menu .ic { width: 16px; height: 16px; color: var(--dim); }
+#tip { position: absolute; z-index: 100; background: #000; color: var(--text); border-radius: 10px; padding: 7px 11px; font-size: 12px; white-space: pre-line; max-width: 260px; line-height: 1.4; box-shadow: 0 8px 24px #0009; opacity: 0; transform: translateY(4px); transition: opacity .14s, transform .2s var(--soft); pointer-events: none; }
+#tip.show { opacity: 1; transform: none; }
+#modal { position: absolute; inset: 0; z-index: 80; display: none; place-items: center; }
+#modal.show { display: grid; }
+#modal .dim { position: absolute; inset: 0; background: #0008; animation: fade .25s; }
+@keyframes fade { from { opacity: 0; } }
+#modal .card2 { position: relative; width: 300px; background: #000; border-radius: 26px; padding: 22px 20px 16px; display: flex; flex-direction: column; align-items: center; gap: 8px; box-shadow: 0 20px 60px #000a; animation: pop .34s var(--spring); }
+@keyframes pop { from { transform: scale(.6); opacity: 0; } }
+#modal .mi { width: 52px; height: 52px; border-radius: 26px; display: grid; place-items: center; background: #e87a7a26; color: var(--red); margin-bottom: 4px; }
+#modal .mi .ic { width: 22px; height: 22px; }
+#modal .mt { font-size: 15px; font-weight: 600; font-family: Outfit, sans-serif; }
+#modal .ms { font-size: 12px; color: var(--dim); text-align: center; line-height: 1.5; }
+#modal .mb { display: flex; gap: 8px; width: 100%; margin-top: 10px; }
+#modal .mb button { flex: 1; height: 38px; border-radius: 19px; font-size: 12.5px; font-weight: 600; color: #c9c9d1; }
+#modal .mb button:hover { background: var(--lit); }
+#modal .mb button.red { background: var(--red); color: #1a0606; }
+#modal .mb button.red:hover { background: #f08c8c; }
+#over { position: absolute; inset: 0; z-index: 90; display: none; }
+#over.show { display: block; }
+#over.black { background: #000; animation: fade .6s; }
+#over.lock { animation: fade .4s; }
+#over .lk { position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center; padding-top: 16vh; color: #fff; text-shadow: 0 2px 20px #0006; }
+#over .lk .big { font-family: Outfit, sans-serif; font-size: 96px; font-weight: 600; line-height: 1; }
+#over .lk .sm { font-size: 18px; margin-top: 10px; }
+#over .lk .hint { position: absolute; bottom: 8vh; font-size: 13px; opacity: .7; }
+#over .off { position: absolute; inset: 0; display: grid; place-items: center; }
+#over .off button { width: 64px; height: 64px; border-radius: 32px; display: grid; place-items: center; color: #444; }
+#over .off button:hover { color: var(--acc); background: #ffffff08; }
+#over .off .ic { width: 28px; height: 28px; }
+#over.leaving { animation: up .5s var(--soft) forwards; }
+@keyframes up { to { transform: translateY(-100%); } }
+#over.waking { animation: fadeout .7s forwards; }
+@keyframes fadeout { to { opacity: 0; } }
+
+/* the apps' own windows */
+.readme { padding: 14px 18px 18px; font-size: 13px; line-height: 1.65; color: #e4e4ea; user-select: text; -webkit-user-select: text; }
+.readme h1 { font-family: Outfit, sans-serif; font-size: 22px; font-weight: 600; margin: 2px 0 2px; }
+.readme .sub { color: var(--dim); margin-bottom: 12px; }
+.readme ul { margin: 0 0 14px; padding: 0; list-style: none; display: flex; flex-direction: column; gap: 7px; }
+.readme li { display: flex; gap: 10px; align-items: flex-start; }
+.readme li .ic { width: 16px; height: 16px; color: var(--acc); margin-top: 3px; }
+.readme .get { display: flex; gap: 8px; margin-top: 4px; }
+.readme .get a { text-decoration: none; }
+.sb.acc { background: var(--acc); color: #04130b; }
+.sb.acc:hover { background: #6fd89e; }
+.sb.gh2 { color: #d6d6dc; }
+.sb.gh2:hover { background: var(--lit); }
+.player { padding: 8px 20px 18px; display: flex; flex-direction: column; gap: 14px; }
+.cover { border-radius: 12px; flex: none; box-shadow: 0 10px 30px #0007; }
+.ctl { display: flex; align-items: center; justify-content: center; gap: 10px; }
+.ctl .gb { width: 40px; height: 40px; padding: 0; border-radius: 20px; }
+.ctl .gb .ic { width: 18px; height: 18px; }
+.ctl .gb.big { width: 50px; height: 50px; border-radius: 25px; background: #ffffff10; }
+.ctl .gb.big:hover { background: #ffffff1c; }
+.trk { display: flex; flex-direction: column; gap: 2px; }
+.trk .row { margin: 0; }
+.trk .row.now .tt { color: var(--acc); }
+.plug { display: flex; gap: 12px; align-items: flex-start; padding: 12px 14px; border-radius: 12px; }
+.plug:hover { background: #ffffff08; }
+.plug .ib { width: 38px; height: 38px; border-radius: 10px; display: grid; place-items: center; color: #fff; flex: none; }
+.plug .ib .ic { width: 18px; height: 18px; }
+.plug .tx { flex: 1; min-width: 0; }
+.plug .tt { font-weight: 600; font-size: 13px; }
+.plug .ts { color: var(--dim); font-size: 12px; line-height: 1.5; margin-top: 2px; }
+.plug .sb { height: 30px; padding: 0 14px; flex: none; }
+.plug .sb.added { color: var(--acc); }
+.pretend { height: 100%; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 14px; color: var(--dim); }
+.pretend .ib { width: 64px; height: 64px; border-radius: 16px; display: grid; place-items: center; color: #fff; }
+.pretend .ib .ic { width: 30px; height: 30px; }
+
+/* under the screen, on a phone */
+#below { display: none; padding: 26px 20px 40px; text-align: center; }
+body.small #below { display: block; }
+body.small #wrap { width: 100%; }
+body.small #screen { touch-action: pan-y; }
+#below h1 { font-family: Outfit, sans-serif; font-size: 26px; margin: 0 0 6px; }
+#below p { color: var(--dim); margin: 0 0 18px; line-height: 1.55; }
+#below .sb { height: 44px; padding: 0 22px; border-radius: 22px; font-size: 14px; text-decoration: none; }
+@media (prefers-reduced-motion: reduce) { *, *::before, *::after { animation-duration: .01s !important; transition-duration: .01s !important; } }
 </style>
-<link rel="stylesheet" href="demo/desktop.css">
 </head>
 <body>
-<div class="wrap">
-  <nav>
-    <a class="brand" href="#top"><i></i>NADI</a>
-    <div class="links">
-      <a class="hide-s" href="#features">Features</a>
-      <a class="hide-s" href="#claude">Claude Code</a>
-      <a class="hide-s" href="#theme">Theme</a>
-      <a href="#install">Install</a>
-      <a class="btn sec" style="padding:8px 16px;font-size:14px" href="https://github.com/Llyme/not-another-dynamic-island">GitHub</a>
-    </div>
-  </nav>
-
-  <header class="hero" id="top">
-    <h1>Not another <em>dynamic island</em>.</h1>
-    <p class="sub">A small pill with a pair of eyes at the top of your Windows screen. Below is the real thing, running in your browser on a mock desktop: the same code as the app.</p>
-
-    <div class="demo-wrap">
-      <div class="screen">
-        <div class="bezel"><span class="tip">Rest your cursor on the <b>very top edge</b> of the screen (this strip counts) to call the island</span></div>
-        <div class="scrollx">
-          <div class="desk" id="desk">
-            <div class="wall"></div>
-            <div class="dtoast"></div>
-          </div>
-        </div>
-      </div>
-      <div class="tryit" id="tryit">
-        <button class="chip" data-d="discord">Discord message</button>
-        <button class="chip" data-d="viber">Viber message</button>
-        <button class="chip" data-d="reminder">Calendar reminder</button>
-        <button class="chip" data-d="time">Tell the time</button>
-        <button class="chip" data-d="hub">Open the hub</button>
-        <button class="chip" data-d="settings">Settings</button>
-        <button class="chip" data-o="game">Launch a game</button>
-        <button class="chip" data-o="browser">Open the browser</button>
-        <button class="chip" data-o="chat">Open Discord</button>
-      </div>
-      <p class="demo-cap"><b>Click</b> the island to open the hub, <b>right-click</b> it to pin, <b>drag</b> it sideways. Press <b>play</b> on the music window for sound (the island reacts to what actually plays). Run <b>claude</b> in the terminal, then click another window while it works. The <b>tray icon</b> next to the clock opens settings.</p>
-      <p class="demo-note">This is a copy of the app's own frontend. Only the PC it watches is simulated, and detection delays are shortened. Settings are kept in this browser.</p>
-    </div>
-
-    <div class="cta">
-      <a class="btn pri" href="https://github.com/Llyme/not-another-dynamic-island/releases/latest"><svg class="li" viewBox="0 0 16 16" style="width:17px;height:17px"><path d="M8 2.5v7.5M4.8 7.2 8 10.4l3.2-3.2M3 13h10"/></svg>Download for Windows</a>
-      <a class="btn sec" href="#install">How to run it</a>
-    </div>
-  </header>
-
-  <section id="features">
-    <div class="eyebrow">What it does</div>
-    <h2>A glance, instead of a window.</h2>
-    <p class="lead">Everything lives in one pill that stays out of your way. It lights up only when something happens by itself, and it is built to never make the computer lag.</p>
-    <div class="grid" id="grid"></div>
-  </section>
-
-  <section id="claude">
-    <div class="split">
-      <div>
-        <div class="eyebrow">LLM Detection</div>
-        <h2>Claude Code, watched for you.</h2>
-        <p class="lead">Every running Claude Code session gets its own card, in VS Code, the terminal or inside WSL. The ring around the tile is its context window. When one needs you or finishes, the island drops down to tell you.</p>
-        <ul class="ticks">
-          <li><svg class="li" viewBox="0 0 16 16"><path d="M3.5 8.5 6.5 11.5 12.5 4.8"/></svg>A phone rings on a session that needs your approval, and it jumps to the top.</li>
-          <li><svg class="li" viewBox="0 0 16 16"><path d="M3.5 8.5 6.5 11.5 12.5 4.8"/></svg>A finished session waits with a check until you look at it, then it clears.</li>
-          <li><svg class="li" viewBox="0 0 16 16"><path d="M3.5 8.5 6.5 11.5 12.5 4.8"/></svg>One at a time in the queue, a "needs you" first. Quiet while a game runs or its window is already in front.</li>
-        </ul>
-      </div>
-      <div class="stack" aria-hidden="true" id="sessions"></div>
-    </div>
-  </section>
-
-  <section id="theme">
-    <div class="eyebrow">Make it yours</div>
-    <h2>Pick a colour. The whole thing follows.</h2>
-    <p class="lead">Try it here: this page and the demo island use the theme colour. In NADI it drives the hub, the glow and every pill. Width, hub width, distance from the edge, eyes on or off, glow strength and sound light are all sliders.</p>
-    <div class="swatches" id="swatches"></div>
-    <div class="facts">
-      <div class="fact"><b>1 window</b><span>one transparent, always-on-top window</span></div>
-      <div class="fact"><b>16 ms</b><span>poll loop, nothing heavier</span></div>
-      <div class="fact"><b>3 MB</b><span>installer</span></div>
-      <div class="fact"><b>0 browsers</b><span>shortcuts and refresh are switched off</span></div>
-    </div>
-  </section>
-
-  <section id="install">
-    <div class="eyebrow">Install</div>
-    <h2>Two minutes, no account.</h2>
-    <ol class="steps">
-      <li><div><b>Download the installer</b> from the <a href="https://github.com/Llyme/not-another-dynamic-island/releases/latest">latest release</a> and run it. Windows 10 or 11 (the WebView2 runtime comes with Windows 11).</div></li>
-      <li><div><b>Rest your cursor on the top edge</b> of a monitor. A glow builds up and the island lands. Click it to expand the hub; right-click to pin it.</div></li>
-      <li><div><b>Open Settings from the tray icon.</b> Turn on notification access in Windows if you want other apps' notifications to show.</div></li>
-    </ol>
-    <p class="lead" style="margin-top:34px">Or build it yourself. It is a Rust backend with a plain JavaScript frontend, built with Tauri v2.</p>
-<pre>cd src-tauri
-cargo tauri dev      # run it
-cargo tauri build    # release exe and NSIS installer</pre>
-  </section>
-
-  <footer>
-    <div>NADI. Windows only, for now.</div>
-    <div><a href="https://github.com/Llyme/not-another-dynamic-island">Source on GitHub</a> · <a href="https://github.com/Llyme/not-another-dynamic-island/releases">Releases</a></div>
-  </footer>
+<div id="wrap">
+  <div id="screen">
+    <div id="wall"></div>
+    <div id="icons"></div>
+    <div id="wins"></div>
+    <div id="taskbar"><div id="tbapps" style="display:flex;gap:4px"></div><div id="tray"></div></div>
+    <div id="nadi"></div>
+    <div id="launch"></div>
+    <div id="menu"></div>
+    <div id="modal"></div>
+    <div id="over"></div>
+    <div id="tip"></div>
+  </div>
 </div>
-
-
-<script src="demo/backend.js"></script>
-<script src="demo/audio.js"></script>
-<script src="demo/world.js"></script>
-<script src="demo/desktop.js"></script>
+<div id="below">
+  <h1>NADI</h1>
+  <p>Widgets that live on the edges of your Windows screen.<br>Best tried on a computer.</p>
+  <a class="sb acc" href="https://github.com/Llyme/not-another-dynamic-island/releases/latest">Get NADI</a>
+  <a class="sb gh2" href="https://github.com/Llyme/not-another-dynamic-island">GitHub</a>
+</div>
+<div id="meas"></div>
 <script>
+"use strict";
+const REPO = "https://github.com/Llyme/not-another-dynamic-island";
+const GET = REPO + "/releases/latest";
 const $ = (s, r = document) => r.querySelector(s);
-const ACCENTS = ['#5ac88c', '#4cc9c0', '#5aa9f0', '#a487ee', '#ee7fb5', '#e8776f', '#ee9a4d', '#e3c457', '#e8e8ee'];
-const P = {
-  bell: 'M8 2.6a3.4 3.4 0 0 0-3.4 3.4c0 3.6-1.4 4.4-1.4 4.4h9.6s-1.4-.8-1.4-4.4A3.4 3.4 0 0 0 8 2.6zM6.7 12.6a1.4 1.4 0 0 0 2.6 0',
-  phone: 'M4.4 2.8h2.2l1 2.6-1.4.9a6.2 6.2 0 0 0 2.6 2.6l.9-1.4 2.6 1v2.2a1.4 1.4 0 0 1-1.4 1.4A9.4 9.4 0 0 1 3 4.2a1.4 1.4 0 0 1 1.4-1.4z',
-  check: 'M3.5 8.5 6.5 11.5 12.5 4.8', code: 'M5.5 4.5 2 8l3.5 3.5M10.5 4.5 14 8l-3.5 3.5', dl: 'M8 2.5v7.5M4.8 7.2 8 10.4l3.2-3.2M3 13h10',
-  game: 'M4.6 5.5h6.8a3 3 0 0 1 2.9 3.7l-.6 2.3a1.5 1.5 0 0 1-2.6.5L10 10.5H6l-1.1 1.5a1.5 1.5 0 0 1-2.6-.5l-.6-2.3a3 3 0 0 1 2.9-3.7zM5.2 7.3v2.6M3.9 8.6h2.6',
-  cal: 'M2.5 4.5h11v9h-11zM2.5 7.5h11M5.5 2.5v3M10.5 2.5v3', clock: 'M8 2.5a5.5 5.5 0 1 0 0 11 5.5 5.5 0 0 0 0-11zM8 5v3.2l2.2 1.3',
-  eye: 'M1.8 8s2.2-4 6.2-4 6.2 4 6.2 4-2.2 4-6.2 4-6.2-4-6.2-4zM8 9.8a1.8 1.8 0 1 0 0-3.6 1.8 1.8 0 0 0 0 3.6z',
-  sun: 'M8 5a3 3 0 1 0 0 6 3 3 0 0 0 0-6zM8 1.8v1.6M8 12.6v1.6M1.8 8h1.6M12.6 8h1.6M3.6 3.6l1.1 1.1M11.3 11.3l1.1 1.1M12.4 3.6l-1.1 1.1M4.7 11.3l-1.1 1.1',
-  wave: 'M2 8h1.5M5 5v6M8 3v10M11 5.5v5M14 8h-1', shield: 'M8 2 3 4v4c0 3 2.2 5 5 6 2.8-1 5-3 5-6V4z', sliders: 'M3 5h6.5M12 5h1M3 11h1.5M7 11h6M9.5 3.4v3.2M4.5 9.4v3.2',
-  music: 'M6 11.6V4l6-1.2v7.6M6 11.6a1.6 1.6 0 1 1-1.6-1.6A1.6 1.6 0 0 1 6 11.6zM12 10.4a1.6 1.6 0 1 1-1.6-1.6 1.6 1.6 0 0 1 1.6 1.6z',
-  lock: 'M4 7.2h8v6.3H4zM5.6 7.2V5.2a2.4 2.4 0 0 1 4.8 0v2M8 9.6v1.6', edge: 'M2.5 3h11M8 3.5v8M5.2 8.8 8 11.6l2.8-2.8',
-  usage: 'M8 2.5a5.5 5.5 0 1 0 5.5 5.5M8 2.5V8l3.6 2.6', brief: 'M2.5 5.5h11v7.5h-11zM6 5.5V4a1 1 0 0 1 1-1h2a1 1 0 0 1 1 1v1.5M2.5 9h11',
+const scr = $("#screen"), nadi = $("#nadi"), meas = $("#meas");
+const TB = 46, GAP = 6, DEPTH = 38, SIDE = 40;
+let SW = 0, SH = 0, scale = 1, touch = false;
+const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
+const ACC = "#5ac88c", TWO = "#e8b04a", CL = "#e08a5a", RED = "#e87a7a", TEAL = "#5ac8e6";
+
+/* pictograms */
+const F = i => `<svg viewBox="0 0 20 20" fill="currentColor">${i}</svg>`;
+const S = i => `<svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">${i}</svg>`;
+const ICONS = {
+  grid: F('<rect x="3" y="3" width="6" height="6" rx="1.7"/><rect x="11" y="3" width="6" height="6" rx="1.7"/><rect x="3" y="11" width="6" height="6" rx="1.7"/><rect x="11" y="11" width="6" height="6" rx="1.7"/>'),
+  search: S('<circle cx="8.8" cy="8.8" r="5.3"/><path d="M12.8 12.8l4 4"/>'),
+  lock: S('<rect x="4.5" y="9" width="11" height="8" rx="2.2"/><path d="M7 9V7a3 3 0 0 1 6 0v2"/>'),
+  moon: S('<path d="M15.8 12.3A6.6 6.6 0 0 1 7.7 4.2a6.6 6.6 0 1 0 8.1 8.1z"/>'),
+  restart: S('<path d="M15.6 10.6a5.7 5.7 0 1 1-1.8-4.7"/><path d="M14.6 2.8v3.6H11"/>'),
+  power: S('<path d="M10 2.8v6.4"/><path d="M6 5.6a6.2 6.2 0 1 0 8 0"/>'),
+  play: F('<path d="M6.2 4.1v11.8a.8.8 0 0 0 1.2.7l9.5-5.9a.8.8 0 0 0 0-1.4L7.4 3.4a.8.8 0 0 0-1.2.7z"/>'),
+  pause: F('<rect x="5" y="4" width="3.7" height="12" rx="1.3"/><rect x="11.3" y="4" width="3.7" height="12" rx="1.3"/>'),
+  next: F('<path d="M4 5.2v9.6a.8.8 0 0 0 1.2.6l7-4.8a.8.8 0 0 0 0-1.2l-7-4.8A.8.8 0 0 0 4 5.2z"/><rect x="13.6" y="4.5" width="2.6" height="11" rx="1.1"/>'),
+  prev: F('<path d="M16 5.2v9.6a.8.8 0 0 1-1.2.6l-7-4.8a.8.8 0 0 1 0-1.2l7-4.8a.8.8 0 0 1 1.2.6z"/><rect x="3.8" y="4.5" width="2.6" height="11" rx="1.1"/>'),
+  airplane: F('<path d="M9 2c.6 0 1.2.4 1.4.9l2.4 5.4 3.2-.2a1.9 1.9 0 0 1 2 1.9 1.9 1.9 0 0 1-2 1.9l-3.2-.2-2.4 5.4c-.2.6-.8.9-1.4.9a.9.9 0 0 1-.9-.9l.7-5.6-2.5-.2-1.1 2.3a.8.8 0 0 1-1.5-.4v-2.4l-1.1-.1A1.1 1.1 0 0 1 2 10v-.1c0-.5.4-1 .9-1L4 8.9V6.5a.8.8 0 0 1 1.5-.4l1.1 2.3 2.5-.2-.7-5.6c-.1-.5.3-.9.7-1z"/>'),
+  hotspot: F('<path d="M10 8.25a1.75 1.75 0 1 1 0 3.5 1.75 1.75 0 1 1 0-3.5zM6.64 6.64a4.75 4.75 0 0 0 0 6.72l1.06-1.06a3.25 3.25 0 0 1 0-4.6zM13.36 6.64a4.75 4.75 0 0 1 0 6.72l-1.06-1.06a3.25 3.25 0 0 0 0-4.6zM4.52 4.52a7.75 7.75 0 0 0 0 10.96l1.06-1.06a6.25 6.25 0 0 1 0-8.84zM15.48 4.52a7.75 7.75 0 0 1 0 10.96l-1.06-1.06a6.25 6.25 0 0 0 0-8.84z"/>'),
+  x: S('<path d="M5.5 5.5l9 9M14.5 5.5l-9 9"/>'),
+  minus: S('<path d="M5 10h10"/>'),
+  square: S('<rect x="5" y="5" width="10" height="10" rx="1.6"/>'),
+  folder: F('<path d="M2.5 5.6A1.6 1.6 0 0 1 4.1 4h3.5l1.9 1.8h6.4a1.6 1.6 0 0 1 1.6 1.6v7a1.6 1.6 0 0 1-1.6 1.6H4.1a1.6 1.6 0 0 1-1.6-1.6z"/>'),
+  gear: S('<circle cx="10" cy="10" r="2.5"/><path d="M10 2.6v2.1M10 15.3v2.1M2.6 10h2.1M15.3 10h2.1M4.8 4.8l1.5 1.5M13.7 13.7l1.5 1.5M4.8 15.2l1.5-1.5M13.7 6.3l1.5-1.5"/>'),
+  globe: S('<circle cx="10" cy="10" r="7"/><path d="M3 10h14M10 3c2.3 2 2.3 12 0 14M10 3c-2.3 2-2.3 12 0 14"/>'),
+  term: S('<rect x="2.5" y="4" width="15" height="12" rx="2.2"/><path d="M6 8.2l2.4 1.8L6 11.8M10.5 12.3H14"/>'),
+  note: S('<path d="M5 2.6h6.8L15 5.8v11.6H5z"/><path d="M7.6 9.2h4.8M7.6 12.2h4.8"/>'),
+  music: S('<path d="M8 15V5l8-2v10"/><circle cx="6" cy="15" r="2"/><circle cx="14" cy="13" r="2"/>'),
+  cal: S('<rect x="3" y="4" width="14" height="13" rx="2.2"/><path d="M3 8.2h14M7 2.6v3M13 2.6v3"/>'),
+  code: S('<path d="M7 5.5L2.8 10 7 14.5M13 5.5l4.2 4.5-4.2 4.5"/>'),
+  get: S('<path d="M10 3v9.5M5.8 8.5l4.2 4.2 4.2-4.2"/><path d="M4 16.5h12"/>'),
+  store: S('<path d="M4.2 7h11.6l-1 10H5.2z"/><path d="M7.5 7a2.5 2.5 0 0 1 5 0"/>'),
+  photo: S('<rect x="3" y="4" width="14" height="12" rx="2.2"/><circle cx="7.5" cy="8.5" r="1.4"/><path d="M3.6 14.2l3.9-3.9 3 3 2-2 3.9 3.9"/>'),
+  mail: S('<rect x="3" y="5" width="14" height="10" rx="2.2"/><path d="M3.6 6.2L10 11l6.4-4.8"/>'),
+  calc: S('<rect x="4.5" y="2.6" width="11" height="14.8" rx="2.2"/><path d="M7.2 6.2h5.6M7.2 10h.1M10 10h.1M12.8 10h.1M7.2 13.2h.1M10 13.2h.1M12.8 13.2h.1"/>'),
+  paint: S('<path d="M10 3a7 7 0 1 0 0 14c1 0 1.5-.7 1.5-1.5 0-1.2-1-1.3-1-2.3 0-.8.7-1.2 1.5-1.2H14a3 3 0 0 0 3-3C17 5.6 13.9 3 10 3z"/><circle cx="6.5" cy="9" r=".6"/><circle cx="9" cy="6.3" r=".6"/><circle cx="12.5" cy="6.8" r=".6"/>'),
+  game: S('<path d="M6 7h8a4 4 0 0 1 3.8 5.2l-.6 1.9a2 2 0 0 1-3.5.6L12.5 13h-5l-1.2 1.7a2 2 0 0 1-3.5-.6l-.6-1.9A4 4 0 0 1 6 7z"/><path d="M6.5 9.4v2.2M5.4 10.5h2.2M13.5 10.2h.1"/>'),
+  sun: S('<circle cx="10" cy="10" r="3.4"/><path d="M10 2.2v1.9M10 15.9v1.9M2.2 10h1.9M15.9 10h1.9M4.5 4.5l1.3 1.3M14.2 14.2l1.3 1.3M4.5 15.5l1.3-1.3M14.2 5.8l1.3-1.3"/>'),
+  battery: S('<rect x="2.5" y="6" width="13" height="8" rx="2.2"/><path d="M17.6 9v2"/>'),
+  burst: S('<path d="M10 2.6v14.8M2.6 10h14.8M4.8 4.8l10.4 10.4M15.2 4.8L4.8 15.2" stroke-width="2.1"/>'),
+  volume: S('<path d="M3.8 7.8h3l4.2-3.3v11l-4.2-3.3h-3z"/><path d="M14 7.4a3.6 3.6 0 0 1 0 5.2"/>'),
+  chevup: S('<path d="M6 12l4-4 4 4"/>'),
+  arrow: S('<path d="M10 16V4.5M5.2 9.2L10 4.4l4.8 4.8"/>'),
+  open: S('<path d="M11 4h5v5M16 4l-7 7"/><path d="M14 11.5V16H4V6h4.5"/>'),
+  pin: S('<path d="M8 3h4l-.6 5 2.6 2.6v1.2H6v-1.2L8.6 8z"/><path d="M10 11.8V17"/>'),
+  eye: S('<path d="M2.5 10s2.7-5 7.5-5 7.5 5 7.5 5-2.7 5-7.5 5-7.5-5-7.5-5z"/><circle cx="10" cy="10" r="2.2"/>'),
+  check: S('<path d="M4.5 10.5l3.5 3.5 7.5-8"/>'),
+  win: F('<rect x="3" y="3" width="6.6" height="6.6" rx=".8"/><rect x="10.4" y="3" width="6.6" height="6.6" rx=".8"/><rect x="3" y="10.4" width="6.6" height="6.6" rx=".8"/><rect x="10.4" y="10.4" width="6.6" height="6.6" rx=".8"/>'),
+  drive: S('<rect x="3" y="6" width="14" height="8" rx="2.2"/><path d="M6 10h.1M13 10h1"/>'),
 };
-const li = (n, st = '') => `<svg class="li" viewBox="0 0 16 16" style="${st}"><path d="${P[n]}"/></svg>`;
-const ring = (f, c) => `<svg class="cr" viewBox="0 0 40 40"><circle class="b" cx="20" cy="20" r="18"/><circle class="f" cx="20" cy="20" r="18" data-ring style="stroke:${c};stroke-dashoffset:${113 * (1 - f)}"/></svg>`;
-const FEATS = [
-  ['edge', 'Call it from the edge', 'Rest the cursor on the top edge of any monitor: a glow charges and the island lands. It hides again on its own. Click to expand, right-click to pin.'],
-  ['eye', 'Eyes that react', 'A pair of eyes that follows your cursor, blinks, and nods to the beat. Turn them off and the sound light stays.'],
-  ['wave', 'Sound light', 'The audio spills out of the island like YouTube’s ambient mode, with rings that show where in the stereo field it comes from.'],
-  ['music', 'Media, properly', 'Now playing with prev, play and next in the pill, a seek bar in the hub, jump five seconds, and a speed from 0.1× to 16× where the player allows it.'],
-  ['game', 'Games', 'Detects the running game. FPS, plus the game’s own GPU, CPU and memory rings, right in the pill, with frame times in the hub.'],
-  ['brief', 'What you are working on', 'Coding, writing, design or browsing, even when the window is not focused. The coding card shows the project’s branch and git changes.'],
-  ['dl', 'Downloads', 'Browsers, Steam and qBittorrent in one card: a progress ring with a count, a live speed trace, and the speed. Stalled ones drop off.'],
-  ['bell', 'Notifications', 'Captures every app’s notifications. Identical ones merge, a flood from Discord becomes “N new messages”, and a click clears them.'],
-  ['cal', 'Calendar', 'Upcoming events from any .ics link, with a reminder banner before they start.'],
-  ['usage', 'Claude usage', 'Rings for your 5-hour and 7-day Claude usage in the hub, and a quick peek when they move. It uses your existing Claude Code login.'],
-  ['clock', 'Time, on a schedule', 'Every 5 minutes to 6 hours, on the clock, the island tells the time in big light digits. Military time included.'],
-  ['lock', 'Pin and shrink', 'Right-click pins it in place with a small lock. A pinned island you leave alone shrinks to a size you choose.'],
-  ['sun', 'Glow with a reason', 'The glow only shows when something happened by itself: a notification, a session pill, the time. Never when you call it.'],
-  ['shield', 'Locked down', 'No browser shortcuts, no refresh, no devtools, no zoom, no drag and drop. It is an island, not a web page.'],
-  ['sliders', 'Everything adjustable', 'Settings in a window of their own, with search: theme colour, widths in pixels, distance from the edge, hover delay, glow, sound light. Every slider has a reset. Every feature is a plugin you can switch off.'],
+const ic = (n, sz, st = "") => `<i class="ic" style="width:${sz}px;height:${sz}px;${st}">${ICONS[n] || ""}</i>`;
+const wifi = (lv, sz = 16, c = "currentColor") => {
+  const a = k => `opacity="${lv >= k ? 1 : .28}"`;
+  return `<i class="ic" style="width:${sz}px;height:${sz}px;color:${c}"><svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path ${a(3)} d="M2.5 7.6a10.6 10.6 0 0 1 15 0"/><path ${a(2)} d="M5 10.5a7 7 0 0 1 10 0"/><path ${a(1)} d="M7.5 13.3a3.4 3.4 0 0 1 5 0"/><circle cx="10" cy="15.8" r="1.1" fill="currentColor" stroke="none"/></svg></i>`;
+};
+const flow = (up, c) => `<span class="flow ${up ? "up" : "dn"}" style="color:${c || "currentColor"}"><svg viewBox="0 0 8 24">${up ? '<path d="M1 7.5l3-3 3 3M1 13.5l3-3 3 3M1 19.5l3-3 3 3M1 25.5l3-3 3 3"/>' : '<path d="M1 4.5l3 3 3-3M1 10.5l3 3 3-3M1 16.5l3 3 3-3M1 22.5l3 3 3-3"/>'}</svg></span>`;
+const ring = (letter, p, sz = 22, c = ACC) => `<svg width="${sz}" height="${sz}" viewBox="0 0 24 24" style="flex:none"><circle cx="12" cy="12" r="10" fill="none" stroke="#2a2b31" stroke-width="2.4"/><circle cx="12" cy="12" r="10" fill="none" stroke="${c}" stroke-width="2.4" stroke-linecap="round" stroke-dasharray="${(p * 62.8).toFixed(1)} 62.8" transform="rotate(-90 12 12)"/><text x="12" y="15.6" text-anchor="middle" font-size="10" font-weight="700" fill="#f2f2f5" font-family="Outfit, sans-serif">${letter}</text></svg>`;
+const rate = b => b >= 1e6 ? (b / 1e6).toFixed(1) + " MB/s" : Math.round(b / 1e3) + " KB/s";
+const pad = n => String(n).padStart(2, "0");
+const DAYS = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
+const MONS = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];
+const clock = d => { const h = d.getHours(); return { t: (h % 12 || 12) + ":" + pad(d.getMinutes()), ap: h < 12 ? "AM" : "PM" }; };
+const span = d => { const c = clock(d); return c.t + " " + c.ap; };
+const mmss = s => Math.floor(s / 60) + ":" + pad(Math.floor(s % 60));
+
+/* what the pretend PC is doing */
+const T0 = new Date(); T0.setSeconds(0, 0);
+const at = min => new Date(Math.ceil(T0.getTime() / 300000) * 300000 + min * 60000);
+const EVENTS = [
+  { title: "Standup", s: at(-150), m: 15, where: "Team Room" },
+  { title: "Design Review", s: at(25), m: 30, where: "Meet", link: true },
+  { title: "Gym", s: at(250), m: 60, where: "" },
+  { title: "Dinner With Sam", s: at(60 * 24 + 120), m: 90, where: "Noodle House" },
+  { title: "Dentist", s: at(60 * 48 - 200), m: 30, where: "" },
 ];
-$('#grid').innerHTML = FEATS.map(([i, t, d]) => `<article class="feat"><div class="mark">${li(i)}</div><h3>${t}</h3><p>${d}</p></article>`).join('');
-$('#sessions').innerHTML = `
-  <div class="hcard needs"><div class="tile claude">C${ring(0.34, '#5ac88c')}</div><div class="col"><span class="t">Refactor the settings page</span><span class="s">Waiting for your approval</span></div><div class="right"><span class="ico">${li('code')}</span><span class="ico amber">${li('phone')}</span></div></div>
-  <div class="hcard"><div class="tile claude">C${ring(0.52, '#5ac88c')}</div><div class="col"><span class="t">Fix the download card</span><span class="s">Finished</span></div><div class="right"><span class="ico">${li('code')}</span><span class="ico green">${li('check')}</span></div></div>
-  <div class="hcard"><div class="tile claude">C${ring(0.81, '#e8b04a')}</div><div class="col"><span class="t">Port the old app</span><span class="s">Editing lib.rs</span></div><div class="right"><span class="ico">${li('code')}</span><span class="ico"><i class="spin"></i></span></div></div>`;
+const cal = { sel: 0 };
+const TRACKS = [
+  { title: "Late Night Study", artist: "Lofi Beats", len: 168, a: "#e8b04a", b: "#e87a7a", c: "#7a5ae8" },
+  { title: "Rainy Window", artist: "Cafe Sessions", len: 201, a: "#5ac8e6", b: "#3d6fd6", c: "#1b2a5c" },
+  { title: "Neon Drive", artist: "Synthwave FM", len: 187, a: "#e86aa8", b: "#7a5ae8", c: "#201040" },
+];
+const music = { i: 0, t: 41, playing: true };
+const dl = { items: [{ name: "Starfield Odyssey", from: "Games", size: 48e9, p: .58, a: "#3d6fd6", b: "#e8b04a" }], done: [{ name: "photos-2026.zip", from: "Browser" }], hist: Array(40).fill(0).map((_, i) => 3e6 + Math.sin(i / 3) * 1e6), rate: 4.2e6 };
+const NEXT_DL = [{ name: "Hollow Night", from: "Games", size: 9e9, a: "#5ac88c", b: "#1b2a5c" }, { name: "Ubuntu 26.04.iso", from: "Browser", size: 6e9, a: "#e87a7a", b: "#7a5ae8" }];
+const drives = [
+  { l: "C", name: "Windows", size: 476, used: 264, r: 0, w: 0 },
+  { l: "D", name: "Games", size: 1863, used: 1210, r: 0, w: 0 },
+  { l: "E", name: "Elderberry", size: 64, used: 12, r: 0, w: 0, usb: true },
+];
+const net = { wifi: true, air: false, hot: false, down: 18e6, up: 2.1e6 };
+const claude = { asks: 0, sessions: [{ name: "nadi", what: "Editing frame.rs", st: "work" }, { name: "site", what: "Waiting for you", st: "idle" }] };
 
+/* the widgets: what each shows at rest (along an edge, or on a side edge, its icon alone), and opened */
+const W = {
+  calendar: {
+    tip: () => { const n = nextEvent(); return n ? n.title + "\n" + soonWords(n) : "Nothing coming up"; },
+    peek: v => {
+      const n = nextEvent(), d = new Date(), soon = n && n.s - d <= 3600e3, last = n && n.s - d <= 600e3;
+      const dot = soon ? `<span class="dot${last ? " pulse" : ""}" style="background:${last ? TWO : ACC}"></span>` : "";
+      if (v) return `<svg width="20" height="22" viewBox="0 0 20 22"><rect x="1" y="1" width="18" height="20" rx="4" fill="#1d1e24"/><path d="M1 5a4 4 0 0 1 4-4h10a4 4 0 0 1 4 4v2H1z" fill="${soon ? (last ? TWO : ACC) : "#3a3b44"}"/><text x="10" y="17.5" text-anchor="middle" font-size="9.5" font-weight="700" fill="#f2f2f5" font-family="Outfit, sans-serif">${d.getDate()}</text></svg>`;
+      return `<span>${DAYS[d.getDay()].slice(0, 3)}</span>${dot}`;
+    },
+    w: 340,
+    body: () => {
+      const d = new Date(), c = clock(d);
+      const sel = new Date(); sel.setHours(0, 0, 0, 0); sel.setDate(sel.getDate() + cal.sel);
+      const ws = new Date(sel); ws.setDate(sel.getDate() - sel.getDay());
+      let week = "";
+      for (let i = 0; i < 7; i++) {
+        const day = new Date(ws); day.setDate(ws.getDate() + i);
+        const off = Math.round((day - new Date(new Date().setHours(0, 0, 0, 0))) / 864e5);
+        const n = EVENTS.filter(e => sameDay(e.s, day)).length;
+        week += `<button data-act="day" data-v="${off}" class="${off === 0 ? "today" : ""} ${off === cal.sel ? "on" : ""}"><small>${"SMTWTFS"[i]}</small><b>${day.getDate()}</b><span class="ds">${"<i></i>".repeat(Math.min(n, 3))}</span></button>`;
+      }
+      let out = `<div class="dayhead"><div class="big tab">${c.t}<small>${c.ap}</small></div><div class="dr"><b>${DAYS[sel.getDay()]}</b><span>${MONS[sel.getMonth()]} ${sel.getDate()}</span></div></div><div class="week">${week}</div>`;
+      const n = nextEvent();
+      if (n && cal.sel === 0) {
+        const left = n.s - d, p = clamp(left / 3600e3, 0, 1), col = left <= 600e3 ? TWO : ACC;
+        out += `<div class="card"><svg width="42" height="42" viewBox="0 0 42 42" style="flex:none"><circle cx="21" cy="21" r="18" fill="none" stroke="#24252c" stroke-width="3.5"/><circle cx="21" cy="21" r="18" fill="none" stroke="${col}" stroke-width="3.5" stroke-linecap="round" stroke-dasharray="${(p * 113).toFixed(1)} 113" transform="rotate(-90 21 21)"/><text x="21" y="25" text-anchor="middle" font-size="11" font-weight="700" fill="#f2f2f5" font-family="Outfit, sans-serif">${soonShort(left)}</text></svg><div style="flex:1;min-width:0"><div style="font-weight:600;font-size:13.5px">${n.title}</div><div class="mut" style="font-size:12px;margin-top:2px">${span(n.s)}${n.where ? ", " + n.where : ""}</div></div>${n.link ? `<button class="sb" data-act="join" style="background:${col};color:#04130b" data-tip="Join the call">Join</button>` : ""}</div>`;
+      }
+      const list = EVENTS.filter(e => sameDay(e.s, sel)).sort((a, b) => a.s - b.s);
+      if (list.length) {
+        let rows = "", nowPut = cal.sel !== 0;
+        for (const e of list) {
+          if (!nowPut && e.s > d) { rows += '<div class="now"></div>'; nowPut = true; }
+          const past = new Date(e.s.getTime() + e.m * 60000) < d;
+          rows += `<div class="ev${past ? " past" : ""}"><div class="tm tab">${clock(e.s).t}</div><div class="cb"></div><div class="tx" style="display:flex;flex-direction:column;gap:2px"><b style="font-size:12.5px">${e.title}</b><span class="mut" style="font-size:11.5px">${span(e.s)} to ${span(new Date(e.s.getTime() + e.m * 60000))}</span></div></div>`;
+        }
+        if (!nowPut) rows += '<div class="now"></div>';
+        out += `<div class="tl">${rows}</div>`;
+      }
+      return out;
+    },
+    open: () => { cal.sel = 0; },
+  },
+  music: {
+    tip: () => TRACKS[music.i].title + "\n" + TRACKS[music.i].artist,
+    peek: v => {
+      const bars = `<span class="bars${music.playing ? "" : " still"}"><i></i><i></i><i></i></span>`;
+      if (v) return bars;
+      return `${bars}<span class="mq"><span>${TRACKS[music.i].title}</span></span>`;
+    },
+    w: 330,
+    body: () => {
+      const t = TRACKS[music.i];
+      return `<div style="display:flex;gap:12px;align-items:center"><div class="cover" style="width:58px;height:58px;background:linear-gradient(135deg,${t.a},${t.b} 60%,${t.c})"></div><div style="min-width:0"><div class="out" style="font-size:16px;font-weight:600">${t.title}</div><div class="mut" style="font-size:12px;margin-top:2px">${t.artist}</div></div></div>
+      <div style="display:flex;flex-direction:column;gap:5px"><div class="bar"><i style="width:${(music.t / t.len * 100).toFixed(1)}%"></i></div><div style="display:flex;justify-content:space-between;font-size:11px" class="mut tab"><span>${mmss(music.t)}</span><span>${mmss(t.len)}</span></div></div>
+      <div class="ctl"><button class="gb" data-act="prev" data-tip="Previous">${ic("prev", 18)}</button><button class="gb big" data-act="play" data-tip="${music.playing ? "Pause" : "Play"}">${ic(music.playing ? "pause" : "play", 20)}</button><button class="gb" data-act="next" data-tip="Next">${ic("next", 18)}</button></div>`;
+    },
+  },
+  claude: {
+    tip: () => claude.asks ? "Claude needs you" : "Claude Code\n" + claude.sessions.filter(s => s.st === "work").length + " working",
+    peek: () => `<span class="burst${claude.sessions.some(s => s.st === "work") ? " spin" : ""}">${ic("burst", 16)}</span>`,
+    w: 320,
+    body: () => {
+      const chip = s => s.st === "work" ? `<span style="color:${CL}">Working</span>` : s.st === "ask" ? `<span style="color:${TWO}">Needs You</span>` : "Done";
+      return `<div class="lab">Sessions</div><div>${claude.sessions.map(s => `<div class="row"><span class="burst${s.st === "work" ? " spin" : ""}">${ic("burst", 15)}</span><div class="tx"><div class="tt">${s.name}</div><div class="ts">${s.what}</div></div><div class="rt">${chip(s)}</div></div>`).join("")}</div>`;
+    },
+  },
+  drives: {
+    tip: () => drives.map(d => `${d.l}:  ${Math.round(d.size - d.used)} GB free`).join("\n"),
+    peek: v => v ? ring("C", drives[0].used / drives[0].size, 22) : drives.map(d => ring(d.l, d.used / d.size, 22, d.usb ? TWO : ACC)).join(""),
+    w: 310,
+    body: () => drives.map(d => `<div class="row go" data-act="drive" data-tip="${d.name} (${d.l}:)">${ring(d.l, d.used / d.size, 30, d.usb ? TWO : ACC)}<div class="tx" style="gap:5px"><div style="display:flex;justify-content:space-between;gap:8px"><span class="tt">${d.name}</span><span class="rt tab">${Math.round(d.size - d.used)} GB free</span></div><div class="bar" style="--c:${d.usb ? TWO : ACC}"><i style="width:${(d.used / d.size * 100).toFixed(1)}%"></i></div><div style="display:flex;gap:14px;font-size:11px" class="mut tab"><span>${flow(false, TEAL)} ${rate(d.r)}</span><span>${flow(true)} ${rate(d.w)}</span></div></div></div>`).join(""),
+  },
+  net: {
+    tip: () => net.air ? "Airplane Mode" : net.wifi ? "Home\nConnected" : "Offline",
+    peek: v => {
+      const i = net.air ? ic("airplane", 16) : wifi(net.wifi ? 3 : 0, 16);
+      return v ? i : `${i}<span>${net.air ? "Airplane" : net.wifi ? "Home" : "Offline"}</span>`;
+    },
+    w: 330,
+    body: () => {
+      const on = net.wifi && !net.air;
+      let o = `<div style="display:flex;gap:12px;align-items:center;padding:2px 2px 0"><div style="width:46px;height:46px;border-radius:23px;background:${on ? "#5ac88c22" : "#e87a7a1f"};display:grid;place-items:center">${net.air ? ic("airplane", 20, "color:" + RED) : wifi(on ? 3 : 0, 20, on ? ACC : RED)}</div><div style="flex:1"><div class="out" style="font-size:16px;font-weight:600">${net.air ? "Airplane Mode" : on ? "Home" : "Offline"}</div><div class="mut" style="font-size:12px;margin-top:2px;display:flex;gap:6px;align-items:center">${net.air ? "Radios off" : on ? ic("lock", 12) + "Connected" : "Not connected"}</div></div>${on ? `<div class="tab" style="display:flex;flex-direction:column;gap:3px;font-size:11.5px;text-align:right"><span style="color:${TEAL}">${flow(false, TEAL)} ${rate(net.down)}</span><span>${flow(true)} ${rate(net.up)}</span></div>` : ""}</div>`;
+      o += `<div class="toggles"><button data-act="wifi" class="${net.wifi && !net.air ? "on" : ""}">${wifi(3, 16)}Wi-Fi</button><button data-act="air" class="${net.air ? "on" : ""}">${ic("airplane", 16)}Airplane</button>${on ? `<button data-act="hot" class="${net.hot ? "on" : ""}">${ic("hotspot", 16)}Hotspot</button>` : ""}</div>`;
+      if (net.hot && on) o += `<div class="row go" data-act="copy" data-tip="Copy the password">${ic("hotspot", 16, "color:" + ACC)}<div class="tx"><div class="tt">PRETEND-PC</div><div class="ts">orange-kite-42</div></div><div class="rt">No Devices</div></div>`;
+      if (net.wifi && !net.air) o += `<div class="lab">Networks</div><div>${[["Neighbours 5G", 2, true], ["Coffee Corner", 1, false], ["Upstairs", 1, true]].map(([n, l, k]) => `<div class="row go" data-act="joinwifi" data-tip="A pretend network">${wifi(l, 16)}<div class="tx"><div class="tt">${n}</div></div>${k ? ic("lock", 13, "color:" + "#8e8e96") : ""}</div>`).join("")}</div>`;
+      return o;
+    },
+  },
+  eyes: {
+    tip: () => "Eyes",
+    peek: () => `<span class="eyes"><i></i><i></i></span>`,
+    poke: () => { const e = $(".eyes", st.eyes.el); if (!e) return; e.classList.add("happy"); setTimeout(() => e.classList.remove("happy"), 900); },
+  },
+  apps: {
+    tip: () => "Apps",
+    peek: v => v ? ic("grid", 16) : `${ic("grid", 16)}<span>Apps</span>`,
+    click: () => toggleLauncher(),
+  },
+  dl: {
+    tip: () => dl.items.length ? dl.items[0].name + "\n" + Math.round(dl.items[0].p * 100) + "%" : "Nothing downloading",
+    peek: v => v ? flow(false, TEAL) : `${flow(false, TEAL)}<span class="tab" style="color:${TEAL}">${rate(dl.rate)}</span>`,
+    w: 330,
+    body: () => {
+      const max = Math.max(...dl.hist) * 1.15, pts = dl.hist.map((v, i) => `${(i / (dl.hist.length - 1) * 302).toFixed(1)},${(56 - v / max * 52).toFixed(1)}`).join(" ");
+      let o = `<div style="display:flex;justify-content:space-between;align-items:baseline"><span class="out tab" style="font-size:22px;font-weight:600;color:${TEAL}">${rate(dl.rate)}</span><span class="mut" style="font-size:11.5px">Last Minute</span></div><svg width="302" height="58" viewBox="0 0 302 58" style="display:block"><defs><linearGradient id="dg" x1="0" x2="0" y1="0" y2="1"><stop offset="0" stop-color="${TEAL}" stop-opacity=".35"/><stop offset="1" stop-color="${TEAL}" stop-opacity="0"/></linearGradient></defs><polygon points="0,58 ${pts} 302,58" fill="url(#dg)"/><polyline points="${pts}" fill="none" stroke="${TEAL}" stroke-width="2" stroke-linejoin="round"/></svg>`;
+      for (const it of dl.items) {
+        const left = (1 - it.p) * it.size / dl.rate;
+        o += `<div class="card"><div style="width:46px;height:46px;border-radius:10px;flex:none;background:linear-gradient(135deg,${it.a},${it.b})"></div><div style="flex:1;min-width:0;display:flex;flex-direction:column;gap:6px"><div style="display:flex;justify-content:space-between;gap:8px"><b style="font-size:13px">${it.name}</b><span class="mut tab" style="font-size:11.5px">${Math.round(it.p * 100)}%</span></div><div class="bar" style="--c:${TEAL}"><i style="width:${(it.p * 100).toFixed(1)}%"></i></div><div class="mut tab" style="font-size:11.5px">${it.from}, ${left > 60 ? Math.ceil(left / 60) + " min" : Math.ceil(left) + " s"} left</div></div></div>`;
+      }
+      if (dl.done.length) o += `<div class="lab">Done</div><div>${dl.done.map(d => `<div class="row">${ic("check", 16, "color:" + ACC)}<div class="tx"><div class="tt">${d.name}</div><div class="ts">${d.from}</div></div><button class="gb" data-act="noop" data-tip="Open">${ic("open", 15)}</button><button class="gb" data-act="noop" data-tip="Show in Folder">${ic("folder", 15)}</button></div>`).join("")}</div>`;
+      return o;
+    },
+  },
+  weather: {
+    tip: () => "Sunny\n24°, feels like 25°",
+    peek: v => v ? ic("sun", 17, "color:" + TWO) : `${ic("sun", 17, "color:" + TWO)}<span class="tab">24°</span>`,
+    w: 300,
+    body: () => `<div style="display:flex;align-items:center;gap:14px">${ic("sun", 44, "color:" + TWO)}<div><div class="out" style="font-size:38px;font-weight:600;line-height:1">24°</div><div class="mut" style="margin-top:4px">Sunny, feels like 25°</div></div></div><div style="display:grid;grid-template-columns:repeat(5,1fr);gap:4px;text-align:center" class="tab">${[["Now", 24], ["1 PM", 25], ["2 PM", 26], ["3 PM", 25], ["4 PM", 23]].map(([h, t]) => `<div style="background:#141519;border-radius:12px;padding:8px 0;display:flex;flex-direction:column;gap:5px;align-items:center"><span class="mut" style="font-size:10.5px">${h}</span>${ic("sun", 15, "color:" + TWO)}<b style="font-size:12px">${t}°</b></div>`).join("")}</div>`,
+  },
+  battery: {
+    tip: () => "82%\n3 h 10 min left",
+    peek: v => { const b = `<svg width="22" height="12" viewBox="0 0 22 12"><rect x=".8" y=".8" width="18" height="10.4" rx="3" fill="none" stroke="#5c5c64" stroke-width="1.4"/><rect x="2.6" y="2.6" width="${(14.4 * .82).toFixed(1)}" height="6.8" rx="1.6" fill="${ACC}"/><rect x="20" y="4" width="1.6" height="4" rx=".8" fill="#5c5c64"/></svg>`; return v ? b : `${b}<span class="tab">82%</span>`; },
+    w: 280,
+    body: () => `<div style="display:flex;align-items:center;gap:14px"><div class="out" style="font-size:38px;font-weight:600;line-height:1">82%</div><div class="mut">3 h 10 min left</div></div><div class="bar" style="height:8px"><i style="width:82%"></i></div>`,
+  },
+};
+const sameDay = (a, b) => a.getFullYear() === b.getFullYear() && a.getMonth() === b.getMonth() && a.getDate() === b.getDate();
+const nextEvent = () => { const d = new Date(); return EVENTS.filter(e => e.s.getTime() + e.m * 60000 > d && e.s - d < 864e5).sort((a, b) => a.s - b.s)[0]; };
+const soonShort = ms => { if (ms <= 0) return "Now"; const m = Math.ceil(ms / 60000); return m < 60 ? m + "m" : Math.floor(m / 60) + "h"; };
+const soonWords = e => { const ms = e.s - new Date(); if (ms <= 0) return "now"; const m = Math.ceil(ms / 60000); return m < 60 ? "in " + m + " min" : "in " + Math.floor(m / 60) + " h" + (m % 60 ? " " + (m % 60) + " min" : ""); };
 
-// ---- the demo: the island's own page in a frame the size of its window; backend.js and world.js stand in for Rust and Windows
-const desk = $('#desk');
-const frame = document.createElement('iframe');
-frame.className = 'nadi';
-frame.title = 'NADI, the island';
-frame.src = 'demo/ui/index.html';
-desk.append(frame);
-frame.addEventListener('load', () => { NADI.start(frame, desk); setAccent(NADI.settings().accent_color, true); try { setIslandAccent(NADI.settings().accent_color); } catch (_) {} });
+/* the frame: which widgets are on which edge, in order; each one's state */
+const edges = { top: ["calendar", "music", "claude"], right: ["drives", "net"], bottom: ["apps", "dl"], left: ["eyes"] };
+const st = {};
+const vert = e => e === "left" || e === "right";
+let PH = null; // (while dragging: where it would go)
 
-// the theme colour: the page, the island's own CSS variables and the saved setting
-function setIslandAccent(hex) {
-  const n = parseInt(hex.slice(1), 16), r = (n >> 16) & 255, g = (n >> 8) & 255, b = n & 255;
-  const s = frame.contentDocument.documentElement.style;
-  s.setProperty('--accent', hex); s.setProperty('--accent-rgb', `${r}, ${g}, ${b}`);
-  s.setProperty('--accent-light-rgb', `${Math.round(r + (255 - r) * 0.28)}, ${Math.round(g + (255 - g) * 0.28)}, ${Math.round(b + (255 - b) * 0.28)}`);
-  s.setProperty('--accent-deep', `rgb(${Math.round(r * 0.62)}, ${Math.round(g * 0.62)}, ${Math.round(b * 0.62)})`);
+function make(id, edge) {
+  const el = document.createElement("div");
+  el.className = "w e-" + edge;
+  el.innerHTML = '<div class="clip"><div class="peek"></div><div class="body"></div><div class="bnr"></div></div>';
+  nadi.append(el);
+  const s = st[id] = { id, el, edge, c: 0, bw: 60, bh: DEPTH, pw: 0, ph: 0, banW: 0, banH: 0, open: false, pinned: false, ban: false, sw: false, gone: true, peekHtml: "", bodyHtml: "" };
+  s.peek = $(".peek", el); s.body = $(".body", el); s.bnr = $(".bnr", el);
+  bind(s);
+  renderPeek(s, true);
+  return s;
 }
-function setAccent(hex, fromIsland) {
-  if (!/^#[0-9a-f]{6}$/i.test(hex || '')) hex = ACCENTS[0];
-  hex = hex.toLowerCase();
-  const n = parseInt(hex.slice(1), 16), r = (n >> 16) & 255, g = (n >> 8) & 255, b = n & 255;
-  const s = document.documentElement.style;
-  s.setProperty('--accent', hex); s.setProperty('--accent-rgb', `${r}, ${g}, ${b}`); s.setProperty('--accent-deep', `rgb(${Math.round(r * 0.62)}, ${Math.round(g * 0.62)}, ${Math.round(b * 0.62)})`);
-  if (!fromIsland) {
-    try { setIslandAccent(hex); } catch (_) {}
-    NADI.settings().accent_color = hex;
-    NADI.persist();
+
+function renderPeek(s, force) {
+  const v = vert(s.edge), html = W[s.id].peek(v);
+  if (!force && html === s.peekHtml) return false;
+  s.peekHtml = html;
+  s.peek.innerHTML = html;
+  meas.className = v ? "vv" : "h";
+  meas.innerHTML = html;
+  const mq = $(".mq", meas);
+  if (v) { s.bw = SIDE; s.bh = Math.max(44, meas.offsetHeight); }
+  else { s.bw = Math.max(DEPTH + 6, meas.offsetWidth); s.bh = DEPTH; }
+  marquee(s.peek);
+  return true;
+}
+function marquee(root) {
+  for (const m of root.querySelectorAll(".mq")) {
+    const inner = m.firstElementChild, over = inner.scrollWidth - m.clientWidth;
+    m.classList.toggle("fits", over <= 1);
+    if (over > 1) { inner.style.setProperty("--x", -over - 4 + "px"); inner.style.setProperty("--d", (2.2 + over / 22) + "s"); inner.classList.add("go"); }
   }
-  document.querySelectorAll('.sw').forEach((x) => x.setAttribute('aria-pressed', x.dataset.c === hex));
 }
-NADI.onAccent = (hex) => setAccent(hex, true);
-$('#swatches').innerHTML = ACCENTS.map((c) => `<button class="sw" data-c="${c}" style="background:${c}" aria-label="Theme colour ${c}" aria-pressed="${c === ACCENTS[0]}"></button>`).join('');
-$('#swatches').addEventListener('click', (e) => { const b = e.target.closest('.sw'); if (b) setAccent(b.dataset.c); });
-$('#tryit').addEventListener('click', (e) => {
-  const b = e.target.closest('button');
-  if (!b) return;
-  if (b.dataset.d) NADI.demo[b.dataset.d]();
-  if (b.dataset.o) NADI.demo.open(b.dataset.o);
+function renderBody(s) {
+  const d = W[s.id];
+  if (!d.body) return;
+  const html = d.body();
+  if (html === s.bodyHtml) return;
+  s.bodyHtml = html;
+  s.body.innerHTML = html;
+  s.body.style.width = (s.pw = d.w || 320) + "px";
+  s.ph = s.body.offsetHeight;
+}
+function size(s) {
+  const v = vert(s.edge);
+  if (s.gone) return v ? [0, s.bh] : [s.bw, 0];
+  if (s.open) return [s.pw, s.ph];
+  if (s.ban) return [s.banW, s.banH];
+  return s.sw ? (v ? [s.bw + 5, s.bh + 6] : [s.bw + 6, s.bh + 5]) : [s.bw, s.bh];
+}
+function along(s) {
+  const v = vert(s.edge);
+  const [w, h] = s.open ? [s.pw, s.ph] : s.ban ? [s.banW, s.banH] : [s.bw, s.bh];
+  return v ? h : w;
+}
+function layout() {
+  for (const e in edges) {
+    const ids = edges[e];
+    const sizes = ids.map(id => id === "PH" ? PH.along : along(st[id]));
+    const total = sizes.reduce((a, b) => a + b, 0) + GAP * Math.max(0, ids.length - 1);
+    const len = vert(e) ? SH - TB : SW;
+    let p = (len - total) / 2;
+    ids.forEach((id, i) => { if (id !== "PH") st[id].c = p + sizes[i] / 2; p += sizes[i] + GAP; });
+  }
+  for (const id in st) place(st[id]);
+}
+function place(s) {
+  if (s.dragging) return;
+  const [w, h] = size(s), e = s.edge;
+  let x, y;
+  if (!vert(e)) { x = clamp(s.c - w / 2, 4, SW - 4 - w); y = e === "top" ? 0 : SH - TB - h; }
+  else { y = clamp(s.c - h / 2, 4, SH - TB - 4 - h); x = e === "left" ? 0 : SW - w; }
+  const el = s.el;
+  el.className = `w e-${e}${vert(e) ? " v" : ""}${s.open ? " open" : ""}${s.ban ? " ban" : ""}${s.sw ? " sw" : ""}${s.gone ? " gone" : ""}`;
+  el.style.left = x + "px"; el.style.top = y + "px"; el.style.width = w + "px"; el.style.height = h + "px";
+  el.style.boxShadow = s.glow && !s.gone ? `0 0 0 1.5px ${s.glow}, 0 0 22px 2px ${s.glow}66` : "none";
+  s.rect = { x, y, w, h };
+}
+
+/* the mouse on them: a swell, then open (on a touch, a tap opens); a press keeps one open; one open at a time */
+function bind(s) {
+  const el = s.el, d = () => W[s.id];
+  el.addEventListener("pointerenter", e => {
+    if (e.pointerType === "touch" || drag) return;
+    clearTimeout(s.closeT);
+    if (!s.open && !s.ban && !s.gone) { s.sw = true; place(s); }
+    if (d().body && !s.open && !s.ban) s.openT = setTimeout(() => open(s.id), 260);
+  });
+  el.addEventListener("pointerleave", e => {
+    if (e.pointerType === "touch") return;
+    clearTimeout(s.openT);
+    if (s.sw) { s.sw = false; place(s); }
+    if (s.open && !s.pinned) s.closeT = setTimeout(() => close(s.id), 320);
+  });
+  el.addEventListener("click", e => {
+    if (justDragged || e.target.closest("[data-act]")) return;
+    clearTimeout(s.openT);
+    const def = d();
+    if (def.click) { def.click(); return; }
+    if (!def.body) { def.poke && def.poke(); return; }
+    if (s.ban) return;
+    if (s.open && s.pinned && !e.target.closest(".body")) close(s.id);
+    else if (!s.open) { open(s.id); s.pinned = true; }
+    else s.pinned = true;
+  });
+  el.addEventListener("contextmenu", e => { e.preventDefault(); widgetMenu(s.id, e); });
+  el.addEventListener("pointerdown", e => startDrag(s.id, e));
+}
+function open(id) {
+  const s = st[id];
+  if (s.open || s.ban || s.gone) return;
+  for (const k in st) if (k !== id && st[k].open) close(k);
+  hideLauncher();
+  W[id].open && W[id].open();
+  s.bodyHtml = "";
+  renderBody(s);
+  s.open = true; s.sw = false;
+  layout();
+}
+function close(id) {
+  const s = st[id];
+  if (!s.open) return;
+  s.open = false; s.pinned = false;
+  layout();
+}
+function closeAll() { for (const k in st) if (st[k].open) close(k); }
+
+/* a banner: the widget grows into it, says something, and goes back */
+function banner(id, html, w, glow, ms) {
+  const s = st[id];
+  if (!s || s.gone) return;
+  if (s.open) close(id);
+  s.bnr.innerHTML = html;
+  s.bnr.style.width = (s.banW = w) + "px";
+  s.banH = s.bnr.offsetHeight;
+  s.ban = true; s.sw = false; s.glow = glow || null;
+  layout();
+  clearTimeout(s.banT);
+  if (ms) s.banT = setTimeout(() => unbanner(id), ms);
+}
+function unbanner(id) { const s = st[id]; if (!s || !s.ban) return; s.ban = false; s.glow = null; layout(); }
+function claudeAsk() {
+  if (!st.claude || st.claude.gone || claude.asks) return;
+  claude.asks = 1;
+  claude.sessions[1] = { name: "site", what: "Edit docs/index.html?", st: "ask" };
+  banner("claude", `<div style="padding:16px 18px;display:flex;flex-direction:column;gap:12px"><div style="display:flex;gap:12px;align-items:center"><span class="burst spin">${ic("burst", 26)}</span><div><div class="out" style="font-size:15px;font-weight:600">Claude needs you</div><div class="mut" style="font-size:12px;margin-top:2px">Edit docs/index.html?</div></div></div><div style="display:flex;gap:8px"><button class="gb" style="flex:1;height:34px;border-radius:17px" data-act="deny">Deny</button><button class="sb" style="flex:1;background:${CL};color:#1a0d05" data-act="allow">Allow</button></div></div>`, 300, CL);
+  refresh("claude");
+}
+function claudeAnswer(ok) {
+  claude.asks = 0;
+  claude.sessions[1] = ok ? { name: "site", what: "Editing docs/index.html", st: "work" } : { name: "site", what: "Waiting for you", st: "idle" };
+  unbanner("claude");
+  refresh("claude");
+  if (ok) setTimeout(() => { claude.sessions[1] = { name: "site", what: "Done, 2 files changed", st: "idle" }; refresh("claude"); }, 9000);
+  setTimeout(claudeAsk, 45000);
+}
+
+/* moving a widget: dragged to another edge (its neighbours make room), or from its menu */
+let drag = null, justDragged = false;
+function pt(e) { const r = scr.getBoundingClientRect(); return { x: (e.clientX - r.left) / scale, y: (e.clientY - r.top) / scale }; }
+function startDrag(id, e) {
+  if (e.button !== 0 || e.target.closest(".body, .bnr")) return;
+  const p = pt(e);
+  drag = { id, x0: p.x, y0: p.y, on: false };
+}
+function moveDrag(e) {
+  if (!drag) return;
+  const p = pt(e), s = st[drag.id];
+  if (!drag.on) {
+    if (Math.hypot(p.x - drag.x0, p.y - drag.y0) < 7) return;
+    drag.on = true;
+    clearTimeout(s.openT); hideTip();
+    if (s.open) close(drag.id);
+    if (s.ban) return (drag = null);
+    s.dragging = true; s.sw = false;
+    edges[s.edge] = edges[s.edge].filter(k => k !== drag.id);
+    s.el.className = `w e-${s.edge} drag${vert(s.edge) ? " v" : ""}`;
+    s.el.style.width = Math.max(s.bw, s.bh) + "px"; s.el.style.height = Math.min(s.bw, s.bh) + "px";
+    s.el.style.boxShadow = "none";
+  }
+  const dw = parseFloat(s.el.style.width), dh = parseFloat(s.el.style.height);
+  s.el.style.left = p.x - dw / 2 + "px"; s.el.style.top = p.y - dh / 2 + "px";
+  const dist = { top: p.y, bottom: SH - TB - p.y, left: p.x, right: SW - p.x };
+  const e2 = Object.keys(dist).sort((a, b) => dist[a] - dist[b])[0];
+  const a = vert(e2) ? p.y : p.x;
+  const list = edges[e2].filter(k => k !== "PH");
+  let idx = list.findIndex(k => st[k].c > a);
+  if (idx < 0) idx = list.length;
+  if (!PH || PH.edge !== e2 || PH.idx !== idx) {
+    for (const k in edges) edges[k] = edges[k].filter(x => x !== "PH");
+    list.splice(idx, 0, "PH");
+    edges[e2] = list;
+    PH = { edge: e2, idx, along: vert(e2) ? 44 : Math.max(s.bw, 60) };
+    layout();
+  }
+}
+function endDrag() {
+  if (!drag) return;
+  const s = st[drag.id];
+  if (drag.on && PH) {
+    edges[PH.edge] = edges[PH.edge].map(x => x === "PH" ? s.id : x);
+    s.edge = PH.edge; PH = null; s.dragging = false;
+    renderPeek(s, true);
+    layout();
+    justDragged = true; setTimeout(() => (justDragged = false), 0);
+  }
+  drag = null;
+}
+function moveTo(id, edge) {
+  const s = st[id];
+  if (s.open) close(id);
+  edges[s.edge] = edges[s.edge].filter(k => k !== id);
+  edges[edge].push(id);
+  s.edge = edge;
+  renderPeek(s, true);
+  layout();
+}
+
+/* the menu (a widget's, the desktop's) */
+const menu = $("#menu");
+function showMenu(e, items) {
+  const p = pt(e);
+  menu.innerHTML = items.map((it, i) => `<button data-mi="${i}">${it.icon ? ic(it.icon, 16, it.rot ? `transform:rotate(${it.rot}deg)` : "") : ""}${it.label}</button>`).join("");
+  menu._items = items;
+  menu.classList.add("show");
+  const w = menu.offsetWidth, h = menu.offsetHeight;
+  const x = clamp(p.x, 6, SW - w - 6), y = clamp(p.y, 6, SH - h - 6);
+  menu.style.left = x + "px"; menu.style.top = y + "px";
+  menu.style.transformOrigin = `${p.x > SW - w - 6 ? "right" : "left"} ${p.y > SH - h - 6 ? "bottom" : "top"}`;
+}
+function hideMenu() { menu.classList.remove("show"); }
+menu.addEventListener("click", e => { const b = e.target.closest("[data-mi]"); if (!b) return; const it = menu._items[+b.dataset.mi]; hideMenu(); it.run(); });
+function widgetMenu(id, e) {
+  hideTip();
+  const names = { top: ["Top Edge", 0], right: ["Right Edge", 90], bottom: ["Bottom Edge", 180], left: ["Left Edge", 270] };
+  const items = Object.keys(names).filter(k => k !== st[id].edge).map(k => ({ icon: "arrow", rot: names[k][1], label: names[k][0], run: () => moveTo(id, k) }));
+  if (W[id].body) items.push({ icon: "pin", label: st[id].open && st[id].pinned ? "Close" : "Keep Open", run: () => { if (st[id].open && st[id].pinned) close(id); else { open(id); st[id].pinned = true; } } });
+  if (id === "weather" || id === "battery") items.push({ icon: "x", label: "Remove", run: () => removeWidget(id) });
+  showMenu(e, items);
+}
+
+/* the launcher: pins, a search, the power ones */
+const launch = $("#launch");
+const APPS = [
+  { id: "music", name: "Music", ic: "music", bg: "#e87a7a" }, { id: "notepad", name: "Read Me", ic: "note", bg: "#3d8bd6" },
+  { id: "files", name: "File Explorer", ic: "folder", bg: "#d99a2b" }, { id: "browser", name: "Browser", ic: "globe", bg: "#3d6fd6" },
+  { id: "term", name: "Terminal", ic: "term", bg: "#2b2d38" }, { id: "plugins", name: "NADI Plugins", ic: "store", bg: "#2f8f5c" },
+  { id: "games", name: "Games", ic: "game", bg: "#4a3aa8" }, { id: "photos", name: "Photos", ic: "photo", bg: "#7a5ae8" },
+  { id: "mail", name: "Mail", ic: "mail", bg: "#2f8f86" }, { id: "calc", name: "Calculator", ic: "calc", bg: "#4a4d5c" },
+  { id: "paint", name: "Paint", ic: "paint", bg: "#c4508a" }, { id: "settings", name: "Settings", ic: "gear", bg: "#4a4d5c" },
+];
+const POWER = [{ id: "lock", name: "Lock", ic: "lock" }, { id: "sleep", name: "Sleep", ic: "moon" }, { id: "restart", name: "Restart", ic: "restart" }, { id: "shutdown", name: "Shut Down", ic: "power" }];
+const appIb = a => `<span class="ib" style="background:${a.bg}">${ic(a.ic, 20)}</span>`;
+function toggleLauncher() { launch.classList.contains("show") ? hideLauncher() : showLauncher(); }
+function showLauncher() {
+  closeAll(); hideTip();
+  launch.innerHTML = `<div class="search">${ic("search", 16)}<input id="q" placeholder="Search" autocomplete="off" spellcheck="false"><button class="gb" data-act="allapps" data-tip="All Apps">${ic("grid", 15)}</button></div><div id="lres"></div><div class="foot">${POWER.map(p => `<button class="gb" data-act="power" data-v="${p.id}" data-tip="${p.name}">${ic(p.ic, 17)}</button>`).join("")}</div>`;
+  showPins();
+  const a = st.apps, r = a.rect, lw = 560;
+  launch.style.width = lw + "px";
+  const lh = launch.offsetHeight;
+  let x = clamp(r.x + r.w / 2 - lw / 2, 10, SW - lw - 10), y;
+  if (a.edge === "bottom") y = SH - TB - r.h - 10 - lh;
+  else if (a.edge === "top") y = r.h + 10;
+  else { y = clamp(r.y + r.h / 2 - lh / 2, 10, SH - TB - lh - 10); x = a.edge === "left" ? r.w + 10 : SW - r.w - 10 - lw; }
+  launch.style.left = x + "px"; launch.style.top = y + "px";
+  launch.style.transformOrigin = a.edge === "bottom" ? "50% 100%" : a.edge === "top" ? "50% 0" : a.edge === "left" ? "0 50%" : "100% 50%";
+  requestAnimationFrame(() => launch.classList.add("show"));
+  const q = $("#q");
+  if (!touch) setTimeout(() => q.focus(), 60);
+  q.addEventListener("input", () => search(q.value));
+  q.addEventListener("keydown", e => {
+    if (e.key === "Escape") hideLauncher();
+    if (e.key === "Enter") { const f = $("#lres [data-act]"); f && f.click(); }
+  });
+}
+function showPins() { $("#lres").innerHTML = `<div class="pins">${APPS.map(a => `<button class="pin" data-act="app" data-v="${a.id}">${appIb(a)}<span>${a.name}</span></button>`).join("")}</div>`; }
+function search(q) {
+  q = q.trim().toLowerCase();
+  if (!q) return showPins();
+  const hits = APPS.filter(a => a.name.toLowerCase().includes(q)).map(a => `<button class="row go" data-act="app" data-v="${a.id}">${appIb(a)}<div class="tx"><div class="tt">${a.name}</div></div></button>`)
+    .concat(POWER.filter(p => p.name.toLowerCase().includes(q)).map(p => `<button class="row go" data-act="power" data-v="${p.id}"><span class="ib" style="background:#24252c">${ic(p.ic, 15)}</span><div class="tx"><div class="tt">${p.name}</div></div></button>`));
+  $("#lres").innerHTML = hits.length ? `<div class="list">${hits.join("")}</div>` : `<div class="mut" style="padding:18px 6px;text-align:center">Nothing called that</div>`;
+}
+function allApps() {
+  const byL = {};
+  for (const a of [...APPS].sort((x, y) => x.name.localeCompare(y.name))) (byL[a.name[0]] = byL[a.name[0]] || []).push(a);
+  $("#lres").innerHTML = `<div class="list">${Object.keys(byL).map(l => `<div class="lab" style="margin:8px 8px 2px">${l}</div>${byL[l].map(a => `<button class="row go" data-act="app" data-v="${a.id}">${appIb(a)}<div class="tx"><div class="tt">${a.name}</div></div></button>`).join("")}`).join("")}</div>`;
+}
+function hideLauncher() { launch.classList.remove("show"); }
+
+/* windows */
+const wins = $("#wins");
+let z = 10;
+const openWins = {};
+const WINS = {
+  music: { title: "Music", ic: "music", w: 420, h: 470, body: () => musicWin() },
+  notepad: { title: "Read Me", ic: "note", w: 440, h: 470, body: () => readme() },
+  plugins: { title: "NADI Plugins", ic: "store", w: 520, h: 520, body: () => pluginsWin() },
+};
+function openApp(id) {
+  hideLauncher();
+  if (openWins[id]) return focusWin(id, true);
+  const a = APPS.find(x => x.id === id);
+  const def = WINS[id] || { title: a.name, ic: a.ic, w: 420, h: 300, body: () => `<div class="pretend">${appIb(a).replace("ib", "ib")}<span>A pretend app, on a pretend PC.</span></div>` };
+  const el = document.createElement("div");
+  el.className = "win gone";
+  const n = Object.keys(openWins).length;
+  const w = Math.min(def.w, SW - 40), h = Math.min(def.h, SH - TB - 70);
+  const x = clamp((SW - w) / 2 + (n % 4) * 28 - 40, 10, SW - w - 10), y = clamp((SH - TB - h) / 2 + (n % 4) * 24 - 20, 44, SH - TB - h - 10);
+  el.style.cssText = `left:${x}px;top:${y}px;width:${w}px;height:${h}px`;
+  el.innerHTML = `<div class="wbar">${ic(def.ic, 15)}<span>${def.title}</span><span class="sp"></span><button data-w="min">${ic("minus", 13)}</button><button data-w="max">${ic("square", 12)}</button><button class="cl" data-w="close">${ic("x", 13)}</button></div><div class="wbody">${def.body()}</div>`;
+  wins.append(el);
+  openWins[id] = { el, def, min: false };
+  el.addEventListener("pointerdown", () => focusWin(id));
+  $(".wbar", el).addEventListener("pointerdown", e => {
+    if (e.target.closest("button")) return;
+    const p = pt(e), r = { x: el.offsetLeft, y: el.offsetTop };
+    const mv = ev => { const q = pt(ev); el.style.left = clamp(r.x + q.x - p.x, -w + 80, SW - 80) + "px"; el.style.top = clamp(r.y + q.y - p.y, 0, SH - TB - 34) + "px"; };
+    const up = () => { removeEventListener("pointermove", mv); removeEventListener("pointerup", up); };
+    addEventListener("pointermove", mv); addEventListener("pointerup", up);
+  });
+  $(".wbar", el).addEventListener("dblclick", () => maxWin(id));
+  $(".wbar", el).addEventListener("click", e => {
+    const b = e.target.closest("[data-w]"); if (!b) return;
+    if (b.dataset.w === "close") closeWin(id); else if (b.dataset.w === "min") minWin(id); else maxWin(id);
+  });
+  requestAnimationFrame(() => el.classList.remove("gone"));
+  focusWin(id);
+  taskbar();
+}
+function focusWin(id, restore) {
+  const w = openWins[id]; if (!w) return;
+  if (restore && w.min) { w.min = false; w.el.classList.remove("gone"); }
+  w.el.style.zIndex = ++z;
+  taskbar();
+}
+function minWin(id) { const w = openWins[id]; w.min = true; w.el.classList.add("gone"); taskbar(); }
+function maxWin(id) {
+  const w = openWins[id], el = w.el;
+  if (w.max) { el.style.cssText = w.max; w.max = null; }
+  else { w.max = el.style.cssText; el.style.left = "0px"; el.style.top = "0px"; el.style.width = SW + "px"; el.style.height = SH - TB + "px"; el.style.zIndex = ++z; }
+}
+function closeWin(id) { const w = openWins[id]; if (!w) return; w.el.classList.add("gone"); delete openWins[id]; setTimeout(() => w.el.remove(), 250); taskbar(); }
+function frontWin() { let best = null, bz = -1; for (const k in openWins) { const w = openWins[k]; if (!w.min && +w.el.style.zIndex > bz) { bz = +w.el.style.zIndex; best = k; } } return best; }
+function rerenderWin(id) { const w = openWins[id]; if (w) $(".wbody", w.el).innerHTML = w.def.body(); }
+
+function readme() {
+  const li = (i, t) => `<li>${ic(i, 16)}<span>${t}</span></li>`;
+  return `<div class="readme"><h1>NADI</h1><div class="sub">Not Another Dynamic Island. Widgets that live on the edges of your Windows screen, like the ones around this window. This is a pretend PC: everything on it works.</div><ul>
+  ${li("eye", "Hover over a widget to open it. Press it to keep it open.")}
+  ${li("arrow", "Drag a widget to another edge, or right-click it.")}
+  ${li("grid", "Press Apps for the launcher: pins, search, power.")}
+  ${li("burst", "Claude Code sessions show up, and ask for you when they need you.")}
+  ${li("store", "Plugins add more. They are small Luau scripts, run sandboxed.")}
+  </ul><div class="mut" style="margin-bottom:10px">Windows 10 and 11. Alpha. Under 1% of the CPU at rest.</div><div class="get"><a class="sb acc" href="${GET}" target="_blank" rel="noopener">${ic("get", 15)}Get NADI</a><a class="sb gh2" href="${REPO}" target="_blank" rel="noopener">${ic("code", 15)}GitHub</a></div></div>`;
+}
+function musicWin() {
+  const t = TRACKS[music.i];
+  return `<div class="player"><div style="display:flex;justify-content:center;padding-top:6px"><div class="cover" style="width:170px;height:170px;background:linear-gradient(135deg,${t.a},${t.b} 60%,${t.c})"></div></div><div style="text-align:center"><div class="out" style="font-size:19px;font-weight:600">${t.title}</div><div class="mut" style="margin-top:3px">${t.artist}</div></div><div style="display:flex;flex-direction:column;gap:5px"><div class="bar"><i id="mbar" style="width:${(music.t / t.len * 100).toFixed(1)}%"></i></div><div style="display:flex;justify-content:space-between;font-size:11px" class="mut tab"><span id="mtime">${mmss(music.t)}</span><span>${mmss(t.len)}</span></div></div><div class="ctl"><button class="gb" data-act="prev">${ic("prev", 18)}</button><button class="gb big" data-act="play">${ic(music.playing ? "pause" : "play", 20)}</button><button class="gb" data-act="next">${ic("next", 18)}</button></div><div class="trk">${TRACKS.map((x, i) => `<button class="row go${i === music.i ? " now" : ""}" data-act="track" data-v="${i}"><div class="tx"><div class="tt">${x.title}</div><div class="ts">${x.artist}</div></div><div class="rt tab">${mmss(x.len)}</div></button>`).join("")}</div></div>`;
+}
+const PLUGINS = [
+  { id: "now-playing", name: "Now Playing", d: "What is playing, with play, skip and seek, and three bars that dance with the sound.", ic: "music", bg: "#e87a7a", on: true },
+  { id: "ics-calendar", name: "Calendar", d: "The events of a calendar link (Google, Outlook, iCloud), the time, and a month to look through.", ic: "cal", bg: "#2f8f5c", on: true },
+  { id: "claude", name: "Claude", d: "Your Claude Code sessions as they run, and a banner when one needs you.", ic: "burst", bg: "#b8643a", on: true },
+  { id: "downloads", name: "Downloads", d: "What your browsers, Steam and qBittorrent are downloading right now.", ic: "get", bg: "#2f7fa8", on: true },
+  { id: "eyes", name: "Eyes", d: "Two eyes that blink, look at your cursor, and glance around when it rests.", ic: "eye", bg: "#4a4d5c", on: true },
+  { id: "weather", name: "Weather", d: "The weather where you are, from open-meteo.com.", ic: "sun", bg: "#c48a1e", add: true },
+  { id: "battery", name: "Battery", d: "How full the battery is, as a liquid that fills, and a banner when it runs low.", ic: "battery", bg: "#2f8f5c", add: true },
+  { id: "work", name: "Work", d: "Time coded, as WakaTime counts it, kept on this PC: by project, language and file.", ic: "code", bg: "#3d6fd6" },
+  { id: "page-reader", name: "NADI Chrome", d: "What you are reading, as a card made for its kind: walkthroughs and recipes step by step.", ic: "globe", bg: "#3d6fd6" },
+  { id: "games", name: "Games", d: "The game you play, with its wiki a search away, and how full your controller is.", ic: "game", bg: "#4a3aa8" },
+  { id: "system-meters", name: "System Meters", d: "How busy the CPU, the memory and the graphics card are.", ic: "drive", bg: "#4a4d5c" },
+  { id: "speech", name: "Speech", d: "Writes down what is said, by you and in what the computer plays, and tells the voices apart.", ic: "volume", bg: "#7a5ae8" },
+  { id: "picture", name: "Picture", d: "Pictures you paste into it, a map or a guide, to zoom and pan; popped out, over a game.", ic: "photo", bg: "#c4508a" },
+];
+function pluginsWin() {
+  return `<div style="padding:6px 6px 10px">${PLUGINS.map(p => {
+    const added = p.on || st[p.id];
+    const btn = added ? `<span class="sb added">${ic("check", 15)}</span>` : p.add ? `<button class="sb acc" data-act="addplug" data-v="${p.id}">Add</button>` : "";
+    return `<div class="plug"><span class="ib" style="background:${p.bg}">${ic(p.ic, 18)}</span><div class="tx"><div class="tt">${p.name}</div><div class="ts">${p.d}</div></div>${btn}</div>`;
+  }).join("")}<div class="mut" style="padding:8px 14px;font-size:12px">On the real thing, plugins install from GitHub, in Settings.</div></div>`;
+}
+function addWidget(id) {
+  if (st[id]) return;
+  const edge = id === "battery" ? "bottom" : "top";
+  edges[edge].push(id);
+  const s = make(id, edge);
+  layout();
+  requestAnimationFrame(() => requestAnimationFrame(() => { s.gone = false; layout(); }));
+  rerenderWin("plugins");
+}
+function removeWidget(id) {
+  const s = st[id]; if (!s) return;
+  s.gone = true; layout();
+  setTimeout(() => { edges[s.edge] = edges[s.edge].filter(k => k !== id); s.el.remove(); delete st[id]; layout(); rerenderWin("plugins"); }, 420);
+}
+
+/* the taskbar */
+const TBAPPS = ["start", "music", "notepad", "files", "browser", "plugins"];
+function taskbar() {
+  const f = frontWin();
+  $("#tbapps").innerHTML = TBAPPS.map(id => {
+    if (id === "start") return `<button class="tk" data-act="start" data-tip="Apps"><span class="ib" style="color:#4cc2ff">${ic("win", 18)}</span></button>`;
+    const a = APPS.find(x => x.id === id), w = openWins[id];
+    return `<button class="tk${w ? " run" : ""}${f === id ? " front" : ""}" data-act="tb" data-v="${id}" data-tip="${a.name}"><span class="ib" style="background:${a.bg}">${ic(a.ic, 15)}</span></button>`;
+  }).join("");
+}
+function tray() {
+  const d = new Date();
+  $("#tray").innerHTML = `<button class="tt" data-act="openw" data-v="net" data-tip="${net.air ? "Airplane Mode" : net.wifi ? "Home" : "Offline"}">${net.air ? ic("airplane", 15) : wifi(net.wifi ? 3 : 0, 15)}${ic("volume", 15)}</button><button class="tt" data-act="openw" data-v="calendar"><span id="clock" class="tab">${span(d)}<br>${d.getMonth() + 1}/${d.getDate()}/${d.getFullYear()}</span></button>`;
+}
+
+/* desktop icons */
+const DESK = [
+  { label: "Get NADI", ic: "get", bg: "#5ac88c", fg: "#04130b", run: () => window.open(GET, "_blank", "noopener") },
+  { label: "GitHub", ic: "code", bg: "#24292f", run: () => window.open(REPO, "_blank", "noopener") },
+  { label: "Read Me", ic: "note", bg: "#3d8bd6", run: () => openApp("notepad") },
+  { label: "NADI Plugins", ic: "store", bg: "#2f8f5c", run: () => openApp("plugins") },
+  { label: "Music", ic: "music", bg: "#e87a7a", run: () => openApp("music") },
+];
+$("#icons").innerHTML = DESK.map((d, i) => `<button class="dk" data-act="desk" data-v="${i}"><span class="ib" style="background:${d.bg};color:${d.fg || "#fff"}">${ic(d.ic, 22)}</span>${d.label}</button>`).join("");
+
+/* what is pressed */
+function refresh(id) {
+  const s = st[id];
+  if (!s) return;
+  if (renderPeek(s)) layout();
+  if (s.open) { const h = s.ph; renderBody(s); if (s.ph !== h) place(s); }
+}
+function act(a, el) {
+  const v = el.dataset.v;
+  switch (a) {
+    case "play": music.playing = !music.playing; syncMusic(); break;
+    case "next": music.i = (music.i + 1) % TRACKS.length; music.t = 0; syncMusic(); break;
+    case "prev": if (music.t > 4) music.t = 0; else music.i = (music.i + TRACKS.length - 1) % TRACKS.length, music.t = 0; syncMusic(); break;
+    case "track": music.i = +v; music.t = 0; music.playing = true; syncMusic(); break;
+    case "day": cal.sel = +v; refresh("calendar"); break;
+    case "join": flash(el, "Joining"); break;
+    case "wifi": net.wifi = net.air ? true : !net.wifi; net.air = false; if (!net.wifi) net.hot = false; syncNet(); break;
+    case "air": net.air = !net.air; if (net.air) net.hot = false; syncNet(); break;
+    case "hot": net.hot = !net.hot; syncNet(); break;
+    case "copy": flash(el.querySelector(".rt"), "Copied"); break;
+    case "joinwifi": flash(el, null); break;
+    case "drive": openApp("files"); break;
+    case "allow": claudeAnswer(true); break;
+    case "deny": claudeAnswer(false); break;
+    case "app": openApp(v); break;
+    case "allapps": allApps(); break;
+    case "power": hideLauncher(); power(v); break;
+    case "start": toggleLauncher(); break;
+    case "tb": { const w = openWins[v]; if (!w) openApp(v); else if (w.min || frontWin() !== v) focusWin(v, true); else minWin(v); break; }
+    case "openw": if (st[v]) { open(v); st[v].pinned = true; } break;
+    case "desk": DESK[+v].run(); break;
+    case "addplug": addWidget(v); break;
+    case "dlopen": unbanner("dl"); break;
+  }
+}
+function flash(el, text) {
+  if (!el) return;
+  if (text) { const old = el.innerHTML; el.textContent = text; setTimeout(() => (el.innerHTML = old), 1200); }
+  el.animate([{ transform: "scale(.96)" }, { transform: "none" }], { duration: 260, easing: "cubic-bezier(.3,1.4,.5,1)" });
+}
+function syncMusic() {
+  refresh("music");
+  rerenderWin("music");
+}
+function syncNet() { refresh("net"); tray(); }
+scr.addEventListener("click", e => {
+  const b = e.target.closest("[data-act]");
+  if (b && scr.contains(b)) { e.stopPropagation(); act(b.dataset.act, b); }
 });
+
+/* power: lock, sleep, restart, shut down (asked first) */
+const modal = $("#modal"), over = $("#over");
+function ask(title, text, label, run) {
+  modal.innerHTML = `<div class="dim"></div><div class="card2"><div class="mi">${ic(label === "Restart" ? "restart" : "power", 22)}</div><div class="mt">${title}</div><div class="ms">${text}</div><div class="mb"><button data-m="no">Cancel</button><button class="red" data-m="yes">${label}</button></div></div>`;
+  modal.classList.add("show");
+  modal.onclick = e => {
+    const b = e.target.closest("[data-m]");
+    if (!b && e.target.closest(".card2")) return;
+    modal.classList.remove("show");
+    if (b && b.dataset.m === "yes") run();
+  };
+}
+function power(kind) {
+  if (kind === "lock") {
+    const d = new Date(), c = clock(d);
+    over.className = "show lock";
+    over.style.backgroundImage = getComputedStyle($("#wall")).backgroundImage;
+    over.innerHTML = `<div class="lk"><div class="big tab">${c.t}</div><div class="sm">${DAYS[d.getDay()]}, ${MONS[d.getMonth()]} ${d.getDate()}</div><div class="hint">Press anywhere</div></div>`;
+    over.onclick = () => { over.classList.add("leaving"); setTimeout(() => { over.className = ""; over.innerHTML = ""; }, 500); };
+  } else if (kind === "sleep") {
+    over.className = "show black"; over.innerHTML = ""; over.style.backgroundImage = "";
+    over.onclick = () => { over.classList.add("waking"); setTimeout(() => (over.className = ""), 700); };
+  } else if (kind === "restart") {
+    ask("Restart?", "Apps that are open will close.", "Restart", () => goDark(true));
+  } else {
+    ask("Shut Down?", "Apps that are open will close.", "Shut Down", () => goDark(false));
+  }
+}
+function goDark(back) {
+  for (const k in st) { st[k].gone = true; st[k].open = false; st[k].ban = false; }
+  layout();
+  for (const k in openWins) closeWin(k);
+  setTimeout(() => {
+    over.className = "show black"; over.style.backgroundImage = "";
+    over.innerHTML = back ? "" : `<div class="off"><button data-tip="Turn On">${ic("power", 28)}</button></div>`;
+    const wake = () => { over.classList.add("waking"); setTimeout(() => { over.className = ""; over.innerHTML = ""; boot(); }, 700); };
+    if (back) setTimeout(wake, 1600); else over.onclick = e => { if (e.target.closest("button")) wake(); };
+  }, 380);
+}
+function boot() {
+  const order = Object.keys(st);
+  order.forEach((k, i) => setTimeout(() => { st[k].gone = false; place(st[k]); }, 140 + i * 70));
+  setTimeout(layout, 160 + order.length * 70);
+}
+
+/* tips: plain, after a moment on something that has one */
+const tip = $("#tip");
+let tipT = 0, tipFor = null;
+function tipText(el) {
+  if (el.dataset.tip) return el.dataset.tip;
+  const w = el.closest(".w");
+  if (w && el === w) for (const k in st) if (st[k].el === w && !st[k].open && !st[k].ban) return W[k].tip();
+  return "";
+}
+scr.addEventListener("pointerover", e => {
+  if (e.pointerType === "touch") return;
+  const el = e.target.closest("[data-tip], .w");
+  if (el === tipFor) return;
+  hideTip();
+  if (!el || drag) return;
+  tipFor = el;
+  tipT = setTimeout(() => {
+    const t = tipText(el); if (!t) return;
+    tip.textContent = t;
+    const r = el.getBoundingClientRect(), sr = scr.getBoundingClientRect();
+    const x = (r.left - sr.left) / scale, y = (r.top - sr.top) / scale, w = r.width / scale, h = r.height / scale;
+    const tw = tip.offsetWidth, th = tip.offsetHeight;
+    let tx = clamp(x + w / 2 - tw / 2, 6, SW - tw - 6), ty = y + h + 8;
+    if (ty + th > SH - TB - 4) ty = y - th - 8;
+    tip.style.left = tx + "px"; tip.style.top = ty + "px";
+    tip.classList.add("show");
+  }, 520);
+});
+scr.addEventListener("pointerout", e => { if (!e.relatedTarget || !tipFor || !tipFor.contains(e.relatedTarget)) hideTip(); });
+function hideTip() { clearTimeout(tipT); tipFor = null; tip.classList.remove("show"); }
+
+/* the pointer: eyes follow it; drags; a press elsewhere shuts what is open */
+addEventListener("pointermove", e => {
+  moveDrag(e);
+  const p = pt(e);
+  for (const eyes of document.querySelectorAll(".eyes")) {
+    const r = eyes.getBoundingClientRect(), sr = scr.getBoundingClientRect();
+    const cx = (r.left + r.width / 2 - sr.left) / scale, cy = (r.top + r.height / 2 - sr.top) / scale;
+    const dx = p.x - cx, dy = p.y - cy, d = Math.hypot(dx, dy) || 1, k = Math.min(1, d / 260);
+    eyes.style.setProperty("--ex", (dx / d * 3 * k).toFixed(2) + "px");
+    eyes.style.setProperty("--ey", (dy / d * 3 * k).toFixed(2) + "px");
+  }
+});
+addEventListener("pointerup", endDrag);
+scr.addEventListener("pointerdown", e => {
+  touch = e.pointerType === "touch";
+  hideTip();
+  if (!e.target.closest("#menu")) hideMenu();
+  if (!e.target.closest(".w")) for (const k in st) if (st[k].open && st[k].pinned) close(k);
+  if (!e.target.closest("#launch, [data-act=start], .w")) hideLauncher();
+});
+scr.addEventListener("contextmenu", e => {
+  e.preventDefault();
+  if (e.target.closest(".w, .win, #taskbar, #launch")) return;
+  showMenu(e, [
+    { icon: "get", label: "Get NADI", run: () => window.open(GET, "_blank", "noopener") },
+    { icon: "code", label: "GitHub", run: () => window.open(REPO, "_blank", "noopener") },
+    { icon: "note", label: "Read Me", run: () => openApp("notepad") },
+  ]);
+});
+addEventListener("keydown", e => {
+  if (e.key === "Escape") { hideLauncher(); hideMenu(); closeAll(); modal.classList.remove("show"); }
+});
+setInterval(() => {
+  for (const eyes of document.querySelectorAll(".eyes")) { eyes.classList.add("blink"); setTimeout(() => eyes.classList.remove("blink"), 130); }
+}, 4200);
+
+/* time goes on: the clock, the music, the downloads, the drives, the network */
+function tick() {
+  const t = TRACKS[music.i];
+  if (music.playing) {
+    music.t += 1;
+    if (music.t >= t.len) { music.i = (music.i + 1) % TRACKS.length; music.t = 0; syncMusic(); }
+  }
+  const mb = $("#mbar"), mt = $("#mtime");
+  if (mb) { mb.style.width = (music.t / TRACKS[music.i].len * 100).toFixed(1) + "%"; mt.textContent = mmss(music.t); }
+  dl.rate = clamp(dl.rate + (Math.random() - .5) * 1.2e6, 1.8e6, 7.5e6);
+  dl.hist.push(dl.rate); dl.hist.shift();
+  const it = dl.items[0];
+  if (it) {
+    it.p = Math.min(1, it.p + dl.rate / it.size * 40);
+    if (it.p >= 1) {
+      dl.items.shift();
+      dl.done.unshift({ name: it.name, from: it.from }); dl.done.length = Math.min(dl.done.length, 3);
+      banner("dl", `<div style="padding:14px 16px;display:flex;gap:12px;align-items:center"><div style="width:42px;height:42px;border-radius:10px;flex:none;background:linear-gradient(135deg,${it.a},${it.b})"></div><div style="flex:1"><div class="out" style="font-size:14.5px;font-weight:600">${it.name}</div><div class="mut" style="font-size:12px;margin-top:2px">Downloaded</div></div><button class="gb" data-act="dlopen" data-tip="Open">${ic("open", 15)}</button></div>`, 300, ACC, 5000);
+      const nx = NEXT_DL.shift(); nx.p = 0; dl.items.push(nx); NEXT_DL.push({ ...it, p: 0 });
+    }
+  }
+  for (const d of drives) {
+    d.r = Math.random() < .3 ? Math.random() * 9e7 : Math.random() * 2e5;
+    d.w = Math.random() < .2 ? Math.random() * 4e7 : Math.random() * 1e5;
+  }
+  net.down = clamp(net.down + (Math.random() - .5) * 6e6, 2e6, 40e6);
+  net.up = clamp(net.up + (Math.random() - .5) * 1e6, 3e5, 6e6);
+  for (const k in st) refresh(k);
+  const c = $("#clock"); if (c) { const d = new Date(); c.innerHTML = `${span(d)}<br>${d.getMonth() + 1}/${d.getDate()}/${d.getFullYear()}`; }
+}
+
+/* the screen: the window's own size; on a phone, a 1280 by 760 one shrunk to fit */
+const wrap = $("#wrap");
+function fit() {
+  const small = innerWidth < 820 || innerHeight < 480;
+  document.body.classList.toggle("small", small);
+  if (small) {
+    SW = 1280; SH = 760; scale = innerWidth / SW;
+    scr.style.width = SW + "px"; scr.style.height = SH + "px"; scr.style.transform = `scale(${scale})`;
+    wrap.style.height = SH * scale + "px";
+  } else {
+    SW = innerWidth; SH = innerHeight; scale = 1;
+    scr.style.width = SW + "px"; scr.style.height = SH + "px"; scr.style.transform = "none";
+    wrap.style.height = SH + "px";
+  }
+  layout();
+}
+addEventListener("resize", fit);
+
+/* start: the widgets come out of their edges, one after another */
+for (const e in edges) for (const id of edges[e]) make(id, e);
+taskbar(); tray();
+fit();
+// (the fonts come late, or not at all: the widgets come out anyway, and are measured again when they do)
+setTimeout(boot, 350);
+if (document.fonts) document.fonts.ready.then(() => { for (const k in st) renderPeek(st[k], true); layout(); });
+openApp("notepad");
+openApp("music");
+{ const w = openWins.notepad.el; w.style.left = Math.max(110, SW * .1) + "px"; w.style.top = Math.max(60, SH * .12) + "px"; }
+{ const w = openWins.music.el; w.style.left = clamp(SW * .56, 560, SW - 480) + "px"; w.style.top = Math.max(80, SH * .2) + "px"; }
+focusWin("notepad");
+setInterval(tick, 1000);
+setTimeout(claudeAsk, 14000);
 </script>
 </body>
 </html>
