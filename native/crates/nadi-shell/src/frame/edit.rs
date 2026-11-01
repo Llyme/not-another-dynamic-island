@@ -113,12 +113,18 @@ impl Frame {
                 }
             }
         }
-        // (NADI's own: the dock and quick settings while the dock is on, the tray while NADI holds it)
+        // (NADI's own, every one of them (the tray too: placing it is what makes NADI hold the tray))
         let own = [
             (crate::builtin::APPS, "Apps", true),
             (crate::builtin::DOCK, "Dock", true),
-            (crate::builtin::QUICK, "Quick Settings", true),
-            (crate::builtin::TRAY, "Tray", self.tray_held()),
+            (crate::builtin::QUICK, "Volume Mixer", true),
+            (crate::builtin::TRAY, "Tray", true),
+            (crate::sysw::PRIVACY, "Mic and Camera", true),
+            (crate::sysw::DRIVES, "Drives", true),
+            (crate::sysw::LANG, "Keyboard Language", true),
+            (crate::sysw::DESKS, "Desktops", true),
+            (crate::net::NET, "Network", true),
+            (crate::sysw::DEVICES, "Bluetooth", true),
         ];
         for (id, label, there) in own {
             let k = key(crate::builtin::PLUGIN, id);

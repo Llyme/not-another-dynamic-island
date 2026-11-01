@@ -17,8 +17,13 @@ pub enum Press {
     Toggle(String),
     /// a bar to seek on: the plugin is told where (`fraction`)
     Seek(String),
-    /// a field to type in: the plugin is told what was typed (`text`); live, at every change. Its hint, and what it holds.
-    Field(String, bool, String, String),
+    /// a field to type in: the plugin is told what was typed (`text`); live, at every change. Its hint, what it holds, and whether
+    /// it is secret (a password: dots shown, never what is typed)
+    Field(String, bool, String, String, bool),
+    /// a picture to look at closely (its name): the wheel zooms it, dragging moves it, a double-click fits it again
+    View(String),
+    /// a card that can be carried (held a moment, then dragged): pressed quickly, its action; its id
+    Card(String, String),
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -77,6 +82,194 @@ thread_local! {
     static SLIDERS: std::cell::RefCell<HashMap<String, f32>> = std::cell::RefCell::new(HashMap::new());
 }
 
+thread_local! {
+    /// how loud each thing with a meter is now (0..1, by its name: "master", "mic", "app:<program>")
+    static METERS: std::cell::RefCell<HashMap<String, f32>> = std::cell::RefCell::new(HashMap::new());
+}
+
+/// How loud each thing with a meter is now.
+pub fn set_meters(m: HashMap<String, f32>) {
+    METERS.with(|x| *x.borrow_mut() = m);
+}
+
+/// How loud a thing with a meter is now (0: not known).
+pub fn meter(name: &str) -> f32 {
+    METERS.with(|x| x.borrow().get(name).copied().unwrap_or(0.0))
+}
+
+/// How a picture is looked at: how near (1: whole), the point of it in the middle (0..1 across and down), when that last changed.
+#[derive(Clone, Copy)]
+struct Look {
+    zoom: f32,
+    ox: f32,
+    oy: f32,
+    at: Option<std::time::Instant>,
+}
+
+thread_local! {
+    static LOOKS: std::cell::RefCell<HashMap<String, Look>> = std::cell::RefCell::new(HashMap::new());
+    /// each picture drawn: its box (in its panel) and its size
+    static VIEWS: std::cell::RefCell<HashMap<String, (Rect, f32, f32)>> = std::cell::RefCell::new(HashMap::new());
+}
+
+thread_local! {
+    /// how much taller the panel being drawn is than its content (made so by hand): its picture takes it
+    static FILL: std::cell::Cell<f32> = const { std::cell::Cell::new(0.0) };
+}
+
+/// How much taller the panel about to be drawn is than its content.
+pub fn set_fill(v: f32) {
+    FILL.with(|f| f.set(v));
+}
+
+const LOOK_WHOLE: Look = Look { zoom: 1.0, ox: 0.5, oy: 0.5, at: None };
+/// how near a picture may be looked at
+const ZOOM_MAX: f32 = 10.0;
+
+fn look_of(id: &str) -> Look {
+    LOOKS.with(|l| l.borrow().get(id).copied().unwrap_or(LOOK_WHOLE))
+}
+
+/// A look kept inside its picture: never past its edges, in the middle where it is smaller than its box.
+fn keep_in(mut l: Look, r: Rect, iw: f32, ih: f32) -> Look {
+    l.zoom = l.zoom.clamp(1.0, ZOOM_MAX);
+    let k = (r.w / iw).min(r.h / ih) * l.zoom;
+    let (dw, dh) = (iw * k, ih * k);
+    l.ox = if dw <= r.w { 0.5 } else { let m = r.w / 2.0 / dw; l.ox.clamp(m, 1.0 - m) };
+    l.oy = if dh <= r.h { 0.5 } else { let m = r.h / 2.0 / dh; l.oy.clamp(m, 1.0 - m) };
+    l
+}
+
+fn set_look(id: &str, f: impl FnOnce(Look, Rect, f32, f32) -> Look) -> bool {
+    let Some((r, iw, ih)) = VIEWS.with(|v| v.borrow().get(id).copied()) else { return false };
+    let l = keep_in(f(look_of(id), r, iw, ih), r, iw, ih);
+    LOOKS.with(|x| x.borrow_mut().insert(id.to_string(), Look { at: Some(std::time::Instant::now()), ..l }));
+    true
+}
+
+/// The wheel over a picture (`lx`, `ly` in its panel): nearer or further, the point under the mouse staying under it.
+pub fn view_wheel(id: &str, lx: f32, ly: f32, up: bool) -> bool {
+    if id == DESKMAP {
+        desk_zoom(lx, ly, up);
+        return true;
+    }
+    set_look(id, |l, r, iw, ih| {
+        let k = (r.w / iw).min(r.h / ih);
+        let (mx, my) = (lx - (r.x + r.w / 2.0), ly - (r.y + r.h / 2.0));
+        let (ux, uy) = (l.ox + mx / (iw * k * l.zoom), l.oy + my / (ih * k * l.zoom));
+        let zoom = (l.zoom * if up { 1.25 } else { 0.8 }).clamp(1.0, ZOOM_MAX);
+        Look { zoom, ox: ux - mx / (iw * k * zoom), oy: uy - my / (ih * k * zoom), ..l }
+    })
+}
+
+/// A picture dragged by (`dx`, `dy`): it moves with the mouse.
+pub fn view_pan(id: &str, dx: f32, dy: f32) -> bool {
+    if id == DESKMAP {
+        desk_pan(dx, dy);
+        return true;
+    }
+    set_look(id, |l, r, iw, ih| {
+        let k = (r.w / iw).min(r.h / ih) * l.zoom;
+        Look { ox: l.ox - dx / (iw * k), oy: l.oy - dy / (ih * k), ..l }
+    })
+}
+
+/// A picture fitted again, whole.
+pub fn view_reset(id: &str) -> bool {
+    set_look(id, |_, _, _, _| LOOK_WHOLE)
+}
+
+/// the desktops' map, as a picture to move about on
+pub const DESKMAP: &str = "\u{0}deskmap";
+/// a desktop's card on the map at its own size: its width; its place, a little more each way
+const DESK_CW: f32 = 150.0;
+const DESK_GAP: f32 = 16.0;
+
+/// How the map is looked at: how near (its own size: 1), the point of the map (logical, its own space) in the middle of the panel,
+/// and when it was last drawn (a while since: it starts on the desktop shown again).
+#[derive(Clone, Copy)]
+struct DeskView {
+    scale: f32,
+    ox: f32,
+    oy: f32,
+    drawn: Option<std::time::Instant>,
+}
+
+/// Where the map was last drawn: its box in its panel, a place's size (its own space), its first column and row, and how it was
+/// looked at.
+#[derive(Clone, Copy)]
+pub struct DeskGeom {
+    pub rect: Rect,
+    pub cell: (f32, f32),
+    pub min: (i32, i32),
+    pub view: (f32, f32, f32),
+}
+
+thread_local! {
+    static DESK_VIEW: std::cell::Cell<DeskView> = const { std::cell::Cell::new(DeskView { scale: 1.0, ox: 0.0, oy: 0.0, drawn: None }) };
+    static DESK_GEOM: std::cell::Cell<Option<DeskGeom>> = const { std::cell::Cell::new(None) };
+    /// a card being carried: its id, where the mouse is (in its panel), and where on the card it was held
+    static DESK_CARRY: std::cell::RefCell<Option<(String, f32, f32, f32, f32)>> = const { std::cell::RefCell::new(None) };
+    /// the map asked to go to a place (its column and row), springing there
+    static DESK_GO: std::cell::Cell<Option<(i32, i32)>> = const { std::cell::Cell::new(None) };
+    /// where the map glides to (its own space), each card where it is now (gliding to its place) and how far it has grown in, and
+    /// the ring round the desktop shown, sliding
+    static DESK_TO: std::cell::Cell<Option<(f32, f32)>> = const { std::cell::Cell::new(None) };
+    static DESK_ANIM: std::cell::RefCell<HashMap<String, (f32, f32, f32)>> = std::cell::RefCell::new(HashMap::new());
+    static DESK_RING: std::cell::Cell<Option<Rect>> = const { std::cell::Cell::new(None) };
+}
+
+fn desk_pan(dx: f32, dy: f32) {
+    DESK_VIEW.with(|v| {
+        let mut d = v.get();
+        d.ox -= dx / d.scale;
+        d.oy -= dy / d.scale;
+        v.set(d);
+    });
+}
+
+fn desk_zoom(lx: f32, ly: f32, up: bool) {
+    let Some(g) = DESK_GEOM.with(|x| x.get()) else { return };
+    DESK_VIEW.with(|v| {
+        let mut d = v.get();
+        let (mx, my) = (lx - (g.rect.x + g.rect.w / 2.0), ly - (g.rect.y + g.rect.h / 2.0));
+        let (ux, uy) = (d.ox + mx / d.scale, d.oy + my / d.scale);
+        d.scale = (d.scale * if up { 1.15 } else { 1.0 / 1.15 }).clamp(0.35, 1.6);
+        d.ox = ux - mx / d.scale;
+        d.oy = uy - my / d.scale;
+        v.set(d);
+    });
+}
+
+/// The map moved by so much (logical px): a card carried to its edge.
+pub fn desk_scroll(dx: f32, dy: f32) {
+    desk_pan(-dx, -dy);
+}
+
+/// Where the map was last drawn.
+pub fn desk_geom() -> Option<DeskGeom> {
+    DESK_GEOM.with(|x| x.get())
+}
+
+/// A card carried (its id, the mouse in its panel, where on it it was held), or none.
+pub fn set_desk_carry(c: Option<(String, f32, f32, f32, f32)>) {
+    DESK_CARRY.with(|x| *x.borrow_mut() = c);
+}
+
+/// The map, to a place (springing there).
+pub fn desk_go(c: i32, r: i32) {
+    DESK_GO.with(|x| x.set(Some((c, r))));
+}
+
+/// The place (column, row) under a point of the panel, on the map as last drawn.
+pub fn desk_cell_at(lx: f32, ly: f32) -> Option<(i32, i32)> {
+    let g = desk_geom()?;
+    let (scale, ox, oy) = g.view;
+    let x = ox + (lx - (g.rect.x + g.rect.w / 2.0)) / scale;
+    let y = oy + (ly - (g.rect.y + g.rect.h / 2.0)) / scale;
+    Some(((x / g.cell.0).floor() as i32 + g.min.0, (y / g.cell.1).floor() as i32 + g.min.1))
+}
+
 /// The bar being dragged, and where its knob is (none: none is).
 pub fn set_sliding(at: Option<(String, f32)>) {
     SLIDING.with(|s| *s.borrow_mut() = at);
@@ -120,9 +313,13 @@ const CHOSEN: crate::paint::Color = crate::paint::Color(0.204, 0.204, 0.231, 1.0
 const GROUND: crate::paint::Color = crate::paint::Color(0.149, 0.149, 0.173, 1.0);
 const SOFT_ICON: crate::paint::Color = crate::paint::Color(0.79, 0.79, 0.82, 1.0);
 const RED_DOT: crate::paint::Color = crate::paint::Color(0.91, 0.416, 0.416, 1.0);
+/// a card's ground, inside a panel
+const CARD: crate::paint::Color = crate::paint::Color(0.078, 0.082, 0.102, 1.0);
+/// the faintest words: an axis's marks
+const SOFT_DIM: crate::paint::Color = crate::paint::Color(0.43, 0.43, 0.47, 1.0);
 
 /// now, in ms since 1970 (what plugins say times in)
-fn now_ms() -> f64 {
+pub fn now_ms() -> f64 {
     nadi_core::paths::now_ms() as f64
 }
 
@@ -146,6 +343,380 @@ impl<'a, 'b> Ctx<'a, 'b> {
 
     fn hit(&mut self, rect: Rect, press: Press) {
         self.hit_tip(rect, press, Value::Null);
+    }
+
+    /// Pictures to choose from: a row of small ones, the one shown ringed in the theme's colour (each pressed: its action; its
+    /// right-click: its `menu`); at its end, a button (`add`). How tall.
+    fn album(&mut self, b: &Value, x: f32, y: f32, w: f32) -> f32 {
+        // (in from its edges by its ring, so the ring is never cut off)
+        let (x, y, w) = (x + 2.0, y + 2.0, w - 4.0);
+        let (tw, th, gap) = (44.0, 30.0, 6.0);
+        let mut cx = x;
+        let mut cy = y;
+        for it in b["items"].as_array().cloned().unwrap_or_default() {
+            if cx + tw > x + w && cx > x {
+                cx = x;
+                cy += th + gap;
+            }
+            let r = Rect::new(cx, cy, tw, th);
+            if self.draw {
+                if it["on"] == true {
+                    self.p.round(Rect::new(r.x - 2.0, r.y - 2.0, r.w + 4.0, r.h + 4.0), 9.0, accent());
+                    self.p.round(r, 7.0, FACE);
+                }
+                let inner = if it["on"] == true { Rect::new(r.x + 1.0, r.y + 1.0, r.w - 2.0, r.h - 2.0) } else { r };
+                if !self.p.picture(s(&it, "image"), inner, 6.0) {
+                    self.p.round(inner, 6.0, FAINT);
+                }
+                if hovered(r) && it["on"] != true {
+                    self.p.round(r, 7.0, crate::paint::Color(1.0, 1.0, 1.0, 0.12));
+                }
+            }
+            self.hit_tip(r, Press::Action(s(&it, "action").to_string(), it["args"].clone()), it["tip"].clone());
+            self.last_hit(false, it["menu"].clone());
+            cx += tw + gap;
+        }
+        let add = &b["add"];
+        if add.is_object() {
+            if cx + 30.0 > x + w && cx > x {
+                cx = x;
+                cy += th + gap;
+            }
+            let r = Rect::new(cx, cy, 30.0, 30.0);
+            if self.draw {
+                if hovered(r) {
+                    self.p.circle(r.x + 15.0, r.y + 15.0, 15.0, LIT);
+                }
+                self.icon(if s(add, "icon").is_empty() { "plus" } else { s(add, "icon") }, r.x + 7.0, r.y + 7.0, 16.0, DIM);
+            }
+            self.hit_tip(r, Press::Action(s(add, "action").to_string(), add["args"].clone()), add["tip"].clone());
+        }
+        cy + th - y + 4.0
+    }
+
+    /// The desktops on their map: each a card at its place (its column and row), no words on it (its name in its tip), the one shown
+    /// ringed in the theme's colour, one where something waits ringed in the second colour; moved about by dragging where no card
+    /// is, nearer or further by the wheel. A card held a moment is carried (dropped: it goes there, or swaps with the one there).
+    /// Out of view: the desktop shown is a glow on the edge it lies past (pressed: the map goes back to it), one where something
+    /// waits a pin there (pressed: the map goes to it). Under the mouse, a free place beside a card offers a new desktop there.
+    /// Everything moves: cards glide to their places, the ring slides to the desktop shown, a new card grows in, the map glides
+    /// where it is sent. Its dots are the monitors' pixels: one for every so many, so the map feels as fine as the screen is.
+    fn deskmap(&mut self, b: &Value, x: f32, y: f32, w: f32) -> f32 {
+        let items = b["items"].as_array().cloned().unwrap_or_default();
+        let screens = b["screens"].as_array().cloned().unwrap_or_default();
+        let aspect = (b["aspect"].as_f64().unwrap_or(16.0 / 9.0) as f32).clamp(1.0, 4.0);
+        let res_w = b["res"][0].as_f64().unwrap_or(1920.0) as f32;
+        let mh = (DESK_CW / aspect).clamp(48.0, 110.0);
+        let cell = (DESK_CW + DESK_GAP, mh + DESK_GAP);
+        let pos = |it: &Value| (it["pos"][0].as_i64().unwrap_or(0) as i32, it["pos"][1].as_i64().unwrap_or(0) as i32);
+        let (mut c0, mut r0, mut c1, mut r1) = (i32::MAX, i32::MAX, i32::MIN, i32::MIN);
+        for it in &items {
+            let (c, r) = pos(it);
+            c0 = c0.min(c);
+            r0 = r0.min(r);
+            c1 = c1.max(c);
+            r1 = r1.max(r);
+        }
+        if items.is_empty() {
+            (c0, r0, c1, r1) = (0, 0, 0, 0);
+        }
+        let (cols, rows) = ((c1 - c0 + 1) as f32, (r1 - r0 + 1) as f32);
+        let h = (rows * cell.1 + 24.0).clamp(220.0, 380.0);
+        let rect = Rect::new(x, y, w, h);
+        let place = |c: i32, r: i32| Rect::new((c - c0) as f32 * cell.0 + DESK_GAP / 2.0, (r - r0) as f32 * cell.1 + DESK_GAP / 2.0, DESK_CW, mh);
+        let at = b["at"].as_u64().unwrap_or(0) as usize;
+        let cur = items.get(at).map(&pos).unwrap_or((c0, r0));
+        let centre = |c: i32, r: i32| {
+            let pr = place(c, r);
+            (pr.x + pr.w / 2.0, pr.y + pr.h / 2.0)
+        };
+        // (time since last drawn: what moves, moves by it)
+        let now = std::time::Instant::now();
+        let mut view = DESK_VIEW.with(|v| v.get());
+        let fresh = view.drawn.is_none_or(|t| t.elapsed() > std::time::Duration::from_millis(1500));
+        let dt = view.drawn.map_or(0.0, |t| t.elapsed().as_secs_f32().min(0.05));
+        let k = 1.0 - (-dt * 12.0).exp();
+        let fit = ((w - 24.0) / (cols * cell.0)).min((h - 24.0) / (rows * cell.1)).min(1.0).max(0.35);
+        if fresh {
+            let (ox, oy) = if fit >= 0.999 { ((cols * cell.0) / 2.0, (rows * cell.1) / 2.0) } else { centre(cur.0, cur.1) };
+            view = DeskView { scale: fit.max(0.6).min(1.0), ox, oy, drawn: None };
+            DESK_TO.with(|t| t.set(None));
+            DESK_ANIM.with(|a| a.borrow_mut().clear());
+            DESK_RING.with(|r| r.set(None));
+        }
+        if let Some((c, r)) = DESK_GO.with(|g| g.take()) {
+            DESK_TO.with(|t| t.set(Some(centre(c, r))));
+            view.scale = view.scale.max(fit);
+        }
+        // (sent somewhere: it glides there)
+        if let Some((tx, ty)) = DESK_TO.with(|t| t.get()) {
+            if fresh {
+                view.ox = tx;
+                view.oy = ty;
+            } else {
+                view.ox += (tx - view.ox) * k;
+                view.oy += (ty - view.oy) * k;
+            }
+            if (tx - view.ox).abs() + (ty - view.oy).abs() < 0.5 {
+                DESK_TO.with(|t| t.set(None));
+            }
+        }
+        // (never further past the map's ends than a little: a map smaller than the panel sits in its middle)
+        let (cw, chh) = (cols * cell.0, rows * cell.1);
+        let m = 24.0 / view.scale;
+        let (hw, hh) = (w / 2.0 / view.scale, h / 2.0 / view.scale);
+        view.ox = if cw + 2.0 * m <= 2.0 * hw { cw / 2.0 } else { view.ox.clamp(hw - m, cw - hw + m) };
+        view.oy = if chh + 2.0 * m <= 2.0 * hh { chh / 2.0 } else { view.oy.clamp(hh - m, chh - hh + m) };
+        if self.draw {
+            view.drawn = Some(now);
+        }
+        DESK_VIEW.with(|v| v.set(view));
+        DESK_GEOM.with(|g| g.set(Some(DeskGeom { rect, cell, min: (c0, r0), view: (view.scale, view.ox, view.oy) })));
+        let to_panel = |r: Rect| Rect::new(rect.x + rect.w / 2.0 + (r.x - view.ox) * view.scale, rect.y + rect.h / 2.0 + (r.y - view.oy) * view.scale, r.w * view.scale, r.h * view.scale);
+        let carry = DESK_CARRY.with(|c| c.borrow().clone());
+        let a2 = crate::draw::accent2();
+        // (each card where it is now: gliding to its place; a new one growing in)
+        let mut glide: Vec<(Rect, f32)> = Vec::new();
+        DESK_ANIM.with(|an| {
+            let mut an = an.borrow_mut();
+            for it in &items {
+                let (c, r) = pos(it);
+                let target = place(c, r);
+                let id = s(it, "id").to_string();
+                let e = an.entry(id).or_insert((target.x, target.y, if fresh { 1.0 } else { 0.0 }));
+                if self.draw {
+                    e.0 += (target.x - e.0) * k;
+                    e.1 += (target.y - e.1) * k;
+                    e.2 = (e.2 + dt * 5.0).min(1.0);
+                }
+                glide.push((Rect::new(e.0, e.1, target.w, target.h), e.2));
+            }
+        });
+        if self.draw {
+            self.p.round(rect, 14.0, crate::paint::Color(0.043, 0.043, 0.055, 1.0));
+            unsafe {
+                self.p.dc.PushAxisAlignedClip(&self.p.px(rect).d2d(), windows::Win32::Graphics::Direct2D::D2D1_ANTIALIAS_MODE_PER_PRIMITIVE);
+            }
+            // (the dots: one for every 320 of the monitors' pixels, as fine as the screens are; plainer while carrying)
+            let step = (DESK_CW * 320.0 / res_w.max(320.0) * view.scale).max(6.0);
+            let dot = if carry.is_some() { crate::paint::Color(0.2, 0.2, 0.235, 1.0) } else { crate::paint::Color(0.12, 0.12, 0.14, 1.0) };
+            let origin = to_panel(Rect::new(DESK_GAP / 2.0, DESK_GAP / 2.0, 0.0, 0.0));
+            let sx = origin.x - ((origin.x - rect.x) / step).floor() * step;
+            let sy = origin.y - ((origin.y - rect.y) / step).floor() * step;
+            let mut yy = sy;
+            while yy < rect.bottom() {
+                let mut xx = sx;
+                while xx < rect.right() {
+                    self.p.round(Rect::new(xx - 0.75, yy - 0.75, 1.5, 1.5), 0.75, dot);
+                    xx += step;
+                }
+                yy += step;
+            }
+        }
+        let mut hits_cards: Vec<Hit> = Vec::new();
+        let mut taken: Vec<(i32, i32)> = Vec::new();
+        // (the ring round the desktop shown: sliding to it; drawn over the cards)
+        let mut ring_at: Option<Rect> = None;
+        if let Some(cur_i) = items.get(at).map(|_| at) {
+            let target = glide.get(cur_i).map(|g| g.0).unwrap_or(place(cur.0, cur.1));
+            let ring = DESK_RING.with(|r| {
+                let mut v = r.get().unwrap_or(target);
+                if self.draw {
+                    v = Rect::new(v.x + (target.x - v.x) * k, v.y + (target.y - v.y) * k, target.w, target.h);
+                    r.set(Some(v));
+                }
+                v
+            });
+            let carried_cur = carry.as_ref().is_some_and(|(cid, ..)| items.get(cur_i).is_some_and(|it| s(it, "id") == cid));
+            if !carried_cur {
+                ring_at = Some(to_panel(ring));
+            }
+        }
+        for (i, it) in items.iter().enumerate() {
+            let (c, r) = pos(it);
+            taken.push((c, r));
+            let id = s(it, "id").to_string();
+            let carried = carry.as_ref().is_some_and(|(cid, ..)| *cid == id);
+            if carried {
+                continue;
+            }
+            let (g, grow) = glide.get(i).copied().unwrap_or((place(c, r), 1.0));
+            let mr = to_panel(g);
+            // (a new one: growing from a little smaller)
+            let gk = 0.9 + 0.1 * grow;
+            let mr = Rect::new(mr.x + mr.w * (1.0 - gk) / 2.0, mr.y + mr.h * (1.0 - gk) / 2.0, mr.w * gk, mr.h * gk);
+            let visible = mr.right() > rect.x && mr.x < rect.right() && mr.bottom() > rect.y && mr.y < rect.bottom();
+            if !visible {
+                continue;
+            }
+            let on = it["on"] == true;
+            let waits = it["waits"] == true;
+            let over = hovered(mr);
+            if self.draw {
+                crate::draw::faded(self.p.dc, grow.min(0.999), || {
+                    if waits && !on {
+                        let pulse = 0.55 + 0.45 * (self.p.t * 3.0).sin().abs();
+                        self.p.round(Rect::new(mr.x - 6.0, mr.y - 6.0, mr.w + 12.0, mr.h + 12.0), 16.0, a2.alpha(0.12 * pulse));
+                        self.p.round(Rect::new(mr.x - 2.0, mr.y - 2.0, mr.w + 4.0, mr.h + 4.0), 12.0, a2);
+                    }
+                    crate::peek::draw_map(self.p, it, &screens, mr, 10.0 * view.scale.min(1.0), on, true);
+                    // (the desktop shown: its own border, bright)
+                    if on {
+                        self.p.outline(Rect::new(mr.x + 1.0, mr.y + 1.0, mr.w - 2.0, mr.h - 2.0), 9.0 * view.scale.min(1.0), 2.0, accent());
+                    }
+                    if over && !on {
+                        self.p.round(mr, 10.0, crate::paint::Color(1.0, 1.0, 1.0, 0.06));
+                    }
+                    // (what each window has: a count, its sound)
+                    for wv in it["wins"].as_array().into_iter().flatten() {
+                        let f = |k: usize| wv["r"][k].as_f64().unwrap_or(0.0) as f32;
+                        let wr = Rect::new(mr.x + f(0) * mr.w, mr.y + f(1) * mr.h, f(2) * mr.w, f(3) * mr.h);
+                        if wv["wait"] == true && !on {
+                            self.p.round(Rect::new(wr.x - 1.0, wr.y - 1.0, wr.w + 2.0, wr.h + 2.0), 4.0, a2.alpha(0.85));
+                            self.p.round(wr, 3.0, crate::paint::Color(0.165, 0.165, 0.196, 1.0));
+                        }
+                        if let Some(n) = wv["count"].as_u64().filter(|_| !on) {
+                            let t = n.to_string();
+                            let tw = self.p.measure(&t, 9.0, Weight::Semibold, 30.0).max(6.0);
+                            let br = Rect::new(wr.right() - tw / 2.0 - 7.0, wr.y - 5.0, tw + 8.0, 13.0);
+                            self.p.round(br, 6.5, a2);
+                            self.p.text(&t, br.x + 4.0, br.y + 6.5, 9.0, Weight::Semibold, 30.0, crate::paint::Color(0.16, 0.11, 0.02, 1.0));
+                        }
+                        if wv["sound"] == true && wr.w > 14.0 {
+                            let (parts, lift) = loud_bars(0.4, self.p.t);
+                            self.p.bars(wr.x + 4.0, wr.bottom() - 6.0, 7.0, parts, lift, crate::paint::Color(0.35, 0.78, 0.9, 1.0));
+                        }
+                    }
+                });
+            }
+            // (its x, under the mouse: closed)
+            let close = s(it, "close");
+            if over && !close.is_empty() && carry.is_none() {
+                let xr = Rect::new(mr.right() - 24.0, mr.y + 4.0, 20.0, 20.0);
+                if self.draw {
+                    self.p.circle(xr.x + 10.0, xr.y + 10.0, 10.0, crate::paint::Color(0.0, 0.0, 0.0, 0.66));
+                }
+                self.icon("x", xr.x + 5.0, xr.y + 5.0, 10.0, TEXT);
+                hits_cards.push(Hit { rect: xr, press: Press::Card(close.to_string(), String::new()), tip: Value::String("Close Desktop".into()), hold: false, menu: Value::Null });
+            }
+            for wv in it["wins"].as_array().cloned().unwrap_or_default().iter().rev() {
+                let f = |k: usize| wv["r"][k].as_f64().unwrap_or(0.0) as f32;
+                let wr = Rect::new(mr.x + f(0) * mr.w, mr.y + f(1) * mr.h, f(2) * mr.w, f(3) * mr.h);
+                if wr.w > 8.0 && wr.h > 8.0 {
+                    hits_cards.push(Hit { rect: wr, press: Press::Card(s(wv, "action").to_string(), id.clone()), tip: Value::Null, hold: false, menu: Value::Null });
+                }
+            }
+            // (its name: in its tip)
+            hits_cards.push(Hit { rect: mr, press: Press::Card(s(it, "action").to_string(), id.clone()), tip: it["name"].clone(), hold: false, menu: Value::Null });
+        }
+        let _ = ring_at;
+        // (a free place beside a card, under the mouse: a new desktop there)
+        if carry.is_none() {
+            let hov = HOVER.with(|h| h.get());
+            if let Some((hc, hr)) = hov.and_then(|(hx, hy)| desk_cell_at(hx, hy)) {
+                let free = !taken.contains(&(hc, hr));
+                let beside = taken.iter().any(|(c, r)| (c - hc).abs() + (r - hr).abs() == 1);
+                if free && beside {
+                    let gr = to_panel(place(hc, hr));
+                    if self.draw && gr.right() > rect.x && gr.x < rect.right() {
+                        self.p.dashed(gr, 10.0, 1.5, crate::paint::Color(0.204, 0.204, 0.227, 1.0));
+                        self.icon("plus", gr.x + gr.w / 2.0 - 9.0, gr.y + gr.h / 2.0 - 9.0, 18.0, DIM);
+                    }
+                    hits_cards.insert(0, Hit { rect: gr, press: Press::Card(format!("desknew:{hc}:{hr}"), String::new()), tip: Value::String("New Desktop".into()), hold: false, menu: Value::Null });
+                }
+            }
+        }
+        // (the card carried: where it would land, dashed; it, under the mouse, lifted)
+        if let Some((cid, mx, my, gx, gy)) = carry.as_ref() {
+            if let Some(it) = items.iter().find(|it| s(it, "id") == cid) {
+                if let Some((lc, lr)) = desk_cell_at(*mx, *my) {
+                    let lr_ = to_panel(place(lc, lr));
+                    if self.draw {
+                        self.p.round(lr_, 10.0, accent().alpha(0.08));
+                        self.p.dashed(lr_, 10.0, 1.5, accent());
+                    }
+                }
+                let (cw, ch) = (DESK_CW * view.scale * 1.04, mh * view.scale * 1.04);
+                let cr = Rect::new(mx - gx * 1.04, my - gy * 1.04, cw, ch);
+                if self.draw {
+                    self.p.round(Rect::new(cr.x + 3.0, cr.y + 8.0, cr.w, cr.h), 12.0, crate::paint::Color(0.0, 0.0, 0.0, 0.45));
+                    crate::peek::draw_map(self.p, it, &screens, cr, 10.0, it["on"] == true, true);
+                    if it["on"] == true {
+                        self.p.outline(Rect::new(cr.x + 1.0, cr.y + 1.0, cr.w - 2.0, cr.h - 2.0), 9.0, 2.0, accent());
+                    }
+                }
+            }
+        }
+        // (out of view: where the desktop shown is, a glow on the edge it lies past; where something waits, a pin)
+        let inner = Rect::new(rect.x + 4.0, rect.y + 4.0, rect.w - 8.0, rect.h - 8.0);
+        let edge_point = |tx: f32, ty: f32| -> (f32, f32, f32) {
+            let (cx, cy) = (rect.x + rect.w / 2.0, rect.y + rect.h / 2.0);
+            let (dx, dy) = (tx - cx, ty - cy);
+            let k = ((inner.w / 2.0) / dx.abs().max(0.001)).min((inner.h / 2.0) / dy.abs().max(0.001));
+            (cx + dx * k, cy + dy * k, dy.atan2(dx))
+        };
+        if let Some(it) = items.get(at).filter(|_| carry.is_none()) {
+            let (c, r) = pos(it);
+            let mr = to_panel(place(c, r));
+            let out = mr.right() < rect.x || mr.x > rect.right() || mr.bottom() < rect.y || mr.y > rect.bottom();
+            if out {
+                let (ex, ey, _) = edge_point(mr.x + mr.w / 2.0, mr.y + mr.h / 2.0);
+                let far = ((mr.x + mr.w / 2.0 - ex).hypot(mr.y + mr.h / 2.0 - ey) / 400.0).clamp(0.0, 1.0);
+                let len = 70.0 + 90.0 * far;
+                let near_x = (ex - rect.x).min(rect.right() - ex) < 30.0;
+                let near_y = (ey - rect.y).min(rect.bottom() - ey) < 30.0;
+                let band = Rect::new(ex - len / 2.0, ey - len / 2.0, len, len);
+                let lit = hovered(band);
+                if self.draw {
+                    // (a soft light on the edge it lies past, centred on its way, and a thin brighter line on the edge itself; off a
+                    // corner, round the corner; under the mouse, brighter)
+                    let c = accent();
+                    let kk = if lit { 1.5 } else { 1.0 };
+                    let (lx, ly) = (if near_x { if ex - rect.x < rect.right() - ex { rect.x } else { rect.right() } } else { ex }, if near_y { if ey - rect.y < rect.bottom() - ey { rect.y } else { rect.bottom() } } else { ey });
+                    let (rx, ry) = if near_x && near_y { (len * 0.55, len * 0.55) } else if near_x { (28.0, len / 2.0) } else { (len / 2.0, 28.0) };
+                    self.p.radial(lx, ly, rx, ry, c.alpha(0.32 * kk));
+                    let (tx, ty) = if near_x && near_y { (len * 0.4, len * 0.4) } else if near_x { (3.0, len * 0.32) } else { (len * 0.32, 3.0) };
+                    self.p.radial(lx, ly, tx, ty, c.alpha(0.9 * kk.min(1.1)));
+                }
+                hits_cards.insert(0, Hit { rect: band, press: Press::Card(format!("deskgo:{c}:{r}"), String::new()), tip: it["name"].clone(), hold: false, menu: Value::Null });
+            }
+        }
+        for it in &items {
+            if it["waits"] != true || it["on"] == true {
+                continue;
+            }
+            let (c, r) = pos(it);
+            let mr = to_panel(place(c, r));
+            let out = mr.right() < rect.x || mr.x > rect.right() || mr.bottom() < rect.y || mr.y > rect.bottom();
+            if !out {
+                continue;
+            }
+            let (ex, ey, ang) = edge_point(mr.x + mr.w / 2.0, mr.y + mr.h / 2.0);
+            let (px, py) = (ex - ang.cos() * 22.0, ey - ang.sin() * 22.0);
+            let (px, py) = (px.clamp(rect.x + 18.0, rect.right() - 18.0), py.clamp(rect.y + 18.0, rect.bottom() - 18.0));
+            if self.draw {
+                let rr = 13.0;
+                let phi = (rr / 20.0f32).acos();
+                let tip = (px + ang.cos() * 20.0, py + ang.sin() * 20.0);
+                let p1 = (px + (ang + phi).cos() * rr, py + (ang + phi).sin() * rr);
+                let p2 = (px + (ang - phi).cos() * rr, py + (ang - phi).sin() * rr);
+                let d = format!("M {} {} L {} {} A {rr} {rr} 0 1 1 {} {} Z", tip.0, tip.1, p1.0, p1.1, p2.0, p2.1);
+                self.p.path(&d, crate::paint::Color(0.106, 0.106, 0.125, 1.0), Some((a2, 1.6)));
+                let img = s(it, "pin");
+                if img.is_empty() || !self.p.picture(img, Rect::new(px - 7.0, py - 7.0, 14.0, 14.0), 3.5) {
+                    self.p.circle(px, py, 3.0, a2);
+                }
+            }
+            hits_cards.insert(0, Hit { rect: Rect::new(px - 14.0, py - 14.0, 28.0, 28.0), press: Press::Card(format!("deskgo:{c}:{r}"), String::new()), tip: it["name"].clone(), hold: false, menu: Value::Null });
+        }
+        if self.draw {
+            unsafe {
+                self.p.dc.PopAxisAlignedClip();
+            }
+            self.hits.extend(hits_cards);
+        }
+        self.hit(rect, Press::View(DESKMAP.to_string()));
+        h
     }
 
     /// Something to press that says what it is, in a tip, as the mouse rests on it.
@@ -912,15 +1483,32 @@ impl<'a, 'b> Ctx<'a, 'b> {
                     // (what is on its right: when, how much)
                     let right = s(r, "right");
                     let lit = r["lit"] == true;
-                    let rw = if right.is_empty() { 0.0 } else { self.p.measure(right, 10.5, Weight::Regular, 80.0) + 8.0 };
+                    let mut rw = if right.is_empty() { 0.0 } else { self.p.measure(right, 10.5, Weight::Regular, 80.0) + 8.0 };
                     if !right.is_empty() {
                         self.text_end(right, x + w, y + h + 9.0, 10.5, Weight::Regular, 80.0, if lit { GREEN } else { DIM });
                     }
-                    let ix = if s(r, "icon").is_empty() { 0.0 } else { 22.0 };
-                    if ix > 0.0 {
+                    // (small marks at its right: saved, secured)
+                    for m in r["marks"].as_array().cloned().unwrap_or_default().iter().rev() {
+                        self.icon(m.as_str().unwrap_or(""), x + w - rw - 13.0, y + h + 3.0, 12.0, DIM);
+                        rw += 18.0;
+                    }
+                    // (under the mouse: a ground of its own)
+                    if !action.is_empty() && self.draw && hovered(Rect::new(x - 4.0, y + h, w + 8.0, rh)) {
+                        self.p.round(Rect::new(x - 6.0, y + h - 3.0, w + 12.0, rh + 6.0), 9.0, LIT);
+                    }
+                    let ix = if s(r, "icon").is_empty() && !r["signal"].is_number() { 0.0 } else { 22.0 };
+                    if let Some(level) = r["signal"].as_u64() {
+                        if self.draw {
+                            for i in 0..4u64 {
+                                let bh = 4.0 + 3.0 * i as f32;
+                                self.p.round(Rect::new(x + i as f32 * 4.0, y + h + 16.0 - bh, 2.5, bh), 1.25, if i < level { TEXT } else { FAINT });
+                            }
+                        }
+                    } else if ix > 0.0 {
                         self.icon(s(r, "icon"), x, y + h + 2.0, 14.0, if lit { GREEN } else { DIM });
                     }
-                    self.text(s(r, "title"), x + ix, y + h + 9.0, 12.0, Weight::Semibold, w - rw - ix, TEXT);
+                    let tc = if r["dim"] == true { DIM } else { TEXT };
+                    self.text(s(r, "title"), x + ix, y + h + 9.0, 12.0, Weight::Semibold, w - rw - ix, tc);
                     if has_sub {
                         self.text(s(r, "sub"), x + ix, y + h + 24.0, 10.5, Weight::Regular, w - ix, DIM);
                     }
@@ -970,6 +1558,9 @@ impl<'a, 'b> Ctx<'a, 'b> {
                 }
                 for it in b["items"].as_array().cloned().unwrap_or_default() {
                     let cy = y + h + 10.0;
+                    if !s(&it, "action").is_empty() {
+                        self.ghost(Rect::new(x - 6.0, cy - 10.0, w + 12.0, 20.0), 8.0);
+                    }
                     let state = s(&it, "state");
                     let (icon, c) = match state {
                         "done" => ("check", GREEN),
@@ -982,6 +1573,10 @@ impl<'a, 'b> Ctx<'a, 'b> {
                         self.icon(icon, x, cy - 7.0, 14.0, c);
                     }
                     self.text(s(&it, "text"), x + 22.0, cy, 11.5, Weight::Regular, w - 22.0, if state == "done" { DIM } else { TEXT });
+                    if !s(&it, "action").is_empty() {
+                        let r = Rect::new(x - 6.0, cy - 10.0, w + 12.0, 20.0);
+                        self.hit(r, Press::Action(s(&it, "action").to_string(), it["args"].clone()));
+                    }
                     h += 20.0;
                 }
                 h
@@ -1219,7 +1814,7 @@ impl<'a, 'b> Ctx<'a, 'b> {
                     }
                 }
                 if !s(b, "action").is_empty() {
-                    self.hit(r, Press::Field(s(b, "action").to_string(), b["live"] == true, hint.to_string(), s(b, "value").to_string()));
+                    self.hit(r, Press::Field(s(b, "action").to_string(), b["live"] == true, hint.to_string(), s(b, "value").to_string(), b["secret"] == true));
                 }
                 30.0
             }
@@ -1286,6 +1881,623 @@ impl<'a, 'b> Ctx<'a, 'b> {
                     }
                 }
                 18.0 + (cells.len() as f32 / 7.0).ceil() * ch
+            }
+            // (a goal: a ring of how far toward it, a pictogram in it (a paler part after it: what counts too); a big number and a line
+            // under it; small chips stacked on its right)
+            "goal" => {
+                let ringed = b["ring"] != false;
+                let z = 58.0;
+                let (cx, cy) = (x + z / 2.0, y + z / 2.0);
+                let c = color_of(&b["color"], accent());
+                if self.draw && ringed {
+                    let none = crate::paint::Color(0.0, 0.0, 0.0, 0.0);
+                    let extra = f(b, "extra");
+                    self.p.ring(cx, cy, z / 2.0 - 3.0, 5.0, f(b, "part") + extra, 0.0, if extra > 0.0 { c.alpha(0.4) } else { c }, TRACK);
+                    if extra > 0.0 {
+                        self.p.ring(cx, cy, z / 2.0 - 3.0, 5.0, f(b, "part"), 0.0, c, none);
+                    }
+                }
+                if ringed && !s(b, "icon").is_empty() {
+                    self.icon(s(b, "icon"), cx - 9.0, cy - 9.0, 18.0, c);
+                }
+                let chips = b["chips"].as_array().cloned().unwrap_or_default();
+                let n = chips.len() as f32;
+                let mut cw_max: f32 = 0.0;
+                let top = cy - (n * 24.0 + (n - 1.0).max(0.0) * 5.0) / 2.0;
+                for (i, it) in chips.iter().enumerate() {
+                    let (icon, text) = (s(it, "icon"), s(it, "text"));
+                    let tc = match s(it, "tone") {
+                        "" => DIM,
+                        t => tone_color(t),
+                    };
+                    let cw = self.p.measure(text, 11.5, Weight::Semibold, 120.0) + 18.0 + if icon.is_empty() { 0.0 } else { 17.0 };
+                    cw_max = cw_max.max(cw);
+                    let r = Rect::new(x + w - cw, top + i as f32 * 29.0, cw, 24.0);
+                    self.round(r, 12.0, FAINT);
+                    let mut tx = r.x + 9.0;
+                    if !icon.is_empty() {
+                        self.icon(icon, tx, r.y + 5.0, 14.0, tc);
+                        tx += 17.0;
+                    }
+                    self.text(text, tx, r.y + 12.0, 11.5, Weight::Semibold, 120.0, tc);
+                }
+                let lead = if ringed { z + 14.0 } else { 0.0 };
+                let tx = x + lead;
+                let room = (w - lead - cw_max - 8.0).max(20.0);
+                self.text(s(b, "text"), tx, cy - 8.0, 26.0, Weight::Semibold, room, TEXT);
+                if !s(b, "sub").is_empty() {
+                    self.text(s(b, "sub"), tx, cy + 15.0, 12.0, Weight::Regular, room, DIM);
+                }
+                z
+            }
+            // (columns, one a day: each split into its parts from the foot up, a dashed line at the goal, one ringed (`mark`), its letter
+            // under it; pressed: its action)
+            "columns" => {
+                let items = b["items"].as_array().cloned().unwrap_or_default();
+                let gh = b["height"].as_f64().unwrap_or(96.0) as f32;
+                let n = items.len().max(1) as f32;
+                // (room on every side for the ring round a column)
+                let (x, y, w) = (x + 2.0, y + 2.0, w - 4.0);
+                let gap = 7.0;
+                let cw = (w - gap * (n - 1.0)) / n;
+                let total = |it: &Value| it["parts"].as_array().map_or(0.0, |a| a.iter().map(|p| f(p, "v")).sum::<f32>());
+                let goal = f(b, "goal");
+                let top = items.iter().map(total).fold(goal, f32::max).max(1e-6) * 1.06;
+                for (i, it) in items.iter().enumerate() {
+                    let bx = x + i as f32 * (cw + gap);
+                    let t = total(it);
+                    let bh = (gh * t / top).max(4.0);
+                    let bar = Rect::new(bx, y + gh - bh, cw, bh);
+                    self.round(bar, 5.0f32.min(cw / 2.0), TRACK);
+                    let mut yy = y + gh;
+                    for p in it["parts"].as_array().cloned().unwrap_or_default() {
+                        let sh = gh * f(&p, "v") / top;
+                        if sh < 1.0 {
+                            continue;
+                        }
+                        let r = Rect::new(bx, yy - sh, cw, (sh - 2.0).max(1.0));
+                        self.round(r, 3.0f32.min(r.h / 2.0), color_of(&p["color"], accent()));
+                        yy -= sh;
+                    }
+                    let mark = match s(it, "mark") {
+                        "theme" => Some(accent()),
+                        "second" => Some(accent2()),
+                        _ => None,
+                    };
+                    if let (Some(c), true) = (mark, self.draw) {
+                        self.p.outline(Rect::new(bar.x - 2.0, bar.y - 2.0, bar.w + 4.0, bar.h + 4.0), 7.0, 1.5, c);
+                    }
+                    let l = s(it, "label");
+                    let lw = self.p.measure(l, 10.0, Weight::Regular, cw + gap);
+                    self.text(l, bx + cw / 2.0 - lw / 2.0, y + gh + 11.0, 10.0, if mark.is_some() { Weight::Semibold } else { Weight::Regular }, cw + gap, if s(it, "mark") == "theme" { TEXT } else { DIM });
+                    if !s(it, "action").is_empty() {
+                        let tip = if s(it, "tip").is_empty() { Value::Null } else { it["tip"].clone() };
+                        self.hit_tip(Rect::new(bx - gap / 2.0, y, cw + gap, gh + 18.0), Press::Action(s(it, "action").to_string(), it["args"].clone()), tip);
+                    }
+                }
+                if goal > 0.0 && self.draw {
+                    let gy = y + gh - gh * goal / top;
+                    self.p.dashed(Rect::new(x, gy, w, 0.0), 0.0, 1.5, TEXT.alpha(0.28));
+                }
+                gh + 20.0
+            }
+            // (one bar split into its parts, and under it a key: a dot of each part's colour and its words)
+            "split" => {
+                let parts: Vec<Value> = b["parts"].as_array().cloned().unwrap_or_default().into_iter().filter(|p| f(p, "v") > 0.0).collect();
+                let bh = b["height"].as_f64().unwrap_or(10.0) as f32;
+                let sum: f32 = parts.iter().map(|p| f(p, "v")).sum::<f32>().max(1e-6);
+                let avail = w - 2.0 * (parts.len().max(1) - 1) as f32;
+                let mut px = x;
+                if parts.is_empty() {
+                    self.round(Rect::new(x, y, w, bh), bh / 2.0, TRACK);
+                }
+                for p in &parts {
+                    let pw = (avail * f(p, "v") / sum).max(2.0);
+                    self.round(Rect::new(px, y, pw, bh), (bh / 2.0).min(pw / 2.0), color_of(&p["color"], accent()));
+                    px += pw + 2.0;
+                }
+                let keyed: Vec<&Value> = parts.iter().filter(|p| !s(p, "label").is_empty()).collect();
+                if keyed.is_empty() {
+                    return bh;
+                }
+                let mut kx = x;
+                let mut ky = y + bh + 8.0 + 8.0;
+                for p in keyed {
+                    let l = s(p, "label");
+                    let lw = self.p.measure(l, 11.0, Weight::Semibold, w - 14.0) + 14.0;
+                    if kx + lw > x + w && kx > x {
+                        kx = x;
+                        ky += 18.0;
+                    }
+                    if self.draw {
+                        self.p.circle(kx + 4.0, ky, 4.0, color_of(&p["color"], accent()));
+                    }
+                    self.text(l, kx + 13.0, ky, 11.0, Weight::Semibold, w - 14.0, DIM);
+                    kx += lw + 12.0;
+                }
+                ky + 8.0 - y
+            }
+            // (a day hour by hour: a bar an hour, as tall as it was busy)
+            "hours" => {
+                let vals: Vec<f32> = b["values"].as_array().map(|a| a.iter().map(|v| v.as_f64().unwrap_or(0.0) as f32).collect()).unwrap_or_default();
+                let n = vals.len().max(1) as f32;
+                let gh = 22.0;
+                let cw = (w - 2.0 * (n - 1.0)) / n;
+                let c = color_of(&b["color"], accent());
+                for (i, v) in vals.iter().enumerate() {
+                    let bx = x + i as f32 * (cw + 2.0);
+                    if *v > 0.0 {
+                        let h = (gh * v.min(1.0)).max(3.0);
+                        self.round(Rect::new(bx, y + gh - h, cw, h), 2.0f32.min(cw / 2.0), c);
+                    } else {
+                        self.round(Rect::new(bx, y + gh - 2.0, cw, 2.0), 1.0, TRACK);
+                    }
+                }
+                let marks = ["0", "6", "12", "18", "24"];
+                for (i, m) in marks.iter().enumerate() {
+                    let at = x + w * i as f32 / 4.0;
+                    let mw = self.p.measure(m, 10.0, Weight::Regular, 30.0);
+                    let mx = if i == 0 { at } else if i == 4 { at - mw } else { at - mw / 2.0 };
+                    self.text(m, mx, y + gh + 10.0, 10.0, Weight::Regular, 30.0, SOFT_DIM);
+                }
+                gh + 17.0
+            }
+            // (when, over days: a row a day, a square an hour, brighter for more)
+            "heat" => {
+                let rows = b["rows"].as_array().cloned().unwrap_or_default();
+                let c = color_of(&b["color"], accent());
+                let lab = 14.0;
+                for (r, row) in rows.iter().enumerate() {
+                    let vals: Vec<f32> = row["values"].as_array().map(|a| a.iter().map(|v| v.as_f64().unwrap_or(0.0) as f32).collect()).unwrap_or_default();
+                    let n = vals.len().max(1) as f32;
+                    let cw = (w - lab - 2.0 * (n - 1.0)) / n;
+                    let ry = y + r as f32 * 11.0;
+                    self.text(s(row, "label"), x, ry + 4.5, 9.0, Weight::Regular, lab, SOFT_DIM);
+                    for (i, v) in vals.iter().enumerate() {
+                        let cell = Rect::new(x + lab + i as f32 * (cw + 2.0), ry, cw, 9.0);
+                        self.round(cell, 2.0, if *v > 0.0 { c.alpha(0.25 + 0.75 * v.min(1.0)) } else { TRACK });
+                    }
+                }
+                (rows.len() as f32 * 11.0 - 2.0).max(0.0)
+            }
+            // (a month: a square a day in weeks of seven, brighter for more; a light ring on a day that met its goal, the theme's on
+            // today; the days of the week under it; pressed: its action)
+            "calendar" => {
+                let days = b["days"].as_array().cloned().unwrap_or_default();
+                let lead = b["lead"].as_u64().unwrap_or(0) as usize;
+                let c = color_of(&b["color"], accent());
+                let gap = 5.0;
+                // (room on every side for the ring round today and the one under the mouse)
+                let (x, y, w) = (x + 2.0, y + 2.0, w - 4.0);
+                let cell = (w - gap * 6.0) / 7.0;
+                let cells = lead + days.len();
+                let rows = cells.div_ceil(7).max(1);
+                for (i, d) in days.iter().enumerate() {
+                    let k = lead + i;
+                    let r = Rect::new(x + (k % 7) as f32 * (cell + gap), y + (k / 7) as f32 * (cell + gap), cell, cell);
+                    let v = f(d, "v");
+                    let ground = if d["future"] == true {
+                        crate::paint::Color(0.059, 0.063, 0.075, 1.0)
+                    } else if v > 0.0 {
+                        c.alpha(0.18 + 0.82 * v.min(1.0))
+                    } else {
+                        TRACK
+                    };
+                    self.round(r, 5.0, ground);
+                    if self.draw && d["ring"] == true {
+                        self.p.outline(Rect::new(r.x + 1.0, r.y + 1.0, r.w - 2.0, r.h - 2.0), 4.5, 1.5, TEXT.alpha(0.85));
+                    }
+                    if self.draw && d["today"] == true {
+                        self.p.outline(Rect::new(r.x - 2.0, r.y - 2.0, r.w + 4.0, r.h + 4.0), 7.0, 1.5, accent());
+                    }
+                    if self.draw && !s(d, "action").is_empty() && hovered(r) {
+                        self.p.outline(Rect::new(r.x - 2.0, r.y - 2.0, r.w + 4.0, r.h + 4.0), 7.0, 1.5, DIM);
+                    }
+                    if !s(d, "action").is_empty() {
+                        let tip = if s(d, "tip").is_empty() { Value::Null } else { d["tip"].clone() };
+                        self.hit_tip(r, Press::Action(s(d, "action").to_string(), d["args"].clone()), tip);
+                    }
+                }
+                let ly = y + rows as f32 * (cell + gap) - gap + 12.0;
+                for (i, l) in b["labels"].as_array().cloned().unwrap_or_default().iter().enumerate().take(7) {
+                    let l = l.as_str().unwrap_or("");
+                    let lw = self.p.measure(l, 10.0, Weight::Regular, cell);
+                    self.text(l, x + i as f32 * (cell + gap) + cell / 2.0 - lw / 2.0, ly, 10.0, Weight::Regular, cell, SOFT_DIM);
+                }
+                rows as f32 * (cell + gap) - gap + 22.0
+            }
+            // (things ranked: a pictogram, a name and a bar of its share under it, how much on the right; pressed: its action)
+            "ranks" => {
+                let rows = b["rows"].as_array().cloned().unwrap_or_default();
+                let rh = 30.0;
+                for (i, r) in rows.iter().enumerate() {
+                    let ry = y + i as f32 * (rh + 4.0);
+                    let action = s(r, "action");
+                    let whole = Rect::new(x - 6.0, ry - 2.0, w + 12.0, rh + 4.0);
+                    if !action.is_empty() {
+                        self.ghost(whole, 10.0);
+                        self.hit(whole, Press::Action(action.to_string(), r["args"].clone()));
+                    }
+                    let ix = if s(r, "icon").is_empty() { 0.0 } else { 24.0 };
+                    if ix > 0.0 {
+                        self.icon(s(r, "icon"), x, ry + 7.0, 15.0, DIM);
+                    }
+                    let vw = 64.0;
+                    self.text_end(s(r, "text"), x + w, ry + rh / 2.0, 12.0, Weight::Semibold, vw, DIM);
+                    let room = w - ix - vw - 8.0;
+                    self.text(s(r, "title"), x + ix, ry + 9.0, 12.0, Weight::Regular, room, TEXT);
+                    let br = Rect::new(x + ix, ry + 20.0, room, 5.0);
+                    self.round(br, 2.5, TRACK);
+                    let part = f(r, "part").clamp(0.0, 1.0);
+                    if part > 0.0 {
+                        self.round(Rect::new(br.x, br.y, (room * part).max(5.0), 5.0), 2.5, color_of(&r["color"], accent()));
+                    }
+                }
+                (rows.len() as f32 * (rh + 4.0) - 4.0).max(0.0)
+            }
+            // (a drive: its letter its icon, in a square filled as full as the drive, its top a rolling wave; its name, the room left of
+            // how much; the last minute of what it read (blue) and wrote (amber); pressed: its action; right-clicked: its menu. A ghost: no
+            // ground until the mouse is on it)
+            "drive" => {
+                let h = 58.0;
+                let row = Rect::new(x - 2.0, y, w + 4.0, h);
+                // (its things a little in from its ground's sides)
+                let (x, w) = (x + 10.0, w - 20.0);
+                let state = s(b, "state");
+                let blue = crate::paint::Color(0.31, 0.56, 0.94, 1.0);
+                let busy = b["busy"] == true;
+                if state == "ejected" {
+                    self.round(row, 14.0, GREEN.alpha(0.12));
+                } else if !s(b, "action").is_empty() {
+                    self.ghost(row, 14.0);
+                }
+                let tile = Rect::new(x, y + 6.0, 46.0, 46.0);
+                self.round(tile, 12.0, TRACK);
+                let fill = if state == "ejected" { GREEN } else if busy { blue } else if b["red"] == true { RED } else { GREEN };
+                if self.draw {
+                    let speed = if busy { 0.9 } else { 0.35 };
+                    self.p.wave_fill(tile, 12.0, f(b, "part"), (self.p.t * speed).fract(), 2.2, fill.alpha(0.32));
+                    crate::draw::keep_moving();
+                }
+                let l = s(b, "letter");
+                if state == "ejected" {
+                    self.icon("check", tile.x + 13.0, tile.y + 13.0, 20.0, GREEN);
+                } else {
+                    let lw = self.p.measure(l, 20.0, Weight::Semibold, 40.0);
+                    self.text(l, tile.x + 23.0 - lw / 2.0, tile.y + 23.0, 20.0, Weight::Semibold, 40.0, if busy { crate::paint::Color(0.81, 0.88, 1.0, 1.0) } else { TEXT });
+                }
+                let tx = x + 58.0;
+                let room = w - 58.0;
+                // (the room left, of how much)
+                let of = format!(" of {}", s(b, "total"));
+                let ow = self.p.measure(&of, 11.5, Weight::Regular, 90.0);
+                self.text_end(&of, x + w, y + 17.0, 11.5, Weight::Regular, 90.0, DIM);
+                let fw = self.p.measure(s(b, "free"), 11.5, Weight::Semibold, 90.0);
+                self.text_end(s(b, "free"), x + w - ow, y + 17.0, 11.5, Weight::Semibold, 90.0, if b["red"] == true { RED } else { TEXT });
+                self.text(s(b, "name"), tx, y + 17.0, 13.0, Weight::Semibold, (room - ow - fw - 10.0).max(20.0), TEXT);
+                // (what it read and wrote, the last minute; busy: rising, filled, the speed at its end; refused an eject: says so)
+                let amber = crate::draw::AMBER;
+                let mut gw = room;
+                let note = if state == "refused" { "In Use" } else { s(b, "rate") };
+                if !note.is_empty() {
+                    let c = if state == "refused" { amber } else if b["write"] == true { amber } else { blue };
+                    let nw = self.p.measure(note, 11.5, Weight::Semibold, 100.0);
+                    self.text_end(note, x + w, y + 40.0, 11.5, Weight::Semibold, 100.0, c);
+                    gw -= nw + 8.0;
+                }
+                if self.draw && state != "ejected" {
+                    let vals = |k: &str| b[k].as_array().map(|a| a.iter().map(|v| v.as_f64().unwrap_or(0.0) as f32).collect::<Vec<f32>>()).unwrap_or_default();
+                    let (reads, writes) = (vals("reads"), vals("writes"));
+                    let gr = Rect::new(tx, y + 30.0, gw.max(20.0), 20.0);
+                    let writing = b["write"] == true;
+                    if reads.len() >= 2 {
+                        self.p.line_graph(&reads, gr, blue.alpha(if busy && !writing { 1.0 } else { 0.5 }), busy && !writing, busy && !writing);
+                    } else {
+                        self.p.round(Rect::new(gr.x, gr.bottom() - 1.5, gr.w, 1.5), 0.75, blue.alpha(0.4));
+                    }
+                    if writes.len() >= 2 {
+                        self.p.line_graph(&writes, gr, amber.alpha(if busy && writing { 1.0 } else { 0.45 }), busy && writing, busy && writing);
+                    }
+                }
+                if !s(b, "action").is_empty() {
+                    let tip = if s(b, "tip").is_empty() { Value::Null } else { b["tip"].clone() };
+                    self.hit_tip(row, Press::Action(s(b, "action").to_string(), b["args"].clone()), tip);
+                    self.last_hit(false, b["menu"].clone());
+                }
+                h
+            }
+            // (drives, a line each, for a tip: its letter in its ring, its name, how much room or how fast on the right)
+            "drivelines" => {
+                let rows = b["rows"].as_array().cloned().unwrap_or_default();
+                let blue = crate::paint::Color(0.31, 0.56, 0.94, 1.0);
+                for (i, d) in rows.iter().enumerate() {
+                    let cy = y + i as f32 * 32.0 + 14.0;
+                    let busy = d["busy"] == true;
+                    let part = f(d, "part");
+                    if self.draw {
+                        if busy {
+                            self.p.circle(x + 12.0, cy, 13.0, blue.alpha(0.14));
+                            self.p.ring(x + 12.0, cy, 10.5, 2.2, part.max(0.25), (self.p.t * 0.8).fract(), blue, FAINT);
+                            crate::draw::keep_moving();
+                        } else {
+                            self.p.ring(x + 12.0, cy, 10.5, 2.2, part, 0.0, if d["red"] == true { RED } else { GREEN }, FAINT);
+                        }
+                    }
+                    let l = s(d, "letter");
+                    let lw = self.p.measure(l, 10.0, Weight::Semibold, 20.0);
+                    self.text(l, x + 12.0 - lw / 2.0, cy, 10.0, Weight::Semibold, 20.0, if busy { crate::paint::Color(0.81, 0.88, 1.0, 1.0) } else { TEXT });
+                    // (on the right: reading and writing, each in its colour; else the room left, of how much)
+                    let mut rx = x + w;
+                    if busy {
+                        for (k, c) in [("write", crate::draw::AMBER), ("read", blue)] {
+                            let t = s(d, k);
+                            if t.is_empty() {
+                                continue;
+                            }
+                            let tw = self.p.measure(t, 11.5, Weight::Semibold, 100.0);
+                            self.text_end(t, rx, cy, 11.5, Weight::Semibold, 100.0, c);
+                            rx -= tw + 12.0;
+                        }
+                    } else {
+                        let of = format!(" of {}", s(d, "total"));
+                        let ow = self.p.measure(&of, 11.5, Weight::Regular, 90.0);
+                        self.text_end(&of, rx, cy, 11.5, Weight::Regular, 90.0, DIM);
+                        let fw = self.p.measure(s(d, "free"), 11.5, Weight::Semibold, 90.0);
+                        self.text_end(s(d, "free"), rx - ow, cy, 11.5, Weight::Semibold, 90.0, if d["red"] == true { RED } else { TEXT });
+                        rx -= ow + fw + 10.0;
+                    }
+                    self.text(s(d, "name"), x + 32.0, cy, 12.0, Weight::Semibold, (rx - x - 32.0).max(20.0), TEXT);
+                }
+                (rows.len() as f32 * 32.0 - 4.0).max(0.0)
+            }
+            // (how fast, over time: a line, softly filled under it, its newest point a dot; how fast now at its end)
+            "linegraph" => {
+                let vals: Vec<f32> = b["values"].as_array().map(|a| a.iter().map(|v| v.as_f64().unwrap_or(0.0) as f32).collect()).unwrap_or_default();
+                let h = b["height"].as_f64().unwrap_or(40.0) as f32;
+                let c = color_of(&b["color"], accent());
+                let t = s(b, "text");
+                let tw = if t.is_empty() { 0.0 } else { self.p.measure(t, 12.0, Weight::Semibold, 120.0) + 10.0 };
+                if !t.is_empty() {
+                    self.text_end(t, x + w, y + h - 8.0, 12.0, Weight::Semibold, 120.0, TEXT);
+                }
+                if self.draw && vals.len() >= 2 {
+                    let max = b["max"].as_f64().map(|m| m as f32).unwrap_or_else(|| vals.iter().cloned().fold(1e-6, f32::max)).max(1e-6);
+                    let norm: Vec<f32> = vals.iter().map(|v| v / max).collect();
+                    self.p.line_graph(&norm, Rect::new(x, y + 2.0, w - tw, h - 4.0), c, true, true);
+                }
+                h
+            }
+            // (a download: its picture, its name and how fast, the time left on the right, its bar; done: a line, a check, its name
+            // (pressed: its action) and ghost buttons)
+            "transfer" => {
+                let c = color_of(&b["color"], crate::paint::Color(0.31, 0.56, 0.94, 1.0));
+                let action = s(b, "action");
+                if b["done"] == true {
+                    let h = 32.0;
+                    let row = Rect::new(x - 6.0, y, w + 12.0, h);
+                    if !action.is_empty() {
+                        self.ghost(row, 10.0);
+                    }
+                    self.icon("check", x, y + 8.0, 16.0, GREEN);
+                    let buttons = b["buttons"].as_array().cloned().unwrap_or_default();
+                    let bw = buttons.len() as f32 * 30.0;
+                    self.text(s(b, "title"), x + 24.0, y + h / 2.0, 12.0, Weight::Regular, w - 24.0 - bw - 6.0, TEXT);
+                    if !action.is_empty() {
+                        self.hit(Rect::new(row.x, row.y, row.w - bw - 6.0, row.h), Press::Action(action.to_string(), b["args"].clone()));
+                    }
+                    for (i, bt) in buttons.iter().enumerate() {
+                        let r = Rect::new(x + w - bw + i as f32 * 30.0, y + 1.0, 30.0, 30.0);
+                        if self.draw && hovered(r) {
+                            self.p.circle(r.x + 15.0, r.y + 15.0, 14.0, LIT);
+                        }
+                        self.icon(s(bt, "icon"), r.x + 8.0, r.y + 8.0, 14.0, if hovered(r) { TEXT } else { DIM });
+                        let tip = if s(bt, "tip").is_empty() { Value::Null } else { bt["tip"].clone() };
+                        self.hit_tip(r, Press::Action(s(bt, "action").to_string(), bt["args"].clone()), tip);
+                    }
+                    return h;
+                }
+                let h = 52.0;
+                // (its picture: a game's art, wide; else its app's icon; else a pictogram)
+                let img = s(b, "image");
+                let wide = b["wide"] == true;
+                let pr = if wide { Rect::new(x, y + 4.0, 64.0, 30.0) } else { Rect::new(x, y + 3.0, 32.0, 32.0) };
+                if !(self.draw && !img.is_empty() && self.p.picture(img, pr, 7.0)) {
+                    self.round(Rect::new(x, y + 3.0, 32.0, 32.0), 9.0, TRACK);
+                    self.icon(if s(b, "icon").is_empty() { "download" } else { s(b, "icon") }, x + 8.0, y + 11.0, 16.0, DIM);
+                }
+                let tx = x + if wide { 74.0 } else { 42.0 };
+                let right = s(b, "right");
+                let rw = if right.is_empty() { 0.0 } else { self.p.measure(right, 12.0, Weight::Semibold, 90.0) + 8.0 };
+                self.text_end(right, x + w, y + 19.0, 12.0, Weight::Semibold, 90.0, TEXT);
+                self.text(s(b, "title"), tx, y + 12.0, 12.5, Weight::Semibold, w - (tx - x) - rw, TEXT);
+                self.text(s(b, "sub"), tx, y + 28.0, 11.0, Weight::Regular, w - (tx - x) - rw, DIM);
+                let bar = Rect::new(x, y + h - 8.0, w, 4.0);
+                self.round(bar, 2.0, TRACK);
+                if let Some(part) = b["part"].as_f64() {
+                    self.round(Rect::new(bar.x, bar.y, (bar.w * part.clamp(0.0, 1.0) as f32).max(4.0), 4.0), 2.0, c);
+                } else if self.draw {
+                    // (how much is not known: a short piece sliding along)
+                    let k = (self.p.t * 0.6).fract();
+                    self.p.round(Rect::new(bar.x + (bar.w - 60.0) * k, bar.y, 60.0, 4.0), 2.0, c.alpha(0.7));
+                    crate::draw::keep_moving();
+                }
+                if !action.is_empty() {
+                    self.hit(Rect::new(x - 6.0, y, w + 12.0, h), Press::Action(action.to_string(), b["args"].clone()));
+                }
+                h
+            }
+            // (blocks on a ground of their own)
+            "card" => {
+                let body = b["body"].as_array().cloned().unwrap_or_default();
+                let pad = 12.0;
+                let was = self.draw;
+                self.draw = false;
+                let ih = self.body(&body, x + pad, y + pad, w - 2.0 * pad);
+                self.draw = was;
+                self.round(Rect::new(x, y, w, ih + 2.0 * pad), 16.0, CARD);
+                self.body(&body, x + pad, y + pad, w - 2.0 * pad);
+                ih + 2.0 * pad
+            }
+            // (where a page is from: a pictogram, the site, and on the right a ring of how far you are or a chip)
+            "site" => {
+                let cy = y + 10.0;
+                let mut tx = x;
+                let img = s(b, "image");
+                let drawn = !img.is_empty() && self.draw && self.p.picture(img, Rect::new(x, cy - 8.0, 16.0, 16.0), 4.0);
+                if !drawn && !s(b, "icon").is_empty() {
+                    self.icon(s(b, "icon"), x, cy - 8.0, 16.0, color_of(&b["color"], DIM));
+                }
+                if drawn || !s(b, "icon").is_empty() {
+                    tx += 24.0;
+                }
+                let mut rw = 0.0;
+                if let Some(part) = b["ring"].as_f64() {
+                    if self.draw {
+                        self.p.ring(x + w - 10.0, cy, 8.5, 2.4, part as f32, 0.0, accent(), TRACK);
+                    }
+                    rw = 26.0;
+                } else if let Some(ch) = b["chip"].as_object() {
+                    let chip = Value::Object(ch.clone());
+                    let (icon, text) = (s(&chip, "icon"), s(&chip, "text"));
+                    let cw = self.p.measure(text, 11.5, Weight::Semibold, 120.0) + 18.0 + if icon.is_empty() { 0.0 } else { 17.0 };
+                    let r = Rect::new(x + w - cw, cy - 11.0, cw, 22.0);
+                    let tc = match s(&chip, "tone") {
+                        "" => DIM,
+                        t => tone_color(t),
+                    };
+                    self.round(r, 11.0, FAINT);
+                    let mut ix = r.x + 9.0;
+                    if !icon.is_empty() {
+                        self.icon(icon, ix, cy - 7.0, 14.0, tc);
+                        ix += 17.0;
+                    }
+                    self.text(text, ix, cy, 11.5, Weight::Semibold, 120.0, tc);
+                    rw = cw + 8.0;
+                }
+                self.text(s(b, "text"), tx, cy, 11.0, Weight::Regular, (w - (tx - x) - rw).max(10.0), DIM);
+                20.0
+            }
+            // (a title, on a line of its own, larger)
+            "title" => {
+                let action = s(b, "action");
+                if !action.is_empty() {
+                    let r = Rect::new(x - 6.0, y - 3.0, w + 12.0, 26.0);
+                    self.ghost(r, 8.0);
+                    self.hit(r, Press::Action(action.to_string(), b["args"].clone()));
+                }
+                self.text(s(b, "text"), x, y + 10.0, 14.5, Weight::Semibold, w, TEXT);
+                20.0
+            }
+            // (steps as a strip: the ones done faint, the one you are on lit; pressed: its action with its number)
+            "segs" => {
+                let n = b["n"].as_u64().unwrap_or(0) as usize;
+                let at = b["at"].as_u64().unwrap_or(0) as usize;
+                if n == 0 {
+                    return 0.0;
+                }
+                let c = accent();
+                if n > 40 {
+                    self.round(Rect::new(x, y, w, 5.0), 2.5, TRACK);
+                    self.round(Rect::new(x, y, (w * at as f32 / n as f32).max(5.0), 5.0), 2.5, c);
+                    return 5.0;
+                }
+                let gap = 3.0;
+                let sw = (w - gap * (n - 1) as f32) / n as f32;
+                let action = s(b, "action");
+                for i in 0..n {
+                    let r = Rect::new(x + i as f32 * (sw + gap), y, sw, 5.0);
+                    let col = if i + 1 < at { c.alpha(0.45) } else if i + 1 == at { c } else { TRACK };
+                    let hit = Rect::new(r.x - gap / 2.0, y - 6.0, sw + gap, 17.0);
+                    let col = if !action.is_empty() && self.draw && hovered(hit) && i + 1 != at { DIM } else { col };
+                    self.round(r, 2.5, col);
+                    if !action.is_empty() {
+                        self.hit(hit, Press::Action(format!("{action}{}", i + 1), Value::Null));
+                    }
+                }
+                5.0
+            }
+            // (a step read out: its heading, then its words)
+            "step" => {
+                let mut h = 0.0;
+                if !s(b, "head").is_empty() {
+                    self.text(s(b, "head"), x, y + 9.0, 13.0, Weight::Semibold, w, TEXT);
+                    h += 22.0;
+                }
+                if !s(b, "text").is_empty() {
+                    h += self.p.paragraph(s(b, "text"), x, y + h, 12.5, w, b["lines"].as_u64().unwrap_or(10) as usize, SOFT_ICON, self.draw);
+                }
+                h
+            }
+            // (the step before and after: a ghost button each (only where there is one), the next one's name between)
+            "stepnav" => {
+                let cy = y + 15.0;
+                for (k, icon, side) in [("prev", "left", 0.0), ("next", "chevron", 1.0)] {
+                    let a = s(b, k);
+                    if a.is_empty() {
+                        continue;
+                    }
+                    let r = Rect::new(x + side * (w - 30.0), y, 30.0, 30.0);
+                    if self.draw && hovered(r) {
+                        self.p.circle(r.x + 15.0, cy, 15.0, LIT);
+                    }
+                    self.icon(icon, r.x + 8.0, cy - 7.0, 14.0, if hovered(r) { TEXT } else { DIM });
+                    self.hit(r, Press::Action(a.to_string(), Value::Null));
+                }
+                let l = s(b, "label");
+                let lw = self.p.measure(l, 11.5, Weight::Regular, w - 80.0);
+                self.text(l, x + w / 2.0 - lw / 2.0, cy, 11.5, Weight::Regular, w - 80.0, DIM);
+                30.0
+            }
+            // (the answer to a question: its votes, then its opening, on a green ground)
+            "answer" => {
+                let pad = 9.0;
+                let head = format!("{}", s(b, "votes"));
+                let was = self.draw;
+                self.draw = false;
+                let th = self.p.paragraph(s(b, "text"), x + pad, y + pad + 20.0, 12.0, w - 2.0 * pad, b["lines"].as_u64().unwrap_or(5) as usize, SOFT_ICON, false);
+                self.draw = was;
+                let h = pad * 2.0 + 20.0 + th;
+                self.round(Rect::new(x, y, w, h), 10.0, GREEN.alpha(0.1));
+                if b["accepted"] != false {
+                    self.icon("check", x + pad, y + pad + 1.0, 14.0, GREEN);
+                }
+                self.text(&head, x + pad + if b["accepted"] != false { 18.0 } else { 0.0 }, y + pad + 8.0, 12.0, Weight::Semibold, 80.0, GREEN);
+                self.p.paragraph(s(b, "text"), x + pad, y + pad + 20.0, 12.0, w - 2.0 * pad, b["lines"].as_u64().unwrap_or(5) as usize, SOFT_ICON, self.draw);
+                h
+            }
+            // (a price, large, the old one struck through; whether it is in stock on the right)
+            "price" => {
+                let cy = y + 15.0;
+                let nw = self.text(s(b, "now"), x, cy, 24.0, Weight::Semibold, w * 0.6, TEXT);
+                if !s(b, "was").is_empty() {
+                    let ww = self.text(s(b, "was"), x + nw + 10.0, cy + 3.0, 12.0, Weight::Regular, 100.0, DIM);
+                    if self.draw {
+                        self.p.line(&[(x + nw + 9.0, cy + 3.5), (x + nw + 11.0 + ww, cy + 3.5)], 1.2, DIM);
+                    }
+                }
+                let st = s(b, "stock");
+                if !st.is_empty() {
+                    let c = if b["ok"] != false { GREEN } else { AMBER };
+                    let tw = self.p.measure(st, 11.5, Weight::Semibold, 120.0);
+                    let r = Rect::new(x + w - tw - 34.0, cy - 11.0, tw + 34.0, 22.0);
+                    self.round(r, 11.0, FAINT);
+                    if self.draw {
+                        self.p.circle(r.x + 13.0, cy, 3.5, c);
+                    }
+                    self.text(st, r.x + 23.0, cy, 11.5, Weight::Semibold, 120.0, c);
+                }
+                30.0
+            }
+            // (a picture across, as tall as asked)
+            "picture" => {
+                let h = b["height"].as_f64().unwrap_or(120.0) as f32;
+                if s(b, "image").is_empty() {
+                    return 0.0;
+                }
+                if self.draw && !self.p.picture(s(b, "image"), Rect::new(x, y, w, h), 12.0) {
+                    self.p.round(Rect::new(x, y, w, h), 12.0, TRACK);
+                }
+                h
             }
             "section" => self.section(b, x, y, w),
             "icons" => {
@@ -1423,6 +2635,8 @@ impl<'a, 'b> Ctx<'a, 'b> {
             // (the dock open: each app, its name over its windows (each its live picture, its title under it), the apps in rows; at
             // the foot, its pinned ones that are closed)
             "appwindows" => {
+                // (room at both sides for the ring round the window you were in)
+                let (x, w) = (x + 3.0, w - 6.0);
                 let groups = b["groups"].as_array().cloned().unwrap_or_default();
                 let pins = b["pins"].as_array().cloned().unwrap_or_default();
                 let gw = |g: &Value| {
@@ -1431,11 +2645,33 @@ impl<'a, 'b> Ctx<'a, 'b> {
                 };
                 let head = 22.0;
                 let row_h = head + APPWIN_H + 22.0;
-                let (mut cx, mut cy) = (x, y);
+                // (the apps in rows, each row in the middle: a panel wider than its windows has no gap at one side)
+                let mut starts: Vec<f32> = Vec::new();
+                {
+                    let (mut used, mut first) = (0.0f32, true);
+                    let mut row: Vec<f32> = Vec::new();
+                    for g in &groups {
+                        let w_g = gw(g);
+                        if !first && used + 16.0 + w_g > w {
+                            row.push(used);
+                            used = w_g;
+                        } else {
+                            used = if first { w_g } else { used + 16.0 + w_g };
+                        }
+                        first = false;
+                    }
+                    row.push(used);
+                    for u in row {
+                        starts.push(x + ((w - u) / 2.0).max(0.0));
+                    }
+                }
+                let mut row_i = 0;
+                let (mut cx, mut cy) = (starts.first().copied().unwrap_or(x), y);
                 for g in &groups {
                     let w_g = gw(g);
-                    if cx > x && cx + w_g > x + w {
-                        cx = x;
+                    if cx > starts.get(row_i).copied().unwrap_or(x) && cx + w_g > x + w {
+                        row_i += 1;
+                        cx = starts.get(row_i).copied().unwrap_or(x);
                         cy += row_h + 14.0;
                     }
                     // its name
@@ -1532,7 +2768,8 @@ impl<'a, 'b> Ctx<'a, 'b> {
                     let in_row = (n - row * cols).min(cols) as f32;
                     let x0 = x + (w - (in_row * win_w + (in_row - 1.0) * WIN_GAP)) / 2.0;
                     let cell = x0 + col as f32 * (win_w + WIN_GAP);
-                    let by = y + row as f32 * (row_h + WIN_GAP);
+                    // (in from the top by the ring round the one in front, so the ring is never cut off)
+                    let by = y + 3.0 + row as f32 * (row_h + WIN_GAP);
                     // (its use on the picture's left, how far its download is on its right)
                     let bx = cell + crate::peek::METERS;
                     let r = Rect::new(bx, by, pic, ph);
@@ -1586,7 +2823,7 @@ impl<'a, 'b> Ctx<'a, 'b> {
                     }
                     self.text(s(it, "title"), tx, cy, 11.0, Weight::Regular, r.right() - tx - mw, TEXT);
                 }
-                rows as f32 * row_h + (rows - 1) as f32 * WIN_GAP
+                rows as f32 * row_h + (rows - 1) as f32 * WIN_GAP + 6.0
             }
             "thumbs" => {
                 // the windows of an app, side by side, each a live picture with its title under it (and a button to close it)
@@ -1617,10 +2854,273 @@ impl<'a, 'b> Ctx<'a, 'b> {
                 }
                 h
             }
+            // a picture to look at closely: as wide as the panel, as tall as its proportion makes it (within `max_h`); the wheel zooms
+            // it at the mouse, dragging moves it, a double-click fits it again; how near shows a moment after it changes. Its buttons
+            // (`buttons`) over its corner, on dark grounds
+            "view" => {
+                let img = s(b, "image");
+                let id = if s(b, "id").is_empty() { img } else { s(b, "id") }.to_string();
+                let max_h = if f(b, "max_h") > 0.0 { f(b, "max_h") } else { 420.0 };
+                let size = self.p.picture_size(img);
+                // (the panel made taller than its content by hand: the picture takes the rest)
+                let h = size.map_or(200.0, |(iw, ih)| (w * ih / iw).clamp(120.0, max_h)) + FILL.with(|f| f.replace(0.0));
+                let r = Rect::new(x, y, w, h);
+                if let Some((iw, ih)) = size {
+                    VIEWS.with(|v| v.borrow_mut().insert(id.clone(), (r, iw, ih)));
+                }
+                let l = size.map_or(LOOK_WHOLE, |(iw, ih)| keep_in(look_of(&id), r, iw, ih));
+                if self.draw {
+                    self.p.round(r, 14.0, GROUND);
+                    self.p.picture_view(img, r, 14.0, l.zoom, l.ox, l.oy);
+                    // (how near, a moment after it changed)
+                    let since = l.at.map_or(9.0, |t| t.elapsed().as_secs_f32());
+                    if since < 1.4 && l.zoom > 1.001 {
+                        let a = ((1.4 - since) / 0.3).min(1.0);
+                        let t = format!("{}%", (l.zoom * 100.0).round() as i32);
+                        let tw = self.p.measure(&t, 11.0, Weight::Semibold, 80.0);
+                        self.p.round(Rect::new(x + 8.0, y + h - 30.0, tw + 16.0, 22.0), 11.0, crate::paint::Color(0.0, 0.0, 0.0, 0.66 * a));
+                        self.p.text(&t, x + 16.0, y + h - 19.0, 11.0, Weight::Semibold, 80.0, DIM.alpha(a));
+                    }
+                }
+                // (its pictures to choose from, over its foot, on a dark ground: only while the mouse is on the panel)
+                let album = &b["album"];
+                if album.is_object() && HOVER.with(|h| h.get()).is_some() {
+                    let n = album["items"].as_array().map_or(0, |a| a.len()) as f32;
+                    let add = if album["add"].is_object() { 36.0 } else { 0.0 };
+                    let aw = (n * 50.0 - 6.0 + add + 4.0).max(34.0).min(w - 16.0);
+                    let ar = Rect::new(x + w / 2.0 - aw / 2.0 - 6.0, y + h - 54.0, aw + 12.0, 46.0);
+                    if self.draw {
+                        self.p.round(ar, 14.0, crate::paint::Color(0.0, 0.0, 0.0, 0.72));
+                    }
+                    self.album(album, ar.x + 6.0, ar.y + 6.0, aw);
+                }
+                let mut bx = x + w - 8.0;
+                for bt in b["buttons"].as_array().cloned().unwrap_or_default().iter().rev() {
+                    bx -= 30.0;
+                    let br = Rect::new(bx, y + 8.0, 30.0, 30.0);
+                    if self.draw {
+                        self.p.circle(br.x + 15.0, br.y + 15.0, 15.0, if hovered(br) { crate::paint::Color(0.15, 0.15, 0.17, 0.92) } else { crate::paint::Color(0.0, 0.0, 0.0, 0.66) });
+                        self.icon(s(bt, "icon"), br.x + 7.0, br.y + 7.0, 16.0, if bt["on"] == true { accent() } else { TEXT });
+                    }
+                    self.hit_tip(br, Press::Action(s(bt, "action").to_string(), bt["args"].clone()), bt["tip"].clone());
+                    bx -= 4.0;
+                }
+                self.hit(r, Press::View(id));
+                h
+            }
+            // pictures to choose from: a row of small ones, the one shown ringed in the theme's colour (each pressed: its action; its
+            // right-click: its `menu`); at its end, a button (`add`)
+            "album" => self.album(b, x, y, w),
+            // a space to press, dashed round, a pictogram in its middle and a line under it
+            "drop" => {
+                let h = if f(b, "h") > 0.0 { f(b, "h") } else { 200.0 };
+                let r = Rect::new(x, y, w, h);
+                if self.draw {
+                    if hovered(r) {
+                        self.p.round(r, 16.0, LIT);
+                    }
+                    self.p.dashed(Rect::new(x + 1.0, y + 1.0, w - 2.0, h - 2.0), 16.0, 1.5, crate::paint::Color(0.204, 0.204, 0.227, 1.0));
+                    let icon = if s(b, "icon").is_empty() { "clipboard" } else { s(b, "icon") };
+                    self.icon(icon, x + w / 2.0 - 20.0, y + h / 2.0 - 30.0, 40.0, DIM);
+                    let t = s(b, "text");
+                    if !t.is_empty() {
+                        let tw = self.p.measure(t, 12.0, Weight::Regular, w - 24.0);
+                        self.text(t, x + w / 2.0 - tw / 2.0, y + h / 2.0 + 26.0, 12.0, Weight::Regular, w - 24.0, DIM);
+                    }
+                }
+                self.hit_tip(r, Press::Action(s(b, "action").to_string(), b["args"].clone()), b["tip"].clone());
+                h
+            }
+            // what it is connected to, on its own ground: a big round mark (an icon, or four bars), its name, how (a small icon and
+            // words), and lines at its right (how fast)
+            "hero" => {
+                let h = 68.0;
+                let r = Rect::new(x, y, w, h);
+                let cy = y + h / 2.0;
+                if self.draw {
+                    self.p.round(r, 16.0, crate::paint::Color(0.078, 0.082, 0.102, 1.0));
+                    let (bg, fg) = match s(b, "tone") {
+                        "ok" => (accent().alpha(0.18), accent()),
+                        "no" => (RED.alpha(0.18), RED),
+                        _ => (GROUND, TEXT),
+                    };
+                    self.p.circle(x + 34.0, cy, 22.0, bg);
+                    if let Some(level) = b["signal"].as_u64() {
+                        for i in 0..4u64 {
+                            let bh = 6.0 + 4.0 * i as f32;
+                            self.p.round(Rect::new(x + 24.0 + i as f32 * 5.5, cy + 9.0 - bh, 3.5, bh), 1.75, if i < level { fg } else { fg.alpha(0.3) });
+                        }
+                    } else {
+                        self.p.icon(s(b, "icon"), x + 24.0, cy - 10.0, 20.0, fg);
+                    }
+                }
+                let lines = b["lines"].as_array().cloned().unwrap_or_default();
+                let lw = lines.iter().map(|l| self.p.measure(s(l, "text"), 11.5, Weight::Semibold, 120.0)).fold(0.0f32, f32::max);
+                let tx = x + 66.0;
+                let tw = (w - 66.0 - 12.0 - if lw > 0.0 { lw + 10.0 } else { 0.0 }).max(40.0);
+                self.text(s(b, "title"), tx, cy - 8.0, 14.0, Weight::Semibold, tw, TEXT);
+                let mut sx = tx;
+                if !s(b, "sub_icon").is_empty() {
+                    self.icon(s(b, "sub_icon"), sx, cy + 3.0, 12.0, DIM);
+                    sx += 16.0;
+                }
+                self.text(s(b, "sub"), sx, cy + 9.0, 11.5, Weight::Regular, tw - (sx - tx), DIM);
+                for (i, l) in lines.iter().enumerate() {
+                    let ly = cy + if lines.len() > 1 { if i == 0 { -8.0 } else { 9.0 } } else { 0.0 };
+                    if self.draw {
+                        self.p.text_end(s(l, "text"), x + w - 12.0, ly, 11.5, Weight::Semibold, 120.0, color_of(&l["color"], DIM));
+                    }
+                }
+                h
+            }
+            // switches side by side in a track, each on or off on its own: on, on a lighter ground, its icon in the theme's colour
+            "toggles" => {
+                let items = b["items"].as_array().cloned().unwrap_or_default();
+                let h = 36.0;
+                let r = Rect::new(x, y, w, h);
+                if self.draw {
+                    self.p.round(r, 14.0, TRACK);
+                }
+                let n = items.len().max(1) as f32;
+                let iw = (w - 6.0 - (n - 1.0) * 4.0) / n;
+                for (i, it) in items.iter().enumerate() {
+                    let ir = Rect::new(x + 3.0 + i as f32 * (iw + 4.0), y + 3.0, iw, h - 6.0);
+                    let on = it["on"] == true;
+                    if self.draw {
+                        if on {
+                            self.p.round(ir, 11.0, CHOSEN);
+                        } else if hovered(ir) {
+                            self.p.round(ir, 11.0, LIT);
+                        }
+                    }
+                    let label = s(it, "label");
+                    let lw = self.p.measure(label, 11.5, Weight::Semibold, iw - 30.0);
+                    let cx = ir.x + ir.w / 2.0 - (lw + 22.0) / 2.0;
+                    self.icon(s(it, "icon"), cx, ir.y + ir.h / 2.0 - 8.0, 16.0, if on { accent() } else { DIM });
+                    self.text(label, cx + 22.0, ir.y + ir.h / 2.0, 11.5, Weight::Semibold, iw - 30.0, if on { TEXT } else { DIM });
+                    let tip = if on { format!("Turn Off {label}") } else { format!("Turn On {label}") };
+                    self.hit_tip(ir, Press::Action(s(it, "action").to_string(), Value::Null), Value::String(tip));
+                }
+                h
+            }
+            // the desktops, a card each: its minimap (its monitors with its wallpaper, its windows where they are, each with its app's
+            // icon, the one in front ringed), its name and how many windows; the one shown ringed. A card pressed: its desktop shown;
+            // a window on it pressed: shown, and the window brought to the front; its x (under the mouse): closed. A dashed one adds one
+            "deskmaps" => {
+                let items = b["items"].as_array().cloned().unwrap_or_default();
+                let screens = b["screens"].as_array().cloned().unwrap_or_default();
+                let aspect = (b["aspect"].as_f64().unwrap_or(16.0 / 9.0) as f32).clamp(1.0, 4.0);
+                // (in from its edges by the ring round the one shown, so the ring is never cut off)
+                let (x, y, w) = (x + 3.0, y + 1.0, w - 6.0);
+                let gap = 14.0;
+                let cw = (w - gap) / 2.0;
+                let mh = (cw / aspect).clamp(60.0, 120.0);
+                let ch = mh + 22.0;
+                let n = items.len() + 1;
+                for i in 0..n {
+                    let (row, col) = (i / 2, i % 2);
+                    let mr = Rect::new(x + col as f32 * (cw + gap), y + row as f32 * (ch + gap) + 2.0, cw, mh);
+                    if i == items.len() {
+                        if self.draw {
+                            if hovered(mr) {
+                                self.p.round(mr, 10.0, LIT);
+                            }
+                            self.p.dashed(Rect::new(mr.x + 1.0, mr.y + 1.0, mr.w - 2.0, mr.h - 2.0), 10.0, 1.5, crate::paint::Color(0.204, 0.204, 0.227, 1.0));
+                        }
+                        self.icon("plus", mr.x + mr.w / 2.0 - 9.0, mr.y + mr.h / 2.0 - 9.0, 18.0, DIM);
+                        self.hit_tip(mr, Press::Action(s(b, "add").to_string(), Value::Null), Value::String("New Desktop".into()));
+                        continue;
+                    }
+                    let it = &items[i];
+                    let on = it["on"] == true;
+                    let over = hovered(mr);
+                    if self.draw {
+                        if on {
+                            self.p.round(Rect::new(mr.x - 2.0, mr.y - 2.0, mr.w + 4.0, mr.h + 4.0), 12.0, accent());
+                        }
+                        crate::peek::draw_map(self.p, it, &screens, mr, 10.0, on, true);
+                        if over && !on {
+                            self.p.round(mr, 10.0, crate::paint::Color(1.0, 1.0, 1.0, 0.06));
+                        }
+                    }
+                    // (its x, under the mouse: closed)
+                    let close = s(it, "close");
+                    if over && !close.is_empty() {
+                        let xr = Rect::new(mr.right() - 24.0, mr.y + 4.0, 20.0, 20.0);
+                        if self.draw {
+                            self.p.circle(xr.x + 10.0, xr.y + 10.0, 10.0, crate::paint::Color(0.0, 0.0, 0.0, 0.66));
+                        }
+                        self.icon("x", xr.x + 5.0, xr.y + 5.0, 10.0, TEXT);
+                        self.hit_tip(xr, Press::Action(close.to_string(), Value::Null), Value::String("Close Desktop".into()));
+                    }
+                    // (each window on it: pressed, it comes to the front there; the top one first)
+                    let wins = it["wins"].as_array().cloned().unwrap_or_default();
+                    for wv in wins.iter().rev() {
+                        let f = |k: usize| wv["r"][k].as_f64().unwrap_or(0.0) as f32;
+                        let wr = Rect::new(mr.x + f(0) * mr.w, mr.y + f(1) * mr.h, f(2) * mr.w, f(3) * mr.h);
+                        if wr.w > 6.0 && wr.h > 6.0 {
+                            self.hit(wr, Press::Action(s(wv, "action").to_string(), Value::Null));
+                        }
+                    }
+                    self.hit(mr, Press::Action(s(it, "action").to_string(), Value::Null));
+                    let count = it["count"].as_u64().unwrap_or(0);
+                    let ny = mr.bottom() + 12.0;
+                    let cw2 = if count > 0 { self.p.measure(&count.to_string(), 11.0, Weight::Semibold, 40.0) + 4.0 } else { 0.0 };
+                    self.text(s(it, "name"), mr.x + 2.0, ny, 11.5, Weight::Semibold, mr.w - cw2 - 4.0, if on { TEXT } else { DIM });
+                    if count > 0 && self.draw {
+                        self.p.text_end(&count.to_string(), mr.right() - 2.0, ny, 11.0, Weight::Semibold, 40.0, DIM);
+                    }
+                }
+                let rows = n.div_ceil(2) as f32;
+                rows * ch + (rows - 1.0) * gap + 4.0
+            }
+            // devices, a card each: its pictogram in a ring as full as its battery (amber when low), its name, and under it how full
+            "devcards" => {
+                let mut h = 0.0;
+                for it in b["items"].as_array().cloned().unwrap_or_default() {
+                    let r = Rect::new(x, y + h, w, 56.0);
+                    let cy = r.y + 28.0;
+                    let low = it["low"] == true;
+                    if self.draw {
+                        self.p.round(r, 14.0, crate::paint::Color(0.078, 0.082, 0.102, 1.0));
+                        if let Some(l) = it["level"].as_f64() {
+                            self.p.ring(x + 32.0, cy, 17.0, 3.0, l as f32, 0.0, if low { AMBER } else { accent() }, FAINT);
+                        }
+                        self.p.icon(s(&it, "icon"), x + 24.0, cy - 8.0, 16.0, TEXT);
+                    }
+                    self.text(s(&it, "name"), x + 62.0, cy - 7.0, 13.0, Weight::Semibold, w - 74.0, TEXT);
+                    self.text(s(&it, "sub"), x + 62.0, cy + 9.0, 11.5, Weight::Regular, w - 74.0, if low { AMBER } else { DIM });
+                    h += 56.0 + 8.0;
+                }
+                (h - 8.0).max(0.0)
+            }
+            "deskmap" => self.deskmap(b, x, y, w),
+            // a thin line across, between groups
+            "rule" => {
+                if self.draw {
+                    self.p.round(Rect::new(x, y + 5.0, w, 1.0), 0.5, crate::paint::Color(0.118, 0.118, 0.137, 1.0));
+                }
+                11.0
+            }
             "slider" => {
                 // a thin track with a white knob, pressed or dragged where it should be (the knob follows the mouse at once); under the
                 // mouse it thickens, held it rings; its icon a ghost button of its own, left of it (pressed: muted); its value at the
                 // right. Muted: the level kept, dim, the icon red
+                // (named (an app's): its name small over it, and its three bars while it plays)
+                let name = s(b, "name");
+                let top = if name.is_empty() { 0.0 } else { 14.0 };
+                let mtr = s(b, "meter");
+                if !name.is_empty() && self.draw {
+                    let has = !s(b, "icon").is_empty() || !s(b, "image").is_empty();
+                    let nx = if has { x + 40.0 } else { x };
+                    let nw = self.p.measure(name, 11.0, Weight::Semibold, w - 120.0);
+                    self.text(name, nx, y + 7.0, 11.0, Weight::Semibold, w - 120.0, DIM);
+                    if b["playing"] == true {
+                        let (parts, lift) = loud_bars(meter(mtr), self.p.t);
+                        self.p.bars(nx + nw + 6.0, y + 7.0, 9.0, parts, lift, accent());
+                    }
+                }
+                let y = y + top;
                 let h = 32.0;
                 let cy = y + h / 2.0;
                 let action = s(b, "action");
@@ -1644,6 +3144,13 @@ impl<'a, 'b> Ctx<'a, 'b> {
                     let kx = track.x + track.w * v;
                     if v > 0.0 {
                         self.p.round(Rect::new(track.x, cy - th / 2.0, kx - track.x, th), th / 2.0, fill);
+                    }
+                    // (how loud it is now: a faint lighter line over its fill, never past its knob)
+                    if !mtr.is_empty() && !muted {
+                        let lv = (live_level(meter(mtr)) * v).clamp(0.0, v);
+                        if lv > 0.005 {
+                            self.p.round(Rect::new(track.x, cy - th / 2.0, (track.w * lv).max(th), th), th / 2.0, LIVE);
+                        }
                     }
                     let kr = if held.is_some() { 9.0 } else if over { 8.0 } else { 7.0 };
                     if held.is_some() {
@@ -1678,11 +3185,16 @@ impl<'a, 'b> Ctx<'a, 'b> {
                 }
                 let t = if held.is_some() { format!("{}%", (v * 100.0).round() as i32) } else { s(b, "text").to_string() };
                 if self.draw {
-                    let c = if muted && held.is_none() { RED } else if held.is_some() || over { TEXT } else { DIM };
-                    self.p.text_end(&t, x + w, cy, 11.5, Weight::Semibold, vw + 20.0, c);
+                    // (muted: a speaker struck out, red, where its value was)
+                    if muted && held.is_none() {
+                        self.icon("volume-x", x + w - 16.0, cy - 8.0, 16.0, RED);
+                    } else {
+                        let c = if held.is_some() || over { TEXT } else { DIM };
+                        self.p.text_end(&t, x + w, cy, 11.5, Weight::Semibold, vw + 20.0, c);
+                    }
                 }
                 self.hit(hit, Press::Seek(action.to_string()));
-                h + 2.0
+                top + h + 2.0
             }
             _ => 0.0,
         }

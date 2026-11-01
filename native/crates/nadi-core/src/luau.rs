@@ -257,6 +257,16 @@ impl Script {
                 lua.to_value_with(&crate::pagekind::read(&v, now.unwrap_or(0.0) as u64), ser())
             })?,
         )?;
+        // nadi.page_guide(key): a guide's words as the browser extension read them (`{ blocks, text, prev, next, toc, url }`: blocks are
+        // `["h", level, text]`, `["p", text]`, `["ul", items]`, `["ol", items]`, `["tbl", rows]`, `["facts", pairs]`), by the key its page
+        // was read with; nil when it is gone
+        nadi.set(
+            "page_guide",
+            lua.create_function(|lua, key: String| match crate::sensors::browsersensor::state().guide(&key) {
+                Some(g) => lua.to_value_with(&g, ser()),
+                None => Ok(LuaValue::Nil),
+            })?,
+        )?;
         // nadi.page_private(title): is a window title a private window's? nadi.page_config(images): what the extension is told
         nadi.set("page_private", lua.create_function(|_, t: String| Ok(crate::pagekind::is_private_title(&t)))?)?;
         nadi.set("page_config", lua.create_function(|lua, images: Option<bool>| lua.to_value_with(&crate::pagekind::config(images.unwrap_or(true)), ser()))?)?;

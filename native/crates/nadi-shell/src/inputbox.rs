@@ -45,6 +45,8 @@ pub struct InputBox {
     pub plugin: String,
     pub action: String,
     pub live: bool,
+    /// a password: dots shown for what is typed
+    pub secret: bool,
     pub shown: bool,
     since: Instant,
 }
@@ -71,7 +73,7 @@ impl InputBox {
             let surface = g.surface(1, 1)?;
             visual.SetContent(&surface)?;
             target.SetRoot(&visual)?;
-            Ok(InputBox { hwnd, _target: target, visual, surface, s: 1.0, w: 0.0, h: 0.0, text: String::new(), placeholder: String::new(), key: String::new(), plugin: String::new(), action: String::new(), live: false, shown: false, since: Instant::now() })
+            Ok(InputBox { hwnd, _target: target, visual, surface, s: 1.0, w: 0.0, h: 0.0, text: String::new(), placeholder: String::new(), key: String::new(), plugin: String::new(), action: String::new(), live: false, secret: false, shown: false, since: Instant::now() })
         }
     }
 
@@ -85,6 +87,7 @@ impl InputBox {
         self.plugin = plugin;
         self.action = action;
         self.live = live;
+        self.secret = false;
         self.placeholder = placeholder;
         self.text = text;
         if let Ok(surface) = g.surface((at.right - at.left) as u32 + 2, (at.bottom - at.top) as u32 + 2) {
@@ -182,7 +185,8 @@ impl InputBox {
         let s = self.s;
         let p = Painter { g, dc: &g.dc, s, pc, t: 0.0, viz: [0.0; 3] };
         let (w, h) = (self.w, self.h);
-        let (text, hint) = (self.text.clone(), self.placeholder.clone());
+        let text = if self.secret { "•".repeat(self.text.chars().count()) } else { self.text.clone() };
+        let hint = self.placeholder.clone();
         let _ = g.draw_surface(&self.surface, |_dc| {
             p.round(Rect::new(0.0, 0.0, w, h), 10.0, draw::FACE);
             p.round(Rect::new(0.0, 0.0, w, h), 10.0, crate::paint::Color(1.0, 1.0, 1.0, 0.12));

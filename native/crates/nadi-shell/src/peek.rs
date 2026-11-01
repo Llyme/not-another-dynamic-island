@@ -84,6 +84,10 @@ fn lead_w(peek: &Value) -> f32 {
         44.0
     } else if peek["vessel"].is_object() {
         26.0
+    } else if let Some(n) = peek["devs"]["items"].as_array().map(|a| a.len().clamp(1, 3) as f32) {
+        n * DEV_RING + (n - 1.0) * 6.0
+    } else if let Some(n) = peek["drives"]["items"].as_array().map(|a| a.len().clamp(1, DRIVES_MAX) as f32) {
+        n * DEV_RING + (n - 1.0) * 5.0
     } else if peek["roll"].is_object() {
         roll_w(peek)
     } else if peek["clock"].is_object() && peek["image"].is_null() {
@@ -93,31 +97,192 @@ fn lead_w(peek: &Value) -> f32 {
     }
 }
 
+/// a device's ring at rest
+const DEV_RING: f32 = 24.0;
+/// how many drives' rings at rest at most
+const DRIVES_MAX: usize = 8;
+
 /// Its words alone: its icon is none ("").
 fn bare(peek: &Value) -> bool {
-    peek["icon"] == "" && peek["image"].is_null() && peek["live"].is_null() && peek["ring"].is_null() && peek["vessel"].is_null() && peek["bars"].is_null() && peek["pad"].is_null() && peek["roll"].is_null()
+    peek["icon"] == "" && peek["image"].is_null() && peek["live"].is_null() && peek["ring"].is_null() && peek["vessel"].is_null() && peek["bars"].is_null() && peek["pad"].is_null() && peek["roll"].is_null() && peek["signal"].is_null() && peek["devs"].is_null() && peek["drives"].is_null()
 }
 
-/// The virtual desktops: a little box each, side by side (one over another on a vertical edge), the one shown lit. Each pressed
-/// shows its desktop.
-const DESK_W: f32 = 16.0;
-const DESK_H: f32 = 11.0;
-const DESK_GAP: f32 = 5.0;
 
+
+/// how long the desktops' row may be at most (logical px): many of them, each smaller
+const DESKS_MAX: f32 = 520.0;
+
+
+/// A desktop's minimap in a box: its ground, its monitors (more than one), its windows where they are (the one in front lit: in the
+/// theme's colour on the desktop shown).
+pub fn draw_map(p: &Painter, m: &Value, screens: &[Value], r: Rect, radius: f32, on: bool, pictures: bool) {
+    let at = |v: &Value| -> Rect {
+        let f = |i: usize| v[i].as_f64().unwrap_or(0.0) as f32;
+        Rect::new(r.x + f(0) * r.w, r.y + f(1) * r.h, f(2) * r.w, f(3) * r.h)
+    };
+    p.round(r, radius, crate::paint::Color(0.106, 0.106, 0.133, 1.0));
+    let wall = m["wall"].as_str().unwrap_or("");
+    // (its monitors, each its wallpaper; a wallpaper that cannot be shown: the desktop's own colour, dim)
+    if screens.len() > 1 || pictures {
+        let tint = crate::paint::Color(0.137, 0.137, 0.169, 1.0);
+        for sc in screens {
+            let sr = at(sc);
+            let sr = Rect::new(sr.x + 1.0, sr.y + 1.0, (sr.w - 2.0).max(1.0), (sr.h - 2.0).max(1.0));
+            if !(pictures && !wall.is_empty() && p.picture(wall, sr, (radius - 1.0).max(1.0))) {
+                p.round(sr, (radius - 1.0).max(1.0), if pictures { tint } else { crate::paint::Color(0.137, 0.137, 0.169, 1.0) });
+            }
+        }
+    }
+    for w in m["wins"].as_array().into_iter().flatten() {
+        let wr = at(&w["r"]);
+        if wr.w < 1.0 || wr.h < 1.0 {
+            continue;
+        }
+        let front = w["front"] == true;
+        let c = if front && on { crate::draw::accent() } else if front { crate::paint::Color(0.557, 0.557, 0.588, 1.0) } else { crate::paint::Color(0.235, 0.235, 0.275, 1.0) };
+        if pictures {
+            p.round(wr, 3.0, crate::paint::Color(0.165, 0.165, 0.196, 0.94));
+            if front {
+                p.round(Rect::new(wr.x - 1.0, wr.y - 1.0, wr.w + 2.0, wr.h + 2.0), 4.0, c);
+                p.round(wr, 3.0, crate::paint::Color(0.165, 0.165, 0.196, 1.0));
+            }
+            let z = (wr.w.min(wr.h) * 0.45).clamp(6.0, 16.0);
+            if wr.w > 10.0 && wr.h > 10.0 {
+                p.picture(w["image"].as_str().unwrap_or(""), Rect::new(wr.x + wr.w / 2.0 - z / 2.0, wr.y + wr.h / 2.0 - z / 2.0, z, z), z * 0.22);
+            }
+        } else {
+            p.round(wr, 1.5, c);
+        }
+    }
+}
+
+/// (the desktop shown is not pressed at rest: the widget opens; another desktop pressed is shown)
+/// The desktops' map at rest: its first column and row, how many columns and rows, and each tiny screen's size: as many rows as
+/// fit its depth (two at most across a top or bottom edge, two columns at most down a side), each in proportion to the monitors.
+pub fn desk_layout(peek: &Value, horizontal: bool, depth: f32) -> (f32, f32, i32, i32, i32, i32) {
+    let aspect = peek["desks"]["aspect"].as_f64().unwrap_or(16.0 / 9.0) as f32;
+    let maps = peek["desks"]["maps"].as_array().cloned().unwrap_or_default();
+    let (mut c0, mut r0, mut c1, mut r1) = (i32::MAX, i32::MAX, i32::MIN, i32::MIN);
+    for (i, m) in maps.iter().enumerate() {
+        let c = m["pos"][0].as_i64().unwrap_or(i as i64) as i32;
+        let r = m["pos"][1].as_i64().unwrap_or(0) as i32;
+        c0 = c0.min(c);
+        r0 = r0.min(r);
+        c1 = c1.max(c);
+        r1 = r1.max(r);
+    }
+    if maps.is_empty() {
+        (c0, r0, c1, r1) = (0, 0, 0, 0);
+    }
+    let (cols, rows) = (c1 - c0 + 1, r1 - r0 + 1);
+    // (each tiny screen its own fixed size: the widget grows to hold them all, both ways)
+    let _ = depth;
+    let (tw, th) = if horizontal {
+        let th = 12.0;
+        ((th * aspect).clamp(16.0, 40.0), th)
+    } else {
+        let tw = 24.0;
+        (tw, (tw / aspect).clamp(8.0, 20.0))
+    };
+    (tw, th, c0, r0, cols, rows)
+}
+
+/// How deep the desktops' widget is to hold every row of its map (across its edge; large, that much more).
+pub fn desk_depth(peek: &Value, horizontal: bool) -> f32 {
+    let (tw, th, _, _, cols, rows) = desk_layout(peek, horizontal, 0.0);
+    let across = if horizontal { rows as f32 * (th + DESK_GAP_REST) - DESK_GAP_REST } else { cols as f32 * (tw + DESK_GAP_REST) - DESK_GAP_REST };
+    (across + 14.0) * peek["scale"].as_f64().unwrap_or(1.0) as f32
+}
+
+/// the gap between tiny screens at rest
+const DESK_GAP_REST: f32 = 3.0;
+
+/// (the desktop shown is not pressed at rest: the widget opens; another desktop pressed is shown)
+/// At rest: the part of the map around the desktop shown, each tiny screen at its own size; where the map goes on past the widget,
+/// it fades out at that side.
 fn desks(p: &Painter, peek: &Value, body: Rect, horizontal: bool) -> Vec<(Rect, String)> {
-    let n = peek["desks"]["n"].as_u64().unwrap_or(1) as usize;
     let at = peek["desks"]["at"].as_u64().unwrap_or(0) as usize;
+    let maps = peek["desks"]["maps"].as_array().cloned().unwrap_or_default();
+    let screens = peek["desks"]["screens"].as_array().cloned().unwrap_or_default();
     let mut out = Vec::new();
     let (cx, cy) = (body.x + body.w / 2.0, body.y + body.h / 2.0);
-    let along = n as f32 * if horizontal { DESK_W } else { DESK_H } + (n as f32 - 1.0) * DESK_GAP;
-    for i in 0..n {
-        let r = if horizontal {
-            Rect::new(cx - along / 2.0 + i as f32 * (DESK_W + DESK_GAP), cy - DESK_H / 2.0, DESK_W, DESK_H)
-        } else {
-            Rect::new(cx - DESK_W / 2.0, cy - along / 2.0 + i as f32 * (DESK_H + DESK_GAP), DESK_W, DESK_H)
-        };
-        p.round(r, 3.0, if i == at { TEXT } else { FAINT });
-        out.push((r, format!("desk:{i}")));
+    // (its icon alone: the desktop shown, its tiny screen alone, as big as the square lets it be)
+    if peek["desks"]["alone"] == true {
+        let aspect = peek["desks"]["aspect"].as_f64().unwrap_or(16.0 / 9.0) as f32;
+        let w = (body.w.min(body.h) * 0.78).max(12.0);
+        let h = (w / aspect).max(8.0);
+        let r = Rect::new(cx - w / 2.0, cy - h / 2.0, w, h);
+        if let Some(m) = maps.get(at) {
+            draw_map(p, m, &screens, r, 3.0, true, false);
+        }
+        p.outline(Rect::new(r.x + 0.5, r.y + 0.5, r.w - 1.0, r.h - 1.0), 2.5, 1.5, crate::draw::accent());
+        return out;
+    }
+    // (the same size its widget was measured for: the widget fits them; large, all of it bigger)
+    let depth = if horizontal { 26.0 } else { 30.0 };
+    let (tw, th, c0, r0, cols, rows) = desk_layout(peek, horizontal, depth);
+    let g = DESK_GAP_REST;
+    let (gw, gh) = (cols as f32 * (tw + g) - g, rows as f32 * (th + g) - g);
+    let pos = |i: usize, m: &Value| (m["pos"][0].as_i64().unwrap_or(i as i64) as i32, m["pos"][1].as_i64().unwrap_or(0) as i32);
+    let cur = maps.get(at).map(|m| pos(at, m)).unwrap_or((c0, r0));
+    let (cur_x, cur_y) = ((cur.0 - c0) as f32 * (tw + g) + tw / 2.0, (cur.1 - r0) as f32 * (th + g) + th / 2.0);
+    // (the window on the map: as much as fits, the desktop shown in its middle, never past the map's ends)
+    let inner = Rect::new(body.x + 4.0, body.y + 4.0, body.w - 8.0, body.h - 8.0);
+    let ox = if gw <= inner.w { (gw - inner.w) / 2.0 } else { (cur_x - inner.w / 2.0).clamp(0.0, gw - inner.w) };
+    let oy = if gh <= inner.h { (gh - inner.h) / 2.0 } else { (cur_y - inner.h / 2.0).clamp(0.0, gh - inner.h) };
+    unsafe {
+        p.dc.PushAxisAlignedClip(&p.px(inner).d2d(), windows::Win32::Graphics::Direct2D::D2D1_ANTIALIAS_MODE_PER_PRIMITIVE);
+    }
+    let a2 = crate::draw::accent2();
+    for (i, m) in maps.iter().enumerate() {
+        let (c, r) = pos(i, m);
+        let rr = Rect::new(inner.x - ox + (c - c0) as f32 * (tw + g), inner.y - oy + (r - r0) as f32 * (th + g), tw, th);
+        if rr.right() < inner.x - 2.0 || rr.x > inner.right() + 2.0 || rr.bottom() < inner.y - 2.0 || rr.y > inner.bottom() + 2.0 {
+            continue;
+        }
+        let on = i == at;
+        if m["waits"] == true && !on {
+            let pulse = 0.6 + 0.4 * (p.t * 3.0).sin().abs();
+            p.round(Rect::new(rr.x - 1.5, rr.y - 1.5, rr.w + 3.0, rr.h + 3.0), 4.5, a2.alpha(pulse));
+        }
+        draw_map(p, m, &screens, rr, 3.0, on, false);
+        // (the desktop shown: its own border, bright)
+        if on {
+            p.outline(Rect::new(rr.x + 0.5, rr.y + 0.5, rr.w - 1.0, rr.h - 1.0), 2.5, 1.5, crate::draw::accent());
+        }
+        if !on {
+            out.push((rr, format!("desk:{i}")));
+        }
+    }
+    // (where the map goes on past it: that side fades into the widget's ground)
+    let fade = |r: Rect, horizontal_fade: bool, from_start: bool| {
+        for k in 0..6 {
+            let f = k as f32 / 6.0;
+            let a = 0.85 * (1.0 - f);
+            let band = if horizontal_fade {
+                let w = r.w / 6.0;
+                Rect::new(if from_start { r.x + k as f32 * w } else { r.right() - (k as f32 + 1.0) * w }, r.y, w + 0.5, r.h)
+            } else {
+                let h = r.h / 6.0;
+                Rect::new(r.x, if from_start { r.y + k as f32 * h } else { r.bottom() - (k as f32 + 1.0) * h }, r.w, h + 0.5)
+            };
+            p.round(band, 0.0, FACE.alpha(a));
+        }
+    };
+    if ox > 0.5 {
+        fade(Rect::new(inner.x, inner.y, 14.0, inner.h), true, true);
+    }
+    if gw - ox - inner.w > 0.5 {
+        fade(Rect::new(inner.right() - 14.0, inner.y, 14.0, inner.h), true, false);
+    }
+    if oy > 0.5 {
+        fade(Rect::new(inner.x, inner.y, inner.w, 8.0), false, true);
+    }
+    if gh - oy - inner.h > 0.5 {
+        fade(Rect::new(inner.x, inner.bottom() - 8.0, inner.w, 8.0), false, false);
+    }
+    unsafe {
+        p.dc.PopAxisAlignedClip();
     }
     out
 }
@@ -379,6 +544,152 @@ fn song(p: &Painter, peek: &Value, body: Rect) {
     }
 }
 
+thread_local! {
+    /// how loud the microphone is now (0..1), springing: Speech's bars move with it
+    static VOICE: std::cell::Cell<f32> = const { std::cell::Cell::new(0.0) };
+}
+
+/// How loud the microphone is now.
+pub fn set_voice(v: f32) {
+    VOICE.with(|x| x.set(v));
+}
+
+/// a voice at rest: its bars, the gap to its time
+const VOICE_BARS: usize = 6;
+const VOICE_H: f32 = 18.0;
+
+fn voice_time(v: &Value) -> String {
+    let Some(since) = v["since"].as_f64() else { return String::new() };
+    let t = ((crate::blocks::now_ms() - since) / 1000.0).max(0.0) as u64;
+    if t >= 3600 {
+        format!("{}:{:02}:{:02}", t / 3600, (t % 3600) / 60, t % 60)
+    } else {
+        format!("{}:{:02}", t / 60, t % 60)
+    }
+}
+
+fn voice_w(p: &Painter, peek: &Value) -> f32 {
+    let v = &peek["voice"];
+    if v["alone"] == true {
+        return METERS_SQUARE;
+    }
+    let bars = VOICE_BARS as f32 * 4.5;
+    let state = v["state"].as_str().unwrap_or("off");
+    let words = match state {
+        "listening" => p.measure("0:00:00", 12.0, Weight::Semibold, 80.0).min(p.measure(&voice_time(v), 12.0, Weight::Semibold, 80.0) + 2.0),
+        "review" => p.measure("Going Over", 12.0, Weight::Semibold, 120.0),
+        _ => 0.0,
+    };
+    let who = if v["who"]["avatar"].is_string() && peek["scale"].as_f64().unwrap_or(1.0) > 1.01 { 28.0 } else { 0.0 };
+    if words == 0.0 && who == 0.0 {
+        return METERS_SQUARE;
+    }
+    12.0 + who + bars + if words > 0.0 { 9.0 + words } else { 0.0 } + 12.0
+}
+
+/// A voice at rest (Speech): thin bars that move with the microphone in recording red while it listens (quiet: low, breathing),
+/// and how long it has listened; still and grey when not; amber and slow while it goes over a session again; in a filling ring
+/// while its model comes; with a red dot when something went wrong. Large: who is talking first. Its icon alone: the bars alone.
+fn voice(p: &Painter, peek: &Value, body: Rect, horizontal: bool) {
+    let v = &peek["voice"];
+    let state = v["state"].as_str().unwrap_or("off");
+    let alone = v["alone"] == true || !horizontal;
+    let cy = body.y + body.h / 2.0;
+    let red = crate::paint::Color(0.910, 0.416, 0.416, 1.0);
+    let grey = crate::paint::Color(0.29, 0.29, 0.32, 1.0);
+    let n = if alone { 5 } else { VOICE_BARS };
+    let (bw, gap) = (2.5, 2.0);
+    let bars_w = n as f32 * bw + (n as f32 - 1.0) * gap;
+    let words = match state {
+        "listening" if !alone => voice_time(v),
+        "review" if !alone => "Going Over".to_string(),
+        _ => String::new(),
+    };
+    let ww = if words.is_empty() { 0.0 } else { p.measure(&words, 12.0, Weight::Semibold, 120.0) };
+    let who = !alone && v["who"]["avatar"].is_string() && peek["scale"].as_f64().unwrap_or(1.0) > 1.01;
+    let total = (if who { 28.0 } else { 0.0 }) + bars_w + if ww > 0.0 { 9.0 + ww } else { 0.0 };
+    let mut x = body.x + body.w / 2.0 - total / 2.0;
+    if who {
+        p.circle(x + 11.0, cy, 11.0, color_of(&v["who"]["tint"], crate::paint::Color(0.149, 0.149, 0.173, 1.0)));
+        let a = v["who"]["avatar"].as_str().unwrap_or("");
+        let aw = p.measure(a, 12.0, Weight::Regular, 30.0);
+        p.paragraph(a, x + 11.0 - aw / 2.0 - 0.5, cy - 12.0 * 0.675, 12.0, aw + 6.0, 1, TEXT, true);
+        x += 28.0;
+    }
+    // (each bar: how loud it is now, each a little apart from the others; quiet, a slow breath)
+    let t = p.t;
+    let loud = VOICE.with(|l| l.get());
+    let (c, k) = match state {
+        "listening" => (red, 1.0),
+        "review" => (crate::draw::AMBER, 0.35),
+        _ => (grey, 0.0),
+    };
+    let shape = [0.45, 0.8, 1.0, 0.65, 0.9, 0.5];
+    for i in 0..n {
+        let s = shape[i % shape.len()];
+        let wob = 0.5 + 0.5 * (t * (5.0 + i as f32 * 1.7) + i as f32 * 1.3).sin();
+        let breath = 0.18 + 0.08 * (t * 2.2 + i as f32 * 0.6).sin();
+        let live = if state == "listening" { (loud.sqrt() * 1.6).min(1.0) * (0.55 + 0.45 * wob) } else if state == "review" { 0.35 + 0.25 * (t * 1.4 + i as f32 * 0.8).sin() } else { 0.0 };
+        let part = if k > 0.0 { (breath + live * s).clamp(0.15, 1.0) } else { s * 0.7 };
+        let h = (VOICE_H * part).max(3.0);
+        p.round(Rect::new(x + i as f32 * (bw + gap), cy - h / 2.0, bw, h), bw / 2.0, c);
+    }
+    // (its model coming: a ring round the bars, filling)
+    if state == "loading" {
+        let r = bars_w.max(VOICE_H) / 2.0 + 5.0;
+        p.ring(x + bars_w / 2.0, cy, r, 2.0, v["progress"].as_f64().unwrap_or(0.0) as f32, 0.0, crate::draw::accent(), FAINT);
+    }
+    if state == "error" {
+        p.circle(x + bars_w + 2.0, cy - VOICE_H / 2.0, 2.5, crate::draw::RED);
+    }
+    if ww > 0.0 {
+        p.text(&words, x + bars_w + 9.0, cy, 12.0, Weight::Semibold, 120.0, if state == "review" { crate::draw::AMBER } else { TEXT });
+    }
+}
+
+/// a volume at rest: its icon, its line, the gaps
+const LEVEL_ICON: f32 = 16.0;
+const LEVEL_LINE: f32 = 46.0;
+
+fn level_w(peek: &Value) -> f32 {
+    let l = &peek["level"];
+    if l["muted"] == true {
+        return METERS_SQUARE;
+    }
+    let large = peek["scale"].as_f64().unwrap_or(1.0) > 1.01;
+    let bars = if large && l["playing"] == true { 8.0 + crate::draw::bars_w(12.0) } else { 0.0 };
+    12.0 + LEVEL_ICON + 8.0 + LEVEL_LINE + bars + 12.0
+}
+
+/// A volume at rest: its icon, a small line as long as its volume (how loud it is now, faint over it); large, the sound's bars after
+/// it while anything plays. Muted: its icon alone, red. On a side edge: its icon alone.
+fn level(p: &Painter, peek: &Value, body: Rect, horizontal: bool) {
+    let l = &peek["level"];
+    let cy = body.y + body.h / 2.0;
+    let icon = peek["icon"].as_str().unwrap_or("volume");
+    if l["muted"] == true || !horizontal {
+        let c = if l["muted"] == true { crate::draw::RED } else { TEXT };
+        p.icon(icon, body.x + body.w / 2.0 - LEVEL_ICON / 2.0, cy - LEVEL_ICON / 2.0, LEVEL_ICON, c);
+        return;
+    }
+    let mut x = body.x + body.w / 2.0 - (level_w(peek) - 24.0) / 2.0;
+    p.icon(icon, x, cy - LEVEL_ICON / 2.0, LEVEL_ICON, TEXT);
+    x += LEVEL_ICON + 8.0;
+    let v = l["value"].as_f64().unwrap_or(0.0).clamp(0.0, 1.0) as f32;
+    p.round(Rect::new(x, cy - 2.0, LEVEL_LINE, 4.0), 2.0, crate::paint::Color(0.165, 0.165, 0.188, 1.0));
+    if v > 0.0 {
+        p.round(Rect::new(x, cy - 2.0, (LEVEL_LINE * v).max(4.0), 4.0), 2.0, crate::draw::accent());
+        let lv = (crate::draw::live_level(crate::blocks::meter(l["meter"].as_str().unwrap_or(""))) * v).clamp(0.0, v);
+        if lv > 0.005 {
+            p.round(Rect::new(x, cy - 2.0, (LEVEL_LINE * lv).max(4.0), 4.0), 2.0, crate::draw::LIVE);
+        }
+    }
+    x += LEVEL_LINE;
+    if peek["scale"].as_f64().unwrap_or(1.0) > 1.01 && l["playing"] == true {
+        p.viz(x + 8.0, cy, 12.0, p.viz, crate::draw::accent());
+    }
+}
+
 /// bars in a square (graphs, their icon alone): so long a side; each bar so thick, so far apart
 const METERS_SQUARE: f32 = 38.0;
 const METER_T: f32 = 4.0;
@@ -456,6 +767,14 @@ fn graphs(p: &Painter, peek: &Value, body: Rect) {
 
 /// How long the body of a peek is along its edge (logical px); a large one's (its `scale`), that much longer.
 pub fn measure(p: &Painter, peek: &Value, horizontal: bool) -> f32 {
+    if peek["voice"].is_object() {
+        let w = if horizontal { voice_w(p, peek) } else { METERS_SQUARE };
+        return w * peek["scale"].as_f64().unwrap_or(1.0) as f32;
+    }
+    if peek["level"].is_object() {
+        let w = if horizontal { level_w(peek) } else { METERS_SQUARE };
+        return w * peek["scale"].as_f64().unwrap_or(1.0) as f32;
+    }
     if peek["song"].is_object() {
         let w = if horizontal { song_w(p, peek) } else { METERS_SQUARE };
         return w * peek["scale"].as_f64().unwrap_or(1.0) as f32;
@@ -623,9 +942,12 @@ fn measure_at(p: &Painter, peek: &Value, horizontal: bool) -> f32 {
         }
         return 12.0 * 2.0 + n * TRAY_ICON + (n - 1.0).max(0.0) * TRAY_GAP + more;
     }
-    if let Some(n) = peek["desks"]["n"].as_u64() {
-        let n = n as f32;
-        return 12.0 * 2.0 + n * if horizontal { DESK_W } else { DESK_H } + (n - 1.0) * DESK_GAP;
+    if peek["desks"]["n"].as_u64().is_some() {
+        // (its map, each tiny screen at its own size, as long as the map is, up to `DESKS_MAX`; large, that much bigger)
+        let depth = if horizontal { 26.0 } else { 30.0 };
+        let (tw, th, _, _, cols, rows) = desk_layout(peek, horizontal, depth);
+        let along = if horizontal { cols as f32 * (tw + DESK_GAP_REST) - DESK_GAP_REST } else { rows as f32 * (th + DESK_GAP_REST) - DESK_GAP_REST };
+        return 8.0 * 2.0 + along.min(DESKS_MAX);
     }
     if let Some(items) = peek["dock"]["items"].as_array() {
         // (each app: a running one with its meters beside it)
@@ -680,6 +1002,67 @@ fn lead(p: &Painter, peek: &Value, x: f32, cy: f32, size: f32) -> f32 {
     let c = color_of(&peek["color"], TEXT);
     let icon = peek["icon"].as_str().unwrap_or("dot");
     let y = cy - size / 2.0;
+    // (four bars, as strong as it is; offline: hollow, a red dot)
+    if let Some(sig) = peek["signal"].as_object() {
+        let level = sig.get("level").and_then(|v| v.as_u64()).unwrap_or(0) as usize;
+        let off = sig.get("off").and_then(|v| v.as_bool()) == Some(true);
+        let bw = (size * 0.15).max(2.0);
+        let gap = (size * 0.1).max(1.5);
+        let total = 4.0 * bw + 3.0 * gap;
+        let x0 = x + size / 2.0 - total / 2.0;
+        let foot = cy + size * 0.38;
+        for i in 0..4 {
+            let h = size * (0.25 + 0.17 * i as f32) * 1.05;
+            p.round(Rect::new(x0 + i as f32 * (bw + gap), foot - h, bw, h), bw / 2.0, if i < level { c } else { FAINT });
+        }
+        if off {
+            p.circle(x0 + total - bw / 2.0, foot - size * 0.78 - 1.0, 2.5, crate::draw::RED);
+        }
+        return size;
+    }
+    // (each drive, its letter in a ring as full as it (red past 90%); one being read or written, blue, its arc spinning)
+    if let Some(items) = peek["drives"]["items"].as_array() {
+        let mut dx = x;
+        let _ = size;
+        let z = DEV_RING;
+        for it in items.iter().take(DRIVES_MAX) {
+            let r = z / 2.0;
+            let (rx, ry) = (dx + r, cy);
+            let busy = it["busy"] == true;
+            let part = it["part"].as_f64().unwrap_or(0.0) as f32;
+            if busy {
+                let blue = crate::paint::Color(0.31, 0.56, 0.94, 1.0);
+                p.circle(rx, ry, r + 1.0, blue.alpha(0.14));
+                p.ring(rx, ry, r - 1.5, 2.2, part.max(0.25), (p.t * 0.8).fract(), blue, FAINT);
+                crate::draw::keep_moving();
+            } else {
+                let col = if it["red"] == true { crate::draw::RED } else { crate::draw::accent() };
+                p.ring(rx, ry, r - 1.5, 2.2, part, 0.0, col, FAINT);
+            }
+            let l = it["letter"].as_str().unwrap_or("");
+            let fs = z * 0.42;
+            let lw = p.measure(l, fs, crate::paint::Weight::Semibold, z);
+            p.text(l, rx - lw / 2.0, ry, fs, crate::paint::Weight::Semibold, z, if busy { crate::paint::Color(0.75, 0.84, 1.0, 1.0) } else { c });
+            dx += z + 5.0;
+        }
+        return dx - x - 5.0;
+    }
+    // (each device, its pictogram in a ring as full as its battery; amber when low; none told: its pictogram alone)
+    if let Some(items) = peek["devs"]["items"].as_array() {
+        let mut dx = x;
+        for it in items.iter().take(3) {
+            let r = DEV_RING / 2.0;
+            let (rx, ry) = (dx + r, cy);
+            if let Some(l) = it["level"].as_f64() {
+                let col = if it["low"] == true { crate::draw::AMBER } else { crate::draw::accent() };
+                p.ring(rx, ry, r - 1.5, 2.2, l as f32, 0.0, col, FAINT);
+            }
+            let z = DEV_RING * 0.48;
+            p.icon(it["icon"].as_str().unwrap_or("bluetooth"), rx - z / 2.0, ry - z / 2.0, z, c);
+            dx += DEV_RING + 6.0;
+        }
+        return dx - x - 6.0;
+    }
     if let Some(bars) = peek["bars"].as_array() {
         let n = bars.len().clamp(1, 4) as f32;
         let h = 3.0;
@@ -757,7 +1140,15 @@ fn lead(p: &Painter, peek: &Value, x: f32, cy: f32, size: f32) -> f32 {
     if let Some(ring) = peek["ring"].as_object() {
         let part = ring.get("part").and_then(|v| v.as_f64()).unwrap_or(0.0) as f32;
         let r = size / 2.0;
-        p.ring(x + r, cy, r - 1.0, 2.2, part, 0.0, c, FAINT);
+        let rc = if ring.get("amber") == Some(&Value::Bool(true)) { crate::draw::AMBER } else if ring.get("theme") == Some(&Value::Bool(true)) { crate::draw::accent() } else { c };
+        // (a paler part after it: what counts toward it too)
+        let extra = ring.get("extra").and_then(|v| v.as_f64()).unwrap_or(0.0) as f32;
+        if extra > 0.0 {
+            p.ring(x + r, cy, r - 1.0, 2.2, part + extra, 0.0, rc.alpha(0.4), FAINT);
+            p.ring(x + r, cy, r - 1.0, 2.2, part, 0.0, rc, crate::paint::Color(0.0, 0.0, 0.0, 0.0));
+        } else {
+            p.ring(x + r, cy, r - 1.0, 2.2, part, 0.0, rc, FAINT);
+        }
         if peek["icon"].is_string() {
             let z = size * 0.5;
             p.icon(icon, x + r - z / 2.0, cy - z / 2.0, z, c);
@@ -1103,6 +1494,38 @@ fn dock(p: &Painter, peek: &Value, body: Rect, horizontal: bool) -> Vec<(Rect, S
 /// The peek of a widget shown as its icon alone: what leads it; no words, no marks (something new, it glows instead). (A peek with
 /// nothing to lead it stays as it is.)
 pub fn icon_only(peek: &Value) -> Value {
+    // (a voice, its icon alone: its bars alone)
+    if peek["voice"].is_object() {
+        let mut o = peek.clone();
+        o["voice"]["alone"] = serde_json::json!(true);
+        return o;
+    }
+    // (the desktops, their icon alone: the one shown, its tiny screen alone)
+    if peek["desks"].is_object() {
+        let mut o = peek.clone();
+        o["desks"]["alone"] = serde_json::json!(true);
+        return o;
+    }
+    // (drives, their icon alone: the one being read or written, else the fullest, its letter in its ring)
+    if let Some(items) = peek["drives"]["items"].as_array() {
+        let first = peek["drives"]["first"].as_str().unwrap_or("");
+        let one = items.iter().find(|i| i["letter"].as_str() == Some(first)).or(items.first()).cloned().unwrap_or(Value::Null);
+        return serde_json::json!({ "drives": { "items": [one] } });
+    }
+    // (devices, their icon alone: the lowest one, in its ring)
+    if let Some(first) = peek["devs"]["items"].as_array().and_then(|a| a.first()) {
+        let mut o = serde_json::json!({ "icon": first["icon"] });
+        if let Some(l) = first["level"].as_f64() {
+            o["ring"] = serde_json::json!({ "part": l, "theme": first["low"] != true, "amber": first["low"] == true });
+        }
+        return o;
+    }
+    // (a volume, its icon alone: its icon in a ring as full as it is loud; muted, red)
+    if peek["level"].is_object() {
+        let l = &peek["level"];
+        let muted = l["muted"] == true;
+        return serde_json::json!({ "icon": peek["icon"], "ring": { "part": if muted { 0.0 } else { l["value"].as_f64().unwrap_or(0.0) }, "theme": true }, "color": if muted { serde_json::json!("#e87a7a") } else { Value::Null } });
+    }
     // (a song, its icon alone: its bars alone)
     if peek["song"].is_object() {
         let mut o = peek.clone();
@@ -1122,7 +1545,7 @@ pub fn icon_only(peek: &Value) -> Value {
     if peek["dock"].is_object() || peek["tray"].is_object() || peek["face"].is_string() {
         return peek.clone();
     }
-    let lead = ["icon", "image", "live", "ring", "vessel", "bars", "pad", "roll"];
+    let lead = ["icon", "image", "live", "ring", "vessel", "bars", "pad", "roll", "signal"];
     if !lead.iter().any(|k| !peek[*k].is_null()) {
         return peek.clone();
     }
@@ -1142,6 +1565,14 @@ pub fn icon_only(peek: &Value) -> Value {
 }
 
 fn draw_at(p: &Painter, peek: &Value, body: Rect, horizontal: bool, dot: bool) -> Vec<(Rect, String)> {
+    if peek["voice"].is_object() {
+        voice(p, peek, body, horizontal);
+        return Vec::new();
+    }
+    if peek["level"].is_object() {
+        level(p, peek, body, horizontal);
+        return Vec::new();
+    }
     if peek["song"].is_object() {
         // (on a side edge: its bars alone)
         if !horizontal && peek["song"]["alone"] != true {
@@ -1195,7 +1626,7 @@ fn draw_at(p: &Painter, peek: &Value, body: Rect, horizontal: bool, dot: bool) -
             roll(p, g, body.x + 2.0, body.y + body.h / 2.0, body.w - 4.0, h);
             return Vec::new();
         }
-        lead(p, &serde_json::json!({ "icon": peek["icon"], "image": peek["image"], "live": peek["live"], "ring": peek["ring"], "color": peek["color"], "pad": peek["pad"] }), body.x + body.w / 2.0 - z / 2.0, body.y + body.h / 2.0, z);
+        lead(p, &serde_json::json!({ "icon": peek["icon"], "image": peek["image"], "live": peek["live"], "ring": peek["ring"], "color": peek["color"], "pad": peek["pad"], "signal": peek["signal"] }), body.x + body.w / 2.0 - z / 2.0, body.y + body.h / 2.0, z);
         return Vec::new();
     }
     if peek["desks"].is_object() {
@@ -1226,7 +1657,13 @@ fn draw_at(p: &Painter, peek: &Value, body: Rect, horizontal: bool, dot: bool) -
             if text.is_empty() {
                 y = body.y + (body.h - z) / 2.0;
             }
-            lead(p, peek, cx - z / 2.0, y + z / 2.0, z);
+            // (drives on a side edge: the one that matters, alone; a row of them does not fit across)
+            if peek["drives"].is_object() {
+                let one = icon_only(peek);
+                lead(p, &one, cx - DEV_RING / 2.0, y + z / 2.0, z);
+            } else {
+                lead(p, peek, cx - z / 2.0, y + z / 2.0, z);
+            }
             y += z;
         }
         if !text.is_empty() {

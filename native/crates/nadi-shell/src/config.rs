@@ -27,6 +27,8 @@ pub struct WidgetConfig {
     pub always_open: Option<bool>,
     /// shown even while its plugin says it is idle (nothing going on); by default an idle widget is hidden
     pub show_idle: Option<bool>,
+    /// it comes out of its edge for a moment when something worth a glance happens (none: as it is made to; the tray: off)
+    pub bump: Option<bool>,
     /// at rest, its icon alone (none: as its manifest says)
     pub icon_only: Option<bool>,
     /// "small" or "large" (none: as its manifest says)
@@ -39,6 +41,9 @@ pub struct WidgetConfig {
     pub pop_bg: Option<String>,
     /// where its window stood last, on each monitor (by name): its top left, logical
     pub pop_at: Option<BTreeMap<String, (f32, f32)>>,
+    /// its panel made bigger or smaller by hand: its width and height on its edge, and as a window (none: the size it asks for)
+    pub panel_size: Option<(f32, f32)>,
+    pub pop_size: Option<(f32, f32)>,
 }
 
 /// An app pinned to the dock.
@@ -90,6 +95,11 @@ pub struct Config {
     pub liquid: f32,
     /// the theme colour, "#rrggbb": what is lit or chosen, and a glow that names no colour
     pub theme: String,
+    /// the theme's second colour: what waits for you (something elsewhere, a bump, a widget asking to be seen)
+    pub theme2: String,
+    /// the desktops' map: where each desktop is (by its id), as columns and rows; and whether Win + Ctrl + arrows follow it
+    pub desk_map: BTreeMap<String, (i32, i32)>,
+    pub desk_keys: bool,
 }
 
 impl Config {
@@ -105,7 +115,7 @@ impl Config {
 
 impl Default for Config {
     fn default() -> Self {
-        Config { widgets: BTreeMap::new(), monitors: "follow".into(), taskbar: "keep".into(), scale: 1.0, auto_hide: "fullscreen".into(), pinned: Vec::new(), win_key: "auto".into(), reveal: "all".into(), hold_key: "none".into(), open_on: "hover".into(), tray_pinned: Vec::new(), quiet_full: true, quiet_banners: Vec::new(), liquid: 50.0, theme: "#5ac88c".into() }
+        Config { widgets: BTreeMap::new(), monitors: "follow".into(), taskbar: "keep".into(), scale: 1.0, auto_hide: "fullscreen".into(), pinned: Vec::new(), win_key: "auto".into(), reveal: "all".into(), hold_key: "none".into(), open_on: "hover".into(), tray_pinned: Vec::new(), quiet_full: true, quiet_banners: Vec::new(), liquid: 50.0, theme: "#5ac88c".into(), theme2: "#e8b04a".into(), desk_map: BTreeMap::new(), desk_keys: true }
     }
 }
 

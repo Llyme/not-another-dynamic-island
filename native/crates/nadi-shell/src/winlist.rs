@@ -22,6 +22,71 @@ fn cloaked(h: HWND) -> bool {
     unsafe { DwmGetWindowAttribute(h, DWMWA_CLOAKED, &mut v as *mut u32 as *mut _, 4).is_ok() && v != 0 }
 }
 
+/// Every app window of every virtual desktop (those of the others are cloaked by the shell), top first: its handle, its program,
+/// its box on the screen (physical px), and its desktop's id (as Windows keeps it, 16 bytes). Minimized ones are left out.
+pub fn desktop_windows() -> Vec<(isize, String, RECT, [u8; 16], String)> {
+    use windows::Win32::UI::Shell::{IVirtualDesktopManager, VirtualDesktopManager};
+    struct Ctx {
+        out: Vec<HWND>,
+        me: u32,
+    }
+    unsafe extern "system" fn each(h: HWND, lp: LPARAM) -> BOOL {
+        let ctx = &mut *(lp.0 as *mut Ctx);
+        if !IsWindowVisible(h).as_bool() || IsIconic(h).as_bool() || GetWindowTextLengthW(h) == 0 {
+            return TRUE;
+        }
+        if GetWindow(h, GW_OWNER).is_ok_and(|o| !o.is_invalid()) {
+            return TRUE;
+        }
+        let ex = GetWindowLongW(h, GWL_EXSTYLE) as u32;
+        if ex & WS_EX_TOOLWINDOW.0 != 0 || ex & WS_EX_NOACTIVATE.0 != 0 {
+            return TRUE;
+        }
+        // (cloaked by the shell: on another desktop; cloaked by its app: not really there)
+        let mut v: u32 = 0;
+        let _ = DwmGetWindowAttribute(h, DWMWA_CLOAKED, &mut v as *mut u32 as *mut _, 4);
+        if v != 0 && v != DWM_CLOAKED_SHELL {
+            return TRUE;
+        }
+        let mut pid = 0u32;
+        GetWindowThreadProcessId(h, Some(&mut pid));
+        if pid == ctx.me {
+            return TRUE;
+        }
+        ctx.out.push(h);
+        TRUE
+    }
+    let mut ctx = Ctx { out: Vec::new(), me: std::process::id() };
+    let mut cache = HashMap::new();
+    let mut out = Vec::new();
+    unsafe {
+        let _ = EnumWindows(Some(each), LPARAM(&mut ctx as *mut _ as isize));
+        let Ok(vdm) = windows::Win32::System::Com::CoCreateInstance::<_, IVirtualDesktopManager>(&VirtualDesktopManager, None, windows::Win32::System::Com::CLSCTX_ALL) else { return out };
+        for h in ctx.out {
+            let Ok(g) = vdm.GetWindowDesktopId(h) else { continue };
+            if g == windows::core::GUID::zeroed() {
+                continue;
+            }
+            let mut id = [0u8; 16];
+            id[..4].copy_from_slice(&g.data1.to_le_bytes());
+            id[4..6].copy_from_slice(&g.data2.to_le_bytes());
+            id[6..8].copy_from_slice(&g.data3.to_le_bytes());
+            id[8..].copy_from_slice(&g.data4);
+            let mut r = RECT::default();
+            if DwmGetWindowAttribute(h, DWMWA_EXTENDED_FRAME_BOUNDS, &mut r as *mut RECT as *mut _, std::mem::size_of::<RECT>() as u32).is_err() {
+                let _ = GetWindowRect(h, &mut r);
+            }
+            if r.right - r.left < 40 || r.bottom - r.top < 30 {
+                continue;
+            }
+            let mut t = [0u16; 256];
+            let n = GetWindowTextW(h, &mut t) as usize;
+            out.push((h.0 as isize, exe_of(h, &mut cache), r, id, String::from_utf16_lossy(&t[..n.min(256)])));
+        }
+    }
+    out
+}
+
 /// The program behind a window. A store app's frame (ApplicationFrameHost) holds the app's own window as a child: its program is that
 /// child's.
 fn exe_of(h: HWND, cache: &mut HashMap<u32, String>) -> String {
@@ -132,9 +197,43 @@ pub fn other_on_top() -> bool {
         }
         let mut pid = 0u32;
         GetWindowThreadProcessId(fg, Some(&mut pid));
-        pid != 0 && pid != std::process::id() && GetWindowLongW(fg, GWL_EXSTYLE) as u32 & WS_EX_TOPMOST.0 != 0
+        if pid == 0 || pid == std::process::id() || GetWindowLongW(fg, GWL_EXSTYLE) as u32 & WS_EX_TOPMOST.0 == 0 {
+            return false;
+        }
+        // (a popup of its own: no title bar, and a small part of its monitor. A game kept on top, full screen or in a window, is not
+        // one: the frame goes over it)
+        let style = GetWindowLongW(fg, GWL_STYLE) as u32;
+        if style & WS_CAPTION.0 == WS_CAPTION.0 {
+            return false;
+        }
+        let mut r = RECT::default();
+        let _ = GetWindowRect(fg, &mut r);
+        let mon = windows::Win32::Graphics::Gdi::MonitorFromWindow(fg, windows::Win32::Graphics::Gdi::MONITOR_DEFAULTTONEAREST);
+        let mut mi = windows::Win32::Graphics::Gdi::MONITORINFO { cbSize: std::mem::size_of::<windows::Win32::Graphics::Gdi::MONITORINFO>() as u32, ..Default::default() };
+        if !windows::Win32::Graphics::Gdi::GetMonitorInfoW(mon, &mut mi).as_bool() {
+            return true;
+        }
+        let m = mi.rcMonitor;
+        let area = ((r.right - r.left).max(0) as i64) * ((r.bottom - r.top).max(0) as i64);
+        let whole = ((m.right - m.left).max(1) as i64) * ((m.bottom - m.top).max(1) as i64);
+        area * 2 < whole
     }
 }
+
+/// Is one of Windows' own see-through panels in front (Start, Search, quick settings, the notification centre)?
+pub fn shell_panel_open() -> bool {
+    unsafe {
+        let fg = GetForegroundWindow();
+        if fg.is_invalid() {
+            return false;
+        }
+        let mut class = [0u16; 64];
+        let n = GetClassNameW(fg, &mut class) as usize;
+        let class = String::from_utf16_lossy(&class[..n]);
+        class == "Windows.UI.Core.CoreWindow" || class == "XamlExplorerHostIslandWindow" || class.starts_with("ControlCenterWindow")
+    }
+}
+
 
 pub fn fronts() -> Vec<(isize, Front)> {
     use windows::Win32::Graphics::Gdi::{GetMonitorInfoW, MonitorFromWindow, MONITORINFO, MONITOR_DEFAULTTONULL};

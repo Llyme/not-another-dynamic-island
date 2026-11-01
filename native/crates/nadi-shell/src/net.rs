@@ -14,9 +14,22 @@ pub const NET: &str = "net";
 
 const EVERY: Duration = Duration::from_secs(4);
 
+/// How a network is joined: with no password, with one (its authentication and encryption as a Wi-Fi profile names them), or
+/// another way (a work network that signs in, an old WEP one): Windows' own settings.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub enum Auth {
+    Open,
+    Key(&'static str, &'static str),
+    #[default]
+    Other,
+}
+
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Wifi {
     pub ssid: String,
+    /// its name's own bytes, in hex (a profile names it so, whatever they are)
+    pub hex: String,
+    pub auth: Auth,
     /// 0..100
     pub signal: u32,
     pub joined: bool,
@@ -154,7 +167,22 @@ fn networks() -> (bool, Vec<Wifi>) {
             if ssid.is_empty() {
                 continue;
             }
-            let w = Wifi { ssid: ssid.clone(), signal: net.wlanSignalQuality, joined: net.dwFlags & WLAN_AVAILABLE_NETWORK_CONNECTED != 0, known: net.dwFlags & WLAN_AVAILABLE_NETWORK_HAS_PROFILE != 0, secured: net.bSecurityEnabled.as_bool() };
+            let raw = &net.dot11Ssid.ucSSID[..(net.dot11Ssid.uSSIDLength as usize).min(32)];
+            let hex: String = raw.iter().map(|b| format!("{b:02X}")).collect();
+            let (a, c) = (net.dot11DefaultAuthAlgorithm, net.dot11DefaultCipherAlgorithm);
+            let enc = if c == DOT11_CIPHER_ALGO_TKIP { "TKIP" } else { "AES" };
+            let auth = if a == DOT11_AUTH_ALGO_80211_OPEN && c == DOT11_CIPHER_ALGO_NONE {
+                Auth::Open
+            } else if a == DOT11_AUTH_ALGO_RSNA_PSK {
+                Auth::Key("WPA2PSK", enc)
+            } else if a == DOT11_AUTH_ALGO_WPA_PSK {
+                Auth::Key("WPAPSK", enc)
+            } else if a == DOT11_AUTH_ALGO_WPA3_SAE {
+                Auth::Key("WPA3SAE", "AES")
+            } else {
+                Auth::Other
+            };
+            let w = Wifi { ssid: ssid.clone(), hex, auth, signal: net.wlanSignalQuality, joined: net.dwFlags & WLAN_AVAILABLE_NETWORK_CONNECTED != 0, known: net.dwFlags & WLAN_AVAILABLE_NETWORK_HAS_PROFILE != 0, secured: net.bSecurityEnabled.as_bool() };
             match out.iter_mut().find(|x| x.ssid == ssid) {
                 Some(x) => {
                     x.signal = x.signal.max(w.signal);
@@ -199,10 +227,100 @@ pub fn join(ssid: &str) {
                 done
             }
         })();
+        // (its profile would not do: Windows' Wi-Fi settings, which need no taskbar)
         if known != Some(true) {
-            crate::apps::launch_uri("ms-availablenetworks:");
+            crate::apps::launch_uri("ms-settings:network-wifi");
         }
         std::thread::sleep(Duration::from_millis(1500));
+        poke();
+    });
+}
+
+/// A network being joined now, and one that would not join a moment ago (a wrong password, most likely).
+static JOINING: Mutex<Option<String>> = Mutex::new(None);
+static FAILED: Mutex<Option<(String, std::time::Instant)>> = Mutex::new(None);
+static STATUS: AtomicBool = AtomicBool::new(false);
+
+/// Did a network begin or end being joined since this was last asked?
+pub fn status_changed() -> bool {
+    STATUS.swap(false, Ordering::Relaxed) || FAILED.lock().unwrap().as_ref().is_some_and(|(_, t)| t.elapsed() > Duration::from_secs(10)) && {
+        *FAILED.lock().unwrap() = None;
+        true
+    }
+}
+
+fn joining() -> Option<String> {
+    JOINING.lock().unwrap().clone()
+}
+
+fn failed() -> Option<String> {
+    FAILED.lock().unwrap().as_ref().filter(|(_, t)| t.elapsed() <= Duration::from_secs(10)).map(|(s, _)| s.clone())
+}
+
+fn xml(t: &str) -> String {
+    t.replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;").replace('"', "&quot;").replace('\'', "&apos;")
+}
+
+/// Join a network not joined before: its profile made (with its password, when it has one) and given to Windows, then joined. Not
+/// joined within a few seconds: the profile is taken back (a wrong password is not kept), and the network says so for a moment.
+pub fn join_new(w: &Wifi, pass: Option<String>) {
+    let w = w.clone();
+    *JOINING.lock().unwrap() = Some(w.ssid.clone());
+    *FAILED.lock().unwrap() = None;
+    STATUS.store(true, Ordering::Relaxed);
+    std::thread::spawn(move || {
+        let security = match (w.auth, &pass) {
+            (Auth::Key(auth, enc), Some(key)) => format!(
+                "<security><authEncryption><authentication>{auth}</authentication><encryption>{enc}</encryption><useOneX>false</useOneX></authEncryption><sharedKey><keyType>passPhrase</keyType><protected>false</protected><keyMaterial>{}</keyMaterial></sharedKey></security>",
+                xml(key)
+            ),
+            _ => "<security><authEncryption><authentication>open</authentication><encryption>none</encryption><useOneX>false</useOneX></authEncryption></security>".to_string(),
+        };
+        let name = xml(&w.ssid);
+        let profile = format!(
+            "<?xml version=\"1.0\"?><WLANProfile xmlns=\"http://www.microsoft.com/networking/WLAN/profile/v1\"><name>{name}</name><SSIDConfig><SSID><hex>{}</hex><name>{name}</name></SSID></SSIDConfig><connectionType>ESS</connectionType><connectionMode>auto</connectionMode><MSM>{security}</MSM></WLANProfile>",
+            w.hex
+        );
+        let started = (|| {
+            let c = Client::open()?;
+            let guid = c.guid?;
+            unsafe {
+                let xmlw = HSTRING::from(profile.as_str());
+                let mut reason = 0u32;
+                if WlanSetProfile(c.h, &guid, 0, PCWSTR(xmlw.as_ptr()), None, true, None, &mut reason) != 0 {
+                    return Some(false);
+                }
+                let pname = HSTRING::from(w.ssid.as_str());
+                let params = WLAN_CONNECTION_PARAMETERS { wlanConnectionMode: wlan_connection_mode_profile, strProfile: PCWSTR(pname.as_ptr()), pDot11Ssid: std::ptr::null_mut(), pDesiredBssidList: std::ptr::null_mut(), dot11BssType: dot11_BSS_type_infrastructure, dwFlags: 0 };
+                Some(WlanConnect(c.h, &guid, &params, None) == 0)
+            }
+        })();
+        // (joined? looked at once a second, for a while)
+        let mut joined = false;
+        if started == Some(true) {
+            for _ in 0..15 {
+                std::thread::sleep(Duration::from_millis(1000));
+                if networks().1.iter().any(|x| x.ssid == w.ssid && x.joined) {
+                    joined = true;
+                    break;
+                }
+            }
+        }
+        if !joined {
+            if pass.is_some() || started == Some(false) {
+                if let Some(c) = Client::open() {
+                    if let Some(guid) = c.guid {
+                        let pname = HSTRING::from(w.ssid.as_str());
+                        unsafe {
+                            WlanDeleteProfile(c.h, &guid, PCWSTR(pname.as_ptr()), None);
+                        }
+                    }
+                }
+            }
+            *FAILED.lock().unwrap() = Some((w.ssid.clone(), std::time::Instant::now()));
+        }
+        *JOINING.lock().unwrap() = None;
+        STATUS.store(true, Ordering::Relaxed);
         poke();
     });
 }
@@ -232,55 +350,117 @@ fn paired() -> Vec<Paired> {
     go().unwrap_or_default()
 }
 
-fn wifi_icon(signal: u32) -> &'static str {
+/// How many of the four bars a signal (0..100) fills.
+fn level(signal: u32) -> u32 {
     match signal {
-        75.. => "wifi",
-        50.. => "wifi-3",
-        25.. => "wifi-2",
-        _ => "wifi-1",
+        75.. => 4,
+        50.. => 3,
+        25.. => 2,
+        _ => 1,
     }
 }
 
-/// The widget: its icon how it is online (Wi-Fi's strength, a cable, none); open, the radios, the networks, the devices.
-pub fn widget(s: &State, radios: crate::radios::States) -> Value {
-    let joined = s.wifi.iter().find(|w| w.joined);
-    let icon = if radios.wifi == Some(false) && radios.bluetooth != Some(true) && !s.online {
-        "airplane"
-    } else if let Some(w) = joined {
-        wifi_icon(w.signal)
-    } else if s.online {
-        "globe"
+/// How many bytes have come in and gone out on the PC's own network adapters so far (none: not read).
+pub fn octets() -> Option<(u64, u64)> {
+    use windows::Win32::NetworkManagement::IpHelper::*;
+    unsafe {
+        let mut t: *mut MIB_IF_TABLE2 = std::ptr::null_mut();
+        if GetIfTable2(&mut t).is_err() || t.is_null() {
+            return None;
+        }
+        let rows = std::slice::from_raw_parts((*t).Table.as_ptr(), (*t).NumEntries as usize);
+        let (mut i, mut o) = (0u64, 0u64);
+        for r in rows {
+            // (a real adapter, up: the filters and virtual ones over it would count the same bytes again)
+            let hardware = r.InterfaceAndOperStatusFlags._bitfield & 1 != 0;
+            if !hardware || r.OperStatus != windows::Win32::NetworkManagement::Ndis::IfOperStatusUp {
+                continue;
+            }
+            i += r.InOctets;
+            o += r.OutOctets;
+        }
+        FreeMibTable(t as *const _);
+        Some((i, o))
+    }
+}
+
+/// A speed (bytes a second), short.
+pub fn rate_text(b: f64) -> String {
+    if b >= 1_000_000.0 {
+        format!("{:.1} MB/s", b / 1_000_000.0)
     } else {
-        "wifi-off"
+        format!("{} KB/s", (b / 1000.0).round() as i64)
+    }
+}
+
+/// The widget: at rest, four bars as strong as the Wi-Fi is (a cable: a plug; offline: the bars hollow, a red dot; airplane mode: a
+/// plane). Opened: what it is connected to and how fast it moves now, Wi-Fi and Airplane, then the other networks in reach (a star
+/// for a saved one, a lock for a secured one), and Windows' network settings. (Bluetooth is the Bluetooth widget's.)
+pub fn widget(s: &State, radios: crate::radios::States, speed: Option<(f64, f64)>, asking: Option<&str>) -> Value {
+    let joined = s.wifi.iter().find(|w| w.joined);
+    let airplane = radios.wifi == Some(false) && radios.bluetooth != Some(true) && !s.online;
+    let peek = if airplane {
+        json!({ "icon": "airplane" })
+    } else if let Some(w) = joined {
+        json!({ "signal": { "level": level(w.signal) } })
+    } else if s.online {
+        json!({ "icon": "plug" })
+    } else {
+        json!({ "signal": { "level": 0, "off": true } })
     };
-    let label = joined.map(|w| w.ssid.clone()).unwrap_or_else(|| if s.online { "Online".into() } else { "Offline".into() });
-    let toggle = |id: &str, icon: &str, label: &str, on: Option<bool>| json!({ "icon": icon, "label": label, "action": format!("radio:{id}"), "tone": if on == Some(true) { "ok" } else { "" }, "tip": format!("{} {label}", if on == Some(true) { "Turn Off" } else { "Turn On" }) });
-    let mut body = vec![json!({ "kind": "controls", "items": [
-        toggle("wifi", "wifi", "Wi-Fi", radios.wifi),
-        toggle("bluetooth", "bluetooth", "Bluetooth", radios.bluetooth),
-        { "icon": "airplane", "label": "Airplane Mode", "action": "radio:airplane", "tip": "Airplane Mode" },
-        { "icon": "gear", "label": "Settings", "action": "netsettings" },
-    ] })];
-    if radios.wifi != Some(false) && !s.wifi.is_empty() {
-        let rows: Vec<Value> = s
-            .wifi
-            .iter()
-            .map(|w| json!({ "icon": wifi_icon(w.signal), "title": w.ssid, "right": if w.joined { "Connected" } else if w.known { "Saved" } else { "" }, "action": if w.joined { String::new() } else { format!("wifi:{}", w.ssid) }, "lit": w.joined }))
-            .collect();
-        body.push(json!({ "kind": "list", "rows": rows }));
+    let label = joined.map(|w| w.ssid.clone()).unwrap_or_else(|| if airplane { "Airplane Mode".into() } else if s.online { "Wired".into() } else { "Offline".into() });
+    let mut peek = peek;
+    peek["label"] = json!(label);
+    // (what it is connected to)
+    let lines = |sp: Option<(f64, f64)>| match sp {
+        Some((d, u)) => json!([{ "text": format!("↓ {}", rate_text(d)), "color": "#5ac8e6" }, { "text": format!("↑ {}", rate_text(u)) }]),
+        None => json!([]),
+    };
+    let hero = if airplane {
+        json!({ "kind": "hero", "icon": "airplane", "title": "Airplane Mode", "sub": "Radios off" })
+    } else if let Some(w) = joined {
+        json!({ "kind": "hero", "signal": level(w.signal), "tone": "ok", "title": w.ssid, "sub": "Connected", "sub_icon": if w.secured { "lock" } else { "" }, "lines": lines(speed) })
+    } else if s.online {
+        json!({ "kind": "hero", "icon": "plug", "tone": "ok", "title": "Wired", "sub": "Connected", "lines": lines(speed) })
+    } else {
+        json!({ "kind": "hero", "icon": "x", "tone": "no", "title": "Offline", "sub": if s.wifi.is_empty() { "No networks in reach" } else { "Not connected" } })
+    };
+    let mut toggles = Vec::new();
+    if s.has_wifi || radios.wifi.is_some() {
+        toggles.push(json!({ "icon": "wifi", "label": "Wi-Fi", "on": radios.wifi == Some(true), "action": "radio:wifi" }));
     }
-    if radios.bluetooth != Some(false) && !s.paired.is_empty() {
-        let rows: Vec<Value> = s
-            .paired
-            .iter()
-            .map(|p| json!({ "icon": if crate::audiodev::is_headset(&p.name) { "headphones" } else { "bluetooth" }, "title": p.name, "right": if p.connected { "Connected" } else { "" }, "action": "btsettings", "lit": p.connected }))
-            .collect();
-        body.push(json!({ "kind": "list", "rows": rows }));
+    toggles.push(json!({ "icon": "airplane", "label": "Airplane", "on": airplane, "action": "radio:airplane" }));
+    let mut body = vec![hero, json!({ "kind": "toggles", "items": toggles })];
+    let others: Vec<&Wifi> = s.wifi.iter().filter(|w| !w.joined).collect();
+    if radios.wifi != Some(false) && !others.is_empty() {
+        body.push(json!({ "kind": "text", "label": "Networks" }));
+        let (joining, failed) = (joining(), failed());
+        let row = |w: &Wifi| {
+            let mut marks = Vec::new();
+            if w.known {
+                marks.push("star");
+            }
+            if w.secured {
+                marks.push("lock");
+            }
+            let right = if joining.as_deref() == Some(w.ssid.as_str()) { "Joining" } else if failed.as_deref() == Some(w.ssid.as_str()) { "Not Joined" } else { "" };
+            json!({ "signal": level(w.signal), "title": w.ssid, "marks": marks, "right": right, "action": format!("wifi:{}", w.ssid) })
+        };
+        // (the one asking for its password: its field under its row)
+        let mut rows: Vec<Value> = Vec::new();
+        for w in &others {
+            rows.push(row(w));
+            if asking == Some(w.ssid.as_str()) {
+                body.push(json!({ "kind": "list", "rows": std::mem::take(&mut rows) }));
+                body.push(json!({ "kind": "field", "action": format!("wifipass:{}", w.ssid), "placeholder": "Password", "secret": true }));
+            }
+        }
+        if !rows.is_empty() {
+            body.push(json!({ "kind": "list", "rows": rows }));
+        }
     }
-    if !s.has_wifi && s.paired.is_empty() && radios.bluetooth.is_none() {
-        return json!({ "peek": { "icon": icon, "label": label }, "tip": label });
-    }
-    json!({ "peek": { "icon": icon, "label": label }, "panel": { "body": body }, "tip": label })
+    body.push(json!({ "kind": "buttons", "items": [{ "icon": "gear", "label": "Network Settings", "tip": "Network Settings", "action": "netsettings" }] }));
+    json!({ "peek": peek, "panel": { "width": 340, "body": body }, "tip": label })
 }
 
 #[cfg(test)]

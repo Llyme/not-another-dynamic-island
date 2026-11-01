@@ -60,6 +60,12 @@ input[type=range] { accent-color: var(--accent); flex: 1; min-width: 80px; }
 .swatch { all: unset; width: 22px; height: 22px; border-radius: 11px; box-shadow: inset 0 0 0 1px rgba(255,255,255,.12); }
 .swatch.on { box-shadow: 0 0 0 2px var(--bg), 0 0 0 4px #f2f2f5; }
 .swatch-pick { width: 24px; height: 24px; border: none; padding: 0; background: none; }
+.swatch.pair { width: 28px; height: 28px; border-radius: 14px; }
+.wells { display: flex; gap: 6px; padding: 3px; border-radius: 12px; }
+.wells.on { box-shadow: 0 0 0 2px #f2f2f5; }
+.well { position: relative; width: 28px; height: 28px; border-radius: 9px; box-shadow: inset 0 0 0 1.5px rgba(255,255,255,.18); display: grid; place-items: center; cursor: pointer; }
+.well span { width: 18px; height: 18px; border-radius: 5px; }
+.well input { position: absolute; inset: 0; opacity: 0; cursor: pointer; }
 /* plugins */
 .search { display: flex; align-items: center; gap: 8px; flex: 1; height: 32px; padding: 0 12px; border-radius: 10px; background: var(--card2); color: var(--faint); }
 .search input { all: unset; flex: 1; color: var(--text); font-size: 12px; }
@@ -491,10 +497,18 @@ function repoOf(t) {
 function pageLook(m) {
   const c = S.config;
   const set = patch => send("config", { patch });
-  const theme = (c.theme || "#5ac88c").toLowerCase();
+  // (the theme: a pair, the first colour for what is yours and now, the second for what waits for you; each a circle split across,
+  // and two wells for a pair of one's own)
+  const theme = (c.theme || "#5ac88c").toLowerCase(), theme2 = (c.theme2 || "#e8b04a").toLowerCase();
+  const pairs = [["#5ac88c", "#e8b04a", "Mint and Amber"], ["#3fb6c6", "#e8806a", "Teal and Coral"], ["#4f8ff0", "#e8c34a", "Blue and Gold"], ["#a77bf3", "#f0a070", "Violet and Peach"], ["#e86a9a", "#5ac8a0", "Pink and Mint"], ["#d97757", "#5ab0e8", "Clay and Sky"], ["#e8b04a", "#a77bf3", "Amber and Violet"], ["#f2f2f5", "#e8b04a", "White and Amber"]];
   const sws = el("div", "swatches");
-  for (const col of ["#5ac88c", "#3fb6c6", "#4f8ff0", "#a77bf3", "#e86a9a", "#d97757", "#e8b04a", "#f2f2f5"]) { const d = el("button", "swatch" + (col === theme ? " on" : "")); d.style.background = col; d.onclick = () => set({ theme: col }); sws.append(d); }
-  const pick = el("input"); pick.type = "color"; pick.value = theme; pick.className = "swatch-pick"; tipOn(pick, "Custom Color"); pick.onchange = () => set({ theme: pick.value }); sws.append(pick);
+  for (const [a, b, name] of pairs) { const d = el("button", "swatch pair" + (a === theme && b === theme2 ? " on" : "")); d.style.background = `linear-gradient(135deg, ${a} 50%, ${b} 50%)`; tipOn(d, name); d.onclick = () => set({ theme: a, theme2: b }); sws.append(d); }
+  const wells = el("div", "wells");
+  const well = (val, key, tip) => { const w = el("label", "well"); const pick = el("input"); pick.type = "color"; pick.value = val; pick.onchange = () => set({ [key]: pick.value }); const dot = el("span"); dot.style.background = val; w.append(dot, pick); tipOn(w, tip); return w; };
+  wells.append(well(theme, "theme", "Yours and Now"), well(theme2, "theme2", "Waiting for You"));
+  const own = !pairs.some(([a, b]) => a === theme && b === theme2);
+  if (own) { wells.classList.add("on"); }
+  sws.append(wells);
   // (a slider, a picture at each end, and its value after it, as it is moved)
   const slider = (min, max, step, value, put, lo, hi, fmt) => {
     const r = el("div", "row");

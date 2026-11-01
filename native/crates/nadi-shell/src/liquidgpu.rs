@@ -20,6 +20,8 @@ struct Consts {
     info: [f32; 4],
     /// how many shapes in each field: the merged ones, the edges, the floating ones
     counts: [f32; 4],
+    /// the line round the ones that glow: its colour (premultiplied by how strong), and how strong
+    glow: [f32; 4],
     /// each shape: its middle and half its size (logical), then how round
     shapes: [[f32; 4]; MAX * 2],
 }
@@ -32,7 +34,7 @@ float4 main(uint id : SV_VertexID) : SV_Position {
 "#;
 
 const PS: &str = r#"
-cbuffer C : register(b0) { float4 info; float4 counts; float4 shapes[192]; };
+cbuffer C : register(b0) { float4 info; float4 counts; float4 glow; float4 shapes[192]; };
 float box(float2 p, float2 b, float r) {
     float2 q = abs(p) - b + r;
     return length(max(q, 0.0)) + min(max(q.x, q.y), 0.0) - r;
@@ -48,13 +50,18 @@ float4 main(float4 pos : SV_Position) : SV_Target {
     float da = 1e5;
     float de = 1e5;
     float db = 1e5;
+    // (how near the ones that glow are, and the others, each alone: whose part of the liquid this is)
+    float lit = 1e5;
+    float unlit = 1e5;
     int na = (int)counts.x;
     int ne = (int)counts.y;
     int nb = (int)counts.z;
     [loop] for (int i = 0; i < na; i++) {
         float4 g = shapes[i * 2];
         float4 e = shapes[i * 2 + 1];
-        da = smin(da, box(p - g.xy, g.zw, e.x), k);
+        float bd = box(p - g.xy, g.zw, e.x);
+        da = smin(da, bd, k);
+        if (e.y > 0.5) lit = min(lit, bd); else unlit = min(unlit, bd);
     }
     [loop] for (int m = 0; m < ne; m++) {
         int n = na + m;
@@ -65,10 +72,22 @@ float4 main(float4 pos : SV_Position) : SV_Target {
         int n = na + ne + j;
         float4 g = shapes[n * 2];
         float4 e = shapes[n * 2 + 1];
-        db = smin(db, box(p - g.xy, g.zw, e.x), k);
+        float bd = box(p - g.xy, g.zw, e.x);
+        db = smin(db, bd, k);
+        if (e.y > 0.5) lit = min(lit, bd); else unlit = min(unlit, bd);
     }
     float d = min(smin(da, de, k), smin(da, db, k));
     float a = saturate(0.5 - d * info.z);
+    // (a line along the liquid's own edge, round the part of it that is the glowing one's: its sides, its necks into the edge and
+    // into the ones beside it; mostly outside, so the widget's own face over it does not hide it)
+    if (glow.w > 0.0 && lit < unlit && lit < k * 2.0 + 2.0) {
+        float px = d * info.z;
+        float wpx = 2.6 * info.z;
+        float ln = saturate(px + 1.0) * saturate(wpx - px + 0.5);
+        float la = ln * glow.w;
+        float oa = a + la * (1.0 - a);
+        return float4(glow.rgb * la, oa);
+    }
     return float4(0, 0, 0, a);
 }
 "#;
@@ -112,7 +131,8 @@ impl LiquidGpu {
     /// neck `k` (logical); the merged ones' shapes `a`, the edges' `e` and the floating ones' `b` (each a box and how round). The
     /// texture (its top left `w` × `h` drawn), or none.
     #[allow(clippy::too_many_arguments)]
-    pub fn render(&mut self, d3d: &ID3D11Device, w: u32, h: u32, origin: (f32, f32), s: f32, k: f32, a: &[(Bx, f32)], e: &[(Bx, f32)], b: &[(Bx, f32)]) -> Option<ID3D11Texture2D> {
+    /// `lit`: for each of `a` then each of `b`, whether it glows; `glow`: the line's colour (r, g, b) and how strong.
+    pub fn render(&mut self, d3d: &ID3D11Device, w: u32, h: u32, origin: (f32, f32), s: f32, k: f32, a: &[(Bx, f32)], e: &[(Bx, f32)], b: &[(Bx, f32)], lit: &[bool], glow: [f32; 4]) -> Option<ID3D11Texture2D> {
         unsafe {
             if self.target.as_ref().map_or(true, |(_, _, tw, th)| *tw < w || *th < h) {
                 let (tw, th) = (w + 64, h + 64);
@@ -136,14 +156,19 @@ impl LiquidGpu {
                 self.target = Some((tex, rtv?, tw, th));
             }
             let (tex, rtv, _, _) = self.target.as_ref()?;
-            let mut c = Consts { info: [origin.0, origin.1, s, k], counts: [0.0; 4], shapes: [[0.0; 4]; MAX * 2] };
+            let mut c = Consts { info: [origin.0, origin.1, s, k], counts: [0.0; 4], glow: [glow[0] * glow[3], glow[1] * glow[3], glow[2] * glow[3], glow[3]], shapes: [[0.0; 4]; MAX * 2] };
             let mut n = 0;
             for (field, list) in [a, e, b].into_iter().enumerate() {
                 let mut count = 0;
-                for (bx, r) in list.iter().take(MAX - n) {
+                for (i, (bx, r)) in list.iter().take(MAX - n).enumerate() {
                     let (hx, hy) = (bx.w.max(0.0) / 2.0, bx.h.max(0.0) / 2.0);
+                    let on = match field {
+                        0 => lit.get(i).copied().unwrap_or(false),
+                        2 => lit.get(a.len() + i).copied().unwrap_or(false),
+                        _ => false,
+                    };
                     c.shapes[n * 2] = [bx.x + hx, bx.y + hy, hx, hy];
-                    c.shapes[n * 2 + 1] = [r.max(0.0).min(hx.min(hy)), 0.0, 0.0, 0.0];
+                    c.shapes[n * 2 + 1] = [r.max(0.0).min(hx.min(hy)), if on { 1.0 } else { 0.0 }, 0.0, 0.0];
                     n += 1;
                     count += 1;
                 }

@@ -599,8 +599,11 @@ impl Frame {
             let area = self.screens[si].area;
             let s = self.screens[si].s;
             let mut moved = None;
-            if let Some(it) = self.screens[si].items.get_mut(&pk) {
-                let b = clamp_in(Bx { x: x - gx, y: y - gy, w: it.slot.w, h: it.slot.h }, area);
+            // (snapped to the screen's edges and middle, and to the other windows)
+            let size = self.screens[si].items.get(&pk).map(|it| (it.slot.w, it.slot.h));
+            let snapped = size.map(|(w, h)| self.snap_window(si, &pk, clamp_in(Bx { x: x - gx, y: y - gy, w, h }, area)));
+            if let (Some(it), Some(sb)) = (self.screens[si].items.get_mut(&pk), snapped) {
+                let b = clamp_in(sb, area);
                 it.slot.x = b.x;
                 it.slot.y = b.y;
                 it.rest = SpringBox { x: Spring::at(b.x), y: Spring::at(b.y), w: Spring::at(b.w), h: Spring::at(b.h) };
@@ -673,6 +676,7 @@ impl Frame {
         unsafe {
             let _ = ReleaseCapture();
         }
+        self.drop_guides();
         let Some(b) = self.screens[si].items.get(&pk).map(|it| it.rest.now()) else { return true };
         let k = unpop(&pk).to_string();
         let mon = self.screens[si].ov.monitor.name();
@@ -722,6 +726,9 @@ impl Frame {
             let inside = on.is_none() && b.contains(x, y);
             let solid = self.pop_bg(pk) == "solid";
             let dragging = self.pop_drag.as_ref().is_some_and(|(_, k, ..)| k == pk);
+            let way = self.out_of_way(si);
+            let was_lifted = self.lifted.contains(pk);
+            let full = way && self.config.hold_key != "none";
             let meta = self.pops.get_mut(pk).unwrap();
             if inside {
                 meta.left_at = None;
@@ -740,8 +747,11 @@ impl Frame {
                 meta.rest_since = None;
             }
             let going = matches!(meta.anim, Some(PopAnim::Home { .. }));
-            let live = !going && (solid || dragging || key_held || meta.rest_since.is_some_and(|t| t.elapsed() >= REST));
-            if live != meta.live {
+            // (over a full-screen app, as the widgets: it takes clicks only while the hold key is held (a game's hidden cursor rests on
+            // it all the time), solid or not)
+            let rested = meta.rest_since.is_some_and(|t| t.elapsed() >= REST);
+            let live = !going && (dragging || key_held || (!full && (solid || rested)));
+            if live != meta.live || was_lifted != way {
                 meta.live = live;
                 regions = true;
                 self.pop_layer(pk);
@@ -774,11 +784,19 @@ impl Frame {
 
     /// A window on top, where it is seen whether it takes clicks or not: on the frame's window while it does, on the glass over it
     /// while the mouse goes through it.
+    /// Over a full-screen app it stays on the glass whether it takes clicks or not: the app may come over the frame's window, and it
+    /// would be gone (the frame takes the clicks under it all the same).
     fn pop_layer(&mut self, pk: &str) {
         let Some(m) = self.pops.get(pk) else { return };
         let (si, live) = (m.si, m.live);
         let Some(v) = self.screens[si].items.get(pk).map(|it| it.piece.visual.clone()) else { return };
-        if live {
+        let lift = self.out_of_way(si);
+        if lift {
+            self.lifted.insert(pk.to_string());
+        } else {
+            self.lifted.remove(pk);
+        }
+        if live && !lift {
             self.screens[si].ov.to_front(&v);
         } else {
             self.screens[si].ov.to_glass_front(&v);

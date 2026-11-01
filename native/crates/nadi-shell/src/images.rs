@@ -23,7 +23,7 @@ thread_local! {
     static WIC: RefCell<Option<IWICImagingFactory>> = const { RefCell::new(None) };
 }
 
-fn wic() -> Result<IWICImagingFactory> {
+pub(crate) fn wic() -> Result<IWICImagingFactory> {
     if let Some(f) = WIC.with(|w| w.borrow().clone()) {
         return Ok(f);
     }
@@ -162,7 +162,7 @@ fn plugin_file(path: &str) -> Option<Vec<u8>> {
         return None;
     }
     let meta = std::fs::metadata(&p).ok()?;
-    if meta.len() > 4 * 1024 * 1024 {
+    if meta.len() > 32 * 1024 * 1024 {
         return None;
     }
     std::fs::read(&p).ok()
@@ -360,6 +360,23 @@ fn shell_icon(dc: &ID2D1DeviceContext, path: &str) -> Option<ID2D1Bitmap1> {
     }
 }
 
+/// A wallpaper, small (the shell's own thumbnail of it: never the whole picture decoded).
+fn wall_thumb(dc: &ID2D1DeviceContext, path: &str) -> Option<ID2D1Bitmap1> {
+    use windows::core::{Interface, HSTRING};
+    use windows::Win32::UI::Shell::*;
+    unsafe {
+        let item: IShellItem = SHCreateItemFromParsingName(&HSTRING::from(path), None).ok()?;
+        let factory: IShellItemImageFactory = item.cast().ok()?;
+        let hbmp = factory.GetImage(windows::Win32::Foundation::SIZE { cx: 320, cy: 320 }, SIIGBF_THUMBNAILONLY | SIIGBF_BIGGERSIZEOK).ok()?;
+        let f = wic().ok()?;
+        let b = f.CreateBitmapFromHBITMAP(hbmp, None, WICBitmapIgnoreAlpha);
+        let _ = windows::Win32::Graphics::Gdi::DeleteObject(hbmp);
+        let conv = f.CreateFormatConverter().ok()?;
+        conv.Initialize(&b.ok()?, &GUID_WICPixelFormat32bppPBGRA, WICBitmapDitherTypeNone, None, 0.0, WICBitmapPaletteTypeMedianCut).ok()?;
+        dc.CreateBitmapFromWicBitmap(&conv, None).ok()
+    }
+}
+
 /// The picture a name names, when there is one (looked up once; one that cannot be found stays not found).
 pub fn get(dc: &ID2D1DeviceContext, pc: &Arc<Pc>, name: &str) -> Option<ID2D1Bitmap1> {
     if name.is_empty() {
@@ -380,6 +397,9 @@ pub fn get(dc: &ID2D1DeviceContext, pc: &Arc<Pc>, name: &str) -> Option<ID2D1Bit
             // (not here yet: asked again next time)
             _ => return None,
         }
+    } else if let Some(id) = name.strip_prefix("page:").and_then(|i| i.parse::<u64>().ok()) {
+        // (a page's main picture, as the browser extension sent it)
+        nadi_core::sensors::browsersensor::state().image(id)
     } else {
         None
     };
@@ -398,6 +418,8 @@ pub fn get(dc: &ID2D1DeviceContext, pc: &Arc<Pc>, name: &str) -> Option<ID2D1Bit
         nadi_core::sensors::steamlib::icon(id).and_then(|p| std::fs::read(p).ok()).and_then(|b| decode(dc, &b).ok())
     } else if let Some(path) = name.strip_prefix("shell:") {
         shell_icon(dc, path)
+    } else if let Some(path) = name.strip_prefix("wall:") {
+        wall_thumb(dc, path)
     } else if let Some(h) = name.strip_prefix("trayicon:").and_then(|h| h.parse::<isize>().ok()) {
         // (a tray icon's picture: the copy the tray holds)
         if h == 0 {

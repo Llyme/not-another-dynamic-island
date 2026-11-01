@@ -25,6 +25,7 @@ pub const CLAUDE: Color = Color(0.851, 0.467, 0.341, 1.0);
 
 /// the theme colour (the person's, in the settings): what is lit, chosen, now, and a glow that names no colour of its own
 static ACCENT: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0x5ac88c);
+static ACCENT2: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0xe8b04a);
 
 thread_local! {
     /// the theme colour, for now, in its place (a banner of Claude's: Claude's own colour, not the theme's)
@@ -45,6 +46,23 @@ thread_local! {
 }
 
 /// Did anything drawn since last asked scroll (words too long for their room)? Then it is to be drawn again soon. Asking clears it.
+/// Something drawn moves on its own (a wave, a spinning ring): the widget is drawn again at the next frame.
+pub fn keep_moving() {
+    MARQUEE.with(|m| m.set(true));
+}
+
+/// how wide a flow's chevrons are, beside words of `size`, and the gap after them
+fn flow_w(size: f32) -> f32 {
+    (size * 0.6).round()
+}
+const FLOW_GAP: f32 = 4.0;
+
+/// Words that begin with an arrow up or down ("↑ 85 MB/s"): which way, and the rest.
+fn flow_of(text: &str) -> Option<(bool, &str)> {
+    let up = if let Some(r) = text.strip_prefix('↑') { Some((true, r)) } else { text.strip_prefix('↓').map(|r| (false, r)) };
+    up.map(|(u, r)| (u, r.trim_start()))
+}
+
 pub fn take_marquee() -> bool {
     MARQUEE.with(|m| m.replace(false))
 }
@@ -55,6 +73,19 @@ pub fn accent() -> Color {
     }
     let v = ACCENT.load(std::sync::atomic::Ordering::Relaxed);
     Color(((v >> 16) & 255) as f32 / 255.0, ((v >> 8) & 255) as f32 / 255.0, (v & 255) as f32 / 255.0, 1.0)
+}
+
+/// The theme's second colour: what waits for you.
+pub fn accent2() -> Color {
+    let v = ACCENT2.load(std::sync::atomic::Ordering::Relaxed);
+    Color(((v >> 16) & 255) as f32 / 255.0, ((v >> 8) & 255) as f32 / 255.0, (v & 255) as f32 / 255.0, 1.0)
+}
+
+/// The theme's second colour, from "#rrggbb".
+pub fn set_accent2(hex: &str) {
+    if let Some(v) = hex.strip_prefix('#').filter(|h| h.len() == 6).and_then(|h| u32::from_str_radix(h, 16).ok()) {
+        ACCENT2.store(v, std::sync::atomic::Ordering::Relaxed);
+    }
 }
 
 /// The theme colour, from "#rrggbb" (anything else: as it was).
@@ -68,6 +99,8 @@ pub fn set_accent(hex: &str) {
 pub fn color_of(v: &serde_json::Value, or: Color) -> Color {
     match v.as_str() {
         Some(s) if s.starts_with('#') && s.len() == 7 => Color::hex(s),
+        Some("theme") => accent(),
+        Some("theme2") => accent2(),
         _ => or,
     }
 }
@@ -102,7 +135,36 @@ impl<'a> Painter<'a> {
 
     /// How wide words are, logical px.
     pub fn measure(&self, text: &str, size: f32, weight: Weight, max_w: f32) -> f32 {
+        if let Some((_, rest)) = flow_of(text) {
+            let fw = flow_w(size) + FLOW_GAP;
+            return fw + self.words(rest, size, weight, (max_w - fw).max(1.0)).map(|w| w.width / self.s).unwrap_or(0.0);
+        }
         self.words(text, size, weight, max_w).map(|w| w.width / self.s).unwrap_or(0.0)
+    }
+
+    /// Something going one way, as a pictogram that moves: chevrons rising (up: sent, written) or falling (down: received, read)
+    /// through a small box, fading in at one end and out at the other, as tall as words of `size`; `x` its left, `cy` its middle;
+    /// how wide. Words that begin with "↑" or "↓" are drawn with it in place of the arrow.
+    pub fn flow(&self, x: f32, cy: f32, up: bool, size: f32, c: Color) -> f32 {
+        let w = flow_w(size);
+        let h = size * 1.2;
+        let top = cy - h / 2.0;
+        let gap = h * 0.36;
+        let rise = w * 0.28;
+        let ph = (self.t * 1.6).fract() * gap;
+        for i in -1..5 {
+            let off = i as f32 * gap + ph;
+            let along = if up { h - off } else { off };
+            if !(0.0..=h).contains(&along) {
+                continue;
+            }
+            let k = (along / h * std::f32::consts::PI).sin().clamp(0.0, 1.0);
+            let y = top + along;
+            let pts = if up { [(x, y + rise), (x + w / 2.0, y - rise), (x + w, y + rise)] } else { [(x, y - rise), (x + w / 2.0, y + rise), (x + w, y - rise)] };
+            self.line(&pts, (size * 0.14).max(1.4), c.alpha(c.3 * k));
+        }
+        keep_moving();
+        w
     }
 
     /// Words with their left at `x`, centred on `cy`; how wide they came out (logical). Longer than `max_w`: never cut with dots;
@@ -110,6 +172,11 @@ impl<'a> Painter<'a> {
     pub fn text(&self, text: &str, x: f32, cy: f32, size: f32, weight: Weight, max_w: f32, c: Color) -> f32 {
         if text.is_empty() || max_w <= 1.0 {
             return 0.0;
+        }
+        // (going up or down: its moving chevrons in place of the arrow)
+        if let Some((up, rest)) = flow_of(text) {
+            let fw = self.flow(x, cy, up, size, c) + FLOW_GAP;
+            return fw + self.text(rest, x + fw, cy, size, weight, max_w - fw, c);
         }
         let Ok(full) = self.words(text, size, weight, 100_000.0) else { return 0.0 };
         let fw = full.width / self.s;
@@ -390,6 +457,179 @@ impl<'a> Painter<'a> {
         true
     }
 
+    /// A box with round corners filled from its bottom up to `part` of it, its top a wave (two, the one behind paler, rolling
+    /// against each other: `phase` in turns, `amp` how high, logical px).
+    pub fn wave_fill(&self, r: Rect, radius: f32, part: f32, phase: f32, amp: f32, c: Color) {
+        let part = part.clamp(0.0, 1.0);
+        if part <= 0.0 {
+            return;
+        }
+        let p = self.px(r);
+        let top = r.y + r.h * (1.0 - part);
+        let wave = |ph: f32, a: f32, k: f32| -> String {
+            let mut d = format!("M {} {}", r.x, r.bottom());
+            let n = 24;
+            for i in 0..=n {
+                let fx = i as f32 / n as f32;
+                let y = top + a * ((fx * k + ph) * std::f32::consts::TAU).sin();
+                d.push_str(&format!(" L {} {}", r.x + r.w * fx, y));
+            }
+            d.push_str(&format!(" L {} {} Z", r.right(), r.bottom()));
+            d
+        };
+        unsafe {
+            let Ok(clip) = self.g.d2d_factory.CreateRoundedRectangleGeometry(&D2D1_ROUNDED_RECT { rect: p.d2d(), radiusX: radius * self.s, radiusY: radius * self.s }) else { return };
+            let params = D2D1_LAYER_PARAMETERS1 {
+                contentBounds: p.d2d(),
+                geometricMask: std::mem::ManuallyDrop::new(Some(clip.into())),
+                maskAntialiasMode: D2D1_ANTIALIAS_MODE_PER_PRIMITIVE,
+                maskTransform: windows::Foundation::Numerics::Matrix3x2::identity(),
+                opacity: 1.0,
+                opacityBrush: std::mem::ManuallyDrop::new(None),
+                layerOptions: D2D1_LAYER_OPTIONS1_NONE,
+            };
+            self.dc.PushLayer(&params, None);
+            // (full: no wave at its top)
+            if part >= 0.995 {
+                self.round(r, 0.0, c);
+            } else {
+                self.path(&wave(-phase * 0.7 + 0.3, amp * 0.8, 1.3), c.alpha(c.3 * 0.55), None);
+                self.path(&wave(phase, amp, 1.0), c, None);
+            }
+            self.dc.PopLayer();
+            let _ = std::mem::ManuallyDrop::into_inner(params.geometricMask);
+        }
+    }
+
+    /// A line through values (0..1 each, oldest first) across a box, softly filled under it, its newest point a dot.
+    pub fn line_graph(&self, vals: &[f32], r: Rect, c: Color, fill: bool, dot: bool) {
+        if vals.len() < 2 {
+            return;
+        }
+        let n = (vals.len() - 1) as f32;
+        let pts: Vec<(f32, f32)> = vals.iter().enumerate().map(|(i, v)| (r.x + r.w * i as f32 / n, r.bottom() - 1.0 - (r.h - 2.0) * v.clamp(0.0, 1.0))).collect();
+        if fill {
+            let mut d = format!("M {} {}", r.x, r.bottom());
+            for (x, y) in &pts {
+                d.push_str(&format!(" L {x} {y}"));
+            }
+            d.push_str(&format!(" L {} {} Z", r.right(), r.bottom()));
+            self.path(&d, c.alpha(c.3 * 0.18), None);
+        }
+        self.line(&pts, 1.8, c);
+        if dot {
+            if let Some((x, y)) = pts.last() {
+                self.circle(*x, *y, 2.6, c);
+            }
+        }
+    }
+
+    /// A picture's size, in its own pixels (none: not here yet).
+    pub fn picture_size(&self, name: &str) -> Option<(f32, f32)> {
+        let bmp = images::get_at(self.dc, self.pc, name, self.t)?;
+        let size = unsafe { bmp.GetPixelSize() };
+        (size.width > 0 && size.height > 0).then_some((size.width as f32, size.height as f32))
+    }
+
+    /// A picture looked at closely, in a box with round corners: whole at `zoom` 1 (fit inside it), `zoom` times as big otherwise,
+    /// the point of it at (`ox`, `oy`) (0..1 across and down it) in the box's middle.
+    pub fn picture_view(&self, name: &str, r: Rect, radius: f32, zoom: f32, ox: f32, oy: f32) -> bool {
+        let Some(bmp) = images::get_at(self.dc, self.pc, name, self.t) else { return false };
+        let p = self.px(r);
+        unsafe {
+            let px = bmp.GetPixelSize();
+            let (iw, ih) = (px.width.max(1) as f32, px.height.max(1) as f32);
+            let k = (p.w / iw).min(p.h / ih) * zoom;
+            let (dw, dh) = (iw * k, ih * k);
+            let (left, top) = (p.x + p.w / 2.0 - ox * dw, p.y + p.h / 2.0 - oy * dh);
+            let dest = D2D_RECT_F { left, top, right: left + dw, bottom: top + dh };
+            let Ok(clip) = self.g.d2d_factory.CreateRoundedRectangleGeometry(&D2D1_ROUNDED_RECT { rect: p.d2d(), radiusX: radius * self.s, radiusY: radius * self.s }) else { return false };
+            let params = D2D1_LAYER_PARAMETERS1 {
+                contentBounds: p.d2d(),
+                geometricMask: std::mem::ManuallyDrop::new(Some(clip.into())),
+                maskAntialiasMode: D2D1_ANTIALIAS_MODE_PER_PRIMITIVE,
+                maskTransform: windows::Foundation::Numerics::Matrix3x2::identity(),
+                opacity: 1.0,
+                opacityBrush: std::mem::ManuallyDrop::new(None),
+                layerOptions: D2D1_LAYER_OPTIONS1_NONE,
+            };
+            self.dc.PushLayer(&params, None);
+            // (shrunk: smoothed well; blown up: smoothly too, but quicker)
+            let mode = if k < 1.0 { D2D1_INTERPOLATION_MODE_HIGH_QUALITY_CUBIC } else { D2D1_INTERPOLATION_MODE_LINEAR };
+            self.dc.DrawBitmap(&bmp, Some(&dest), 1.0, mode, None, None);
+            self.dc.PopLayer();
+            let _ = std::mem::ManuallyDrop::into_inner(params.geometricMask);
+        }
+        true
+    }
+
+    /// A box with round corners, its outline only.
+    pub fn outline(&self, r: Rect, radius: f32, width: f32, c: Color) {
+        let p = self.px(r);
+        unsafe {
+            let Ok(br) = brush(self.dc, c) else { return };
+            let rr = D2D1_ROUNDED_RECT { rect: p.d2d(), radiusX: radius * self.s, radiusY: radius * self.s };
+            self.dc.DrawRoundedRectangle(&rr, &br, width * self.s, None);
+        }
+    }
+
+    /// A soft light: an ellipse (`rx` by `ry` about `cx`, `cy`) of `c` in its middle, fading to nothing at its edge.
+    pub fn radial(&self, cx: f32, cy: f32, rx: f32, ry: f32, c: Color) {
+        let s = self.s;
+        unsafe {
+            let stops = [
+                D2D1_GRADIENT_STOP { position: 0.0, color: D2D1_COLOR_F { r: c.0, g: c.1, b: c.2, a: c.3 } },
+                D2D1_GRADIENT_STOP { position: 0.45, color: D2D1_COLOR_F { r: c.0, g: c.1, b: c.2, a: c.3 * 0.45 } },
+                D2D1_GRADIENT_STOP { position: 1.0, color: D2D1_COLOR_F { r: c.0, g: c.1, b: c.2, a: 0.0 } },
+            ];
+            let Ok(coll) = self.dc.CreateGradientStopCollection(&stops, D2D1_COLOR_SPACE_SRGB, D2D1_COLOR_SPACE_SRGB, D2D1_BUFFER_PRECISION_8BPC_UNORM, D2D1_EXTEND_MODE_CLAMP, D2D1_COLOR_INTERPOLATION_MODE_STRAIGHT) else { return };
+            let Ok(coll) = windows::core::Interface::cast::<ID2D1GradientStopCollection>(&coll) else { return };
+            let props = D2D1_RADIAL_GRADIENT_BRUSH_PROPERTIES { center: D2D_POINT_2F { x: cx * s, y: cy * s }, gradientOriginOffset: D2D_POINT_2F { x: 0.0, y: 0.0 }, radiusX: rx * s, radiusY: ry * s };
+            let Ok(br) = self.dc.CreateRadialGradientBrush(&props, None, &coll) else { return };
+            self.dc.FillEllipse(&D2D1_ELLIPSE { point: D2D_POINT_2F { x: cx * s, y: cy * s }, radiusX: rx * s, radiusY: ry * s }, &br);
+        }
+    }
+
+    /// A shape given as an SVG path (logical px), filled, and its outline stroked when asked.
+    pub fn path(&self, d: &str, fill: Color, stroke: Option<(Color, f32)>) {
+        let Ok(g) = crate::icons::path_of(&self.g.d2d_factory, d, true) else { return };
+        unsafe {
+            let mut base = windows::Foundation::Numerics::Matrix3x2::default();
+            self.dc.GetTransform(&mut base);
+            self.dc.SetTransform(&(windows::Foundation::Numerics::Matrix3x2 { M11: self.s, M12: 0.0, M21: 0.0, M22: self.s, M31: 0.0, M32: 0.0 } * base));
+            if let Ok(b) = brush(self.dc, fill) {
+                self.dc.FillGeometry(&g, &b, None);
+            }
+            if let Some((c, w)) = stroke {
+                if let Ok(b) = brush(self.dc, c) {
+                    self.dc.DrawGeometry(&g, &b, w, None);
+                }
+            }
+            self.dc.SetTransform(&base);
+        }
+    }
+
+    /// A box with round corners, its edge dashed.
+    pub fn dashed(&self, r: Rect, radius: f32, width: f32, c: Color) {
+        let p = self.px(r);
+        unsafe {
+            let props = D2D1_STROKE_STYLE_PROPERTIES1 {
+                startCap: D2D1_CAP_STYLE_ROUND,
+                endCap: D2D1_CAP_STYLE_ROUND,
+                dashCap: D2D1_CAP_STYLE_ROUND,
+                lineJoin: D2D1_LINE_JOIN_ROUND,
+                miterLimit: 1.0,
+                dashStyle: D2D1_DASH_STYLE_CUSTOM,
+                dashOffset: 0.0,
+                transformType: D2D1_STROKE_TRANSFORM_TYPE_NORMAL,
+            };
+            let Ok(style) = self.g.d2d_factory.CreateStrokeStyle(&props, Some(&[3.0, 3.0])) else { return };
+            let Ok(br) = brush(self.dc, c) else { return };
+            let rr = D2D1_ROUNDED_RECT { rect: p.d2d(), radiusX: radius * self.s, radiusY: radius * self.s };
+            self.dc.DrawRoundedRectangle(&rr, &br, width * self.s, &style);
+        }
+    }
+
     /// A picture whole, `h` tall and as wide as its proportion makes it (at most three times as wide), from `x`, centred on `cy`;
     /// how wide it went (none here yet: 0).
     pub fn picture_fit(&self, name: &str, x: f32, cy: f32, h: f32, draw: bool) -> f32 {
@@ -464,6 +704,22 @@ impl<'a> Painter<'a> {
         }
         bars_w(h)
     }
+}
+
+/// Three bars (and their lift) for something whose loudness alone is known (0..1): as tall as it is loud, quiet sound still standing
+/// up, wavering with the time `t`.
+pub fn loud_bars(loud: f32, t: f32) -> ([f32; 3], f32) {
+    let v = (loud.sqrt() * 1.6).min(1.0);
+    let parts = std::array::from_fn(|i| (v * (0.6 + 0.4 * (t * (7.0 + i as f32 * 2.3) + i as f32 * 1.9).sin())).max(0.25));
+    (parts, v * v * (0.55 + 0.45 * (t * 4.1).sin().max(0.0)))
+}
+
+/// how loud a thing is now, over its volume's fill: light, plain against the theme's colour
+pub const LIVE: Color = Color(1.0, 1.0, 1.0, 0.62);
+
+/// How far along its volume a peak (0..1) reads: as the ear hears it, so quiet sound still shows.
+pub fn live_level(peak: f32) -> f32 {
+    peak.clamp(0.0, 1.0).sqrt()
 }
 
 /// The three bars while paused: still, low.

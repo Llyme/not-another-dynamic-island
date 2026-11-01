@@ -11,6 +11,19 @@ use windows::Win32::UI::WindowsAndMessaging::*;
 pub const WM_LAUNCHER: u32 = WM_APP + 3;
 /// Win and a number (1..9, in wParam): the dock's app of that number
 pub const WM_DOCK_KEY: u32 = WM_APP + 7;
+/// a volume key pressed (the Volume Mixer bumps to show the new level)
+pub const WM_VOLUME_KEY: u32 = WM_APP + 8;
+/// Win + Ctrl + an arrow (wParam: 0 left, 1 up, 2 right, 3 down): the desktop that way on NADI's map
+pub const WM_DESK_KEY: u32 = WM_APP + 11;
+
+static DESK_KEYS: AtomicBool = AtomicBool::new(false);
+/// Ctrl held, as the keyboard says (not as Windows thinks after NADI's own presses)
+static CTRL_DOWN: AtomicBool = AtomicBool::new(false);
+
+/// Do Win + Ctrl + arrows follow NADI's map of the desktops?
+pub fn set_desk_keys(on: bool) {
+    DESK_KEYS.store(on, Ordering::Relaxed);
+}
 
 static ENABLED: AtomicBool = AtomicBool::new(false);
 static WIN_DOWN: AtomicBool = AtomicBool::new(false);
@@ -45,7 +58,15 @@ unsafe extern "system" fn hook(code: i32, wp: WPARAM, lp: LPARAM) -> LRESULT {
         let vk = k.vkCode as u16;
         let win = vk == VK_LWIN.0 || vk == VK_RWIN.0;
         let down = matches!(wp.0 as u32, WM_KEYDOWN | WM_SYSKEYDOWN);
+        if !injected && (vk == VK_LCONTROL.0 || vk == VK_RCONTROL.0 || vk == VK_CONTROL.0) {
+            CTRL_DOWN.store(down, Ordering::Relaxed);
+        }
         if !injected {
+            // (the volume keys: let through, and told)
+            if down && (vk == VK_VOLUME_UP.0 || vk == VK_VOLUME_DOWN.0 || vk == VK_VOLUME_MUTE.0) {
+                let to = NOTIFY.load(Ordering::Relaxed);
+                let _ = PostMessageW(HWND(to as *mut _), WM_VOLUME_KEY, WPARAM(0), LPARAM(0));
+            }
             if down {
                 if win {
                     if !WIN_DOWN.swap(true, Ordering::Relaxed) {
@@ -54,6 +75,20 @@ unsafe extern "system" fn hook(code: i32, wp: WPARAM, lp: LPARAM) -> LRESULT {
                     }
                 } else if WIN_DOWN.load(Ordering::Relaxed) {
                     OTHER.store(true, Ordering::Relaxed);
+                    // (Win + Ctrl + an arrow: NADI's map, not Windows' line)
+                    let ctrl = CTRL_DOWN.load(Ordering::Relaxed);
+                    let dir = match vk {
+                        x if x == VK_LEFT.0 => Some(0),
+                        x if x == VK_UP.0 => Some(1),
+                        x if x == VK_RIGHT.0 => Some(2),
+                        x if x == VK_DOWN.0 => Some(3),
+                        _ => None,
+                    };
+                    if let (true, Some(d)) = (ctrl && DESK_KEYS.load(Ordering::Relaxed), dir) {
+                        let to = NOTIFY.load(Ordering::Relaxed);
+                        let _ = PostMessageW(HWND(to as *mut _), WM_DESK_KEY, WPARAM(d), LPARAM(0));
+                        return LRESULT(1);
+                    }
                     // (Win and a number: the dock's app, not the taskbar's)
                     if ENABLED.load(Ordering::Relaxed) && (0x31..=0x39).contains(&vk) {
                         let to = NOTIFY.load(Ordering::Relaxed);

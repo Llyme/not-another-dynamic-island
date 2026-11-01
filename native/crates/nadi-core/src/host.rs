@@ -1032,6 +1032,15 @@ impl Host {
                 }
             }
         }
+        // (a picture it had pasted, let go of: its file gone from its folder; only those, never another of its files)
+        if let Some(f) = o.get("forget").and_then(|v| v.as_str()) {
+            let ok = f.starts_with("paste-") && f.ends_with(".png") && !f.contains(['/', '\\', ':']) && !f.contains("..");
+            if ok && !self.dry {
+                if let Some(d) = crate::paths::plugins_dir() {
+                    let _ = std::fs::remove_file(d.join(&id).join(f));
+                }
+            }
+        }
         if let Some(q) = o.get("quiet").and_then(|q| q.as_bool()) {
             if self.plugins[i].quiet != q {
                 self.plugins[i].quiet = q;
@@ -1181,13 +1190,18 @@ impl Host {
                 }
                 // (a button pressed or a tab sent on waits for the browser: on a thread, and the answer is the plugin's next event)
                 if let Some(results) = self.plugins[i].slot.as_ref().map(|s| s.results.clone()) {
-                    for op in ["press", "go"] {
+                    for op in ["press", "go", "scroll"] {
                         let Some(r) = b.get(op).cloned() else { continue };
                         let q = results.clone();
                         std::thread::spawn(move || {
                             let s = |k: &str| r[k].as_str().unwrap_or("").to_string();
                             let ext = sensors::browsersensor::state();
-                            let ok = if op == "press" { ext.covers(&s("browser")) && ext.press(&s("browser"), &s("label")) } else { ext.covers(&s("browser")) && ext.navigate(&s("browser"), &s("title"), &s("url")) };
+                            let ok = ext.covers(&s("browser"))
+                                && match op {
+                                    "press" => ext.press(&s("browser"), &s("label")),
+                                    "scroll" => ext.scroll(&s("browser"), &s("title"), &s("heading")),
+                                    _ => ext.navigate(&s("browser"), &s("title"), &s("url")),
+                                };
                             let mut q = q.lock().unwrap();
                             q.push(json!({ "op": op, "id": s("id"), "ok": ok }));
                             if q.len() > 16 {
@@ -1202,6 +1216,12 @@ impl Host {
             if let Some(path) = o.get("reveal").and_then(|r| r.as_str()) {
                 if self.plugins[i].slot.as_ref().is_some_and(|s| s.revealable.contains(path)) {
                     crate::win::reveal_file(path);
+                }
+            }
+            // (a finished download opened, in the program that opens it: only one it was told of)
+            if let Some(path) = o.get("open_file").and_then(|r| r.as_str()) {
+                if self.plugins[i].slot.as_ref().is_some_and(|s| s.revealable.contains(path)) {
+                    crate::win::open_url(path);
                 }
             }
         }

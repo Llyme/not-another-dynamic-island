@@ -309,6 +309,36 @@ impl ExtState {
         ok
     }
 
+    /// Scroll the tab (found by its title) to a heading of its page, by the heading's words: a guide followed step by step from the
+    /// island. `true` when the page found it.
+    pub fn scroll(&self, browser: &str, title: &str, heading: &str) -> bool {
+        let b = browser_of(browser);
+        let want = title.trim().to_lowercase();
+        let (tx, rx) = mpsc::channel();
+        let id = {
+            let mut g = self.inner.lock().unwrap();
+            let found = g
+                .pages
+                .iter()
+                .filter(|((c, _), _)| g.conns.get(c).map_or(false, |c| c.browser == b))
+                .filter(|(_, p)| clean_title(&p.snap.title).trim().to_lowercase() == want)
+                .max_by_key(|(_, p)| (p.active, p.snap.version))
+                .map(|((c, tab), _)| (*c, *tab));
+            let Some((conn_id, tab)) = found else { return false };
+            let Some(conn) = g.conns.get(&conn_id) else { return false };
+            if conn.tx.send(json!({ "t": "scroll", "id": g.next + 1, "tab": tab, "heading": heading }).to_string()).is_err() {
+                return false;
+            }
+            g.next += 1;
+            let id = g.next;
+            g.waiters.insert(id, tx);
+            id
+        };
+        let ok = rx.recv_timeout(Duration::from_millis(1500)).unwrap_or(false);
+        self.inner.lock().unwrap().waiters.remove(&id);
+        ok
+    }
+
     /// The cards whose tab went to another page since last asked: (browser, title before, title now).
     pub fn take_moves(&self) -> Vec<(String, String, String)> {
         std::mem::take(&mut self.inner.lock().unwrap().moves)
@@ -754,7 +784,7 @@ fn handle(ext_state: &Arc<ExtState>, id: &mut u64, tx: &mpsc::Sender<String>, te
                 let _ = w.send(data);
             }
         }
-        "pressed" | "went" => {
+        "pressed" | "went" | "scrolled" => {
             let wid = v.get("id").and_then(|x| x.as_u64()).unwrap_or(0);
             let ok = v.get("ok").and_then(|x| x.as_bool()).unwrap_or(false);
             if let Some(w) = ext.inner.lock().unwrap().waiters.get(&wid) {

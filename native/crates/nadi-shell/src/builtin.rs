@@ -282,6 +282,11 @@ pub struct Builtins {
     /// the network (Wi-Fi in reach, Bluetooth paired, online), and the radios as last drawn
     pub net: crate::net::State,
     pub radios: crate::radios::States,
+    /// the network asking for its password now (its field under its row), and a field to open by itself
+    pub net_ask: Option<String>,
+    /// where the next new desktop goes on the map (its column and row), when one was asked for at a place
+    pub desk_pending: Option<(i32, i32)>,
+    pub focus: Option<String>,
     /// the sound's devices (outputs, microphones), the microphone's volume, each program's own (once a second)
     outputs: Vec<crate::audiodev::Device>,
     inputs: Vec<crate::audiodev::Device>,
@@ -296,7 +301,7 @@ pub struct Builtins {
 
 impl Builtins {
     pub fn new() -> Builtins {
-        Builtins { windows: Vec::new(), order: Vec::new(), scanned: None, volume: crate::volume::get(), usage: Default::default(), used_at: None, audio: crate::appaudio::AppAudio::new(), sounding: Default::default(), looks: 0, history: Default::default(), flashing: Default::default(), numbers: false, sys: Default::default(), net: Default::default(), radios: Default::default(), outputs: Vec::new(), inputs: Vec::new(), mic: None, app_volumes: Vec::new() }
+        Builtins { windows: Vec::new(), order: Vec::new(), scanned: None, volume: crate::volume::get(), usage: Default::default(), used_at: None, audio: crate::appaudio::AppAudio::new(), sounding: Default::default(), looks: 0, history: Default::default(), flashing: Default::default(), numbers: false, sys: Default::default(), net: Default::default(), radios: Default::default(), net_ask: None, desk_pending: None, focus: None, outputs: Vec::new(), inputs: Vec::new(), mic: None, app_volumes: Vec::new() }
     }
 
     /// Look at the windows again (at most twice a second); true when what the dock shows changed.
@@ -480,7 +485,9 @@ impl Builtins {
             n * crate::blocks::APPWIN_W + (n - 1.0) * 8.0
         };
         let total: f32 = groups.iter().map(per).sum::<f32>() + (groups.len().max(1) - 1) as f32 * 16.0;
-        let width = (2.0 * 16.0 + total).clamp(360.0, 940.0);
+        // (the windows at their own size; the panel as wide as they are)
+        // (and room at both sides for the ring round the window you were in)
+        let width = (2.0 * 16.0 + 6.0 + total).clamp(200.0, 940.0);
         json!({
             "peek": { "dock": { "items": items, "numbers": self.numbers } },
             "panel": { "width": width, "body": [{ "kind": "appwindows", "groups": groups, "pins": pins }] },
@@ -494,40 +501,45 @@ impl Builtins {
         let (vol, muted) = self.volume.unwrap_or((0.0, true));
         let pct = (vol * 100.0).round() as i32;
         let vol_icon = if muted || vol <= 0.0 { "volume-x" } else { "volume" };
-        // (restart and shut down are held until their ring fills)
-        let power = |id: &str, icon: &str, label: &str| {
-            let held = matches!(id, "restart" | "shutdown");
-            json!({ "icon": icon, "label": label, "action": format!("power:{id}"), "hold": held, "tip": if held { format!("Hold to {label}") } else { label.to_string() } })
-        };
         let headset = self.outputs.iter().find(|d| d.on).is_some_and(|d| crate::audiodev::is_headset(&d.name));
         let slider_icon = if muted || vol <= 0.0 { "volume-x" } else if headset { "headphones" } else { "volume" };
         let pc = |v: f32| format!("{}%", (v * 100.0).round() as i32);
-        let mut body = vec![json!({ "kind": "slider", "label": "Volume", "icon": slider_icon, "value": vol, "muted": muted, "text": if muted { "Muted".to_string() } else { format!("{pct}%") }, "action": "volume", "press": "mute" })];
+        let peaks = self.audio.peaks();
+        let playing = |k: &str| peaks.get(k).is_some_and(|v| *v > 0.001);
+        let mut body = Vec::new();
         // (where the sound goes: each output a chip, the one used filled)
         if self.outputs.len() > 1 {
             let chips: Vec<Value> = self.outputs.iter().map(|d| json!({ "icon": if crate::audiodev::is_headset(&d.name) { "headphones" } else { "speaker" }, "text": d.name, "on": d.on, "action": format!("out:{}", d.id) })).collect();
             body.push(json!({ "kind": "chips", "items": chips }));
         }
-        // (each program that played lately: its own volume, under its picture)
-        for a in self.app_volumes.iter().take(5) {
-            body.push(json!({ "kind": "slider", "image": format!("exe:{}", a.key), "muted": a.muted, "value": a.volume, "text": if a.muted { "Muted".to_string() } else { pc(a.volume) }, "action": format!("appvol:{}", a.key), "press": format!("appmute:{}", a.key) }));
+        body.push(json!({ "kind": "slider", "icon": slider_icon, "value": vol, "muted": muted, "text": format!("{pct}%"), "action": "volume", "press": "mute", "meter": "master" }));
+        // (each program that played lately, the ones playing first: its own volume, its name over it)
+        let mut apps: Vec<&crate::appaudio::AppVolume> = self.app_volumes.iter().collect();
+        apps.sort_by_key(|a| !playing(&a.key));
+        if !apps.is_empty() {
+            body.push(json!({ "kind": "rule" }));
         }
-        // (the microphone: its volume; which one, when there are more)
-        if let Some((mv, mm)) = self.mic {
-            body.push(json!({ "kind": "slider", "icon": "mic", "value": mv, "muted": mm, "text": if mm { "Muted".to_string() } else { pc(mv) }, "action": "micvol", "press": "micmute" }));
+        for a in apps.into_iter().take(6) {
+            body.push(json!({ "kind": "slider", "image": format!("exe:{}", a.key), "name": crate::winlist::app_name(&a.key), "playing": playing(&a.key), "muted": a.muted, "value": a.volume, "text": pc(a.volume), "action": format!("appvol:{}", a.key), "press": format!("appmute:{}", a.key), "meter": format!("app:{}", a.key) }));
+        }
+        // (the microphones, and the one used: its volume)
+        if self.mic.is_some() || self.inputs.len() > 1 {
+            body.push(json!({ "kind": "rule" }));
         }
         if self.inputs.len() > 1 {
             let chips: Vec<Value> = self.inputs.iter().map(|d| json!({ "icon": "mic", "text": d.name, "on": d.on, "action": format!("in:{}", d.id) })).collect();
             body.push(json!({ "kind": "chips", "items": chips }));
         }
-        body.extend([
-            json!({ "kind": "controls", "items": [power("lock", "lock", "Lock"), power("sleep", "moon", "Sleep"), power("restart", "refresh", "Restart"), power("shutdown", "power", "Shut Down"), { "icon": "gear", "label": "Settings", "action": "settings" }] }),
-            json!({ "kind": "buttons", "items": [{ "label": "Taskbar Icons", "action": "tray" }, { "label": "NADI Settings", "action": "nadi_settings" }] }),
-        ]);
+        if let Some((mv, mm)) = self.mic {
+            body.push(json!({ "kind": "slider", "icon": "mic", "value": mv, "muted": mm, "text": pc(mv), "action": "micvol", "press": "micmute", "meter": "mic" }));
+        }
+        body.push(json!({ "kind": "buttons", "items": [{ "icon": "gear", "label": "Sound Settings", "action": "sound_settings" }] }));
+        let any = peaks.values().any(|v| *v > 0.001);
         json!({
-            "peek": { "icon": vol_icon, "text": if muted { "Muted".to_string() } else { format!("{pct}%") }, "label": format!("Volume {pct}%") },
+            // (at rest: its icon and a small line as long as its volume, how loud it is now faint over it; muted, its icon alone, red)
+            "peek": { "icon": vol_icon, "level": { "value": vol, "muted": muted, "meter": "master", "playing": any && !muted }, "label": format!("Volume {pct}%") },
             "panel": { "body": body },
-            "tip": format!("Volume {pct}%"),
+            "tip": if muted { "Muted".to_string() } else { format!("Volume {pct}%") },
         })
     }
 
@@ -644,11 +656,56 @@ impl Builtins {
             crate::sysw::open_drive(l);
             return (Effect::None, false);
         }
+        if let Some(l) = action.strip_prefix("driveterm:").and_then(|l| l.chars().next()) {
+            crate::sysw::drive_terminal(l);
+            return (Effect::None, false);
+        }
+        if let Some(l) = action.strip_prefix("driveprops:").and_then(|l| l.chars().next()) {
+            crate::sysw::drive_properties(l);
+            return (Effect::None, false);
+        }
         if let Some(l) = action.strip_prefix("eject:").and_then(|l| l.chars().next()) {
             std::thread::spawn(move || crate::sysw::eject(l));
             return (Effect::None, false);
         }
-        // a desktop shown; a language to type in
+        // a desktop shown, or a new one made; a language to type in
+        // (the map: a card dropped at a place (one there swaps with it); a new desktop at a place; the map to a place)
+        if let Some((id, c, r)) = action.strip_prefix("deskmove:").and_then(|x| {
+            let mut p = x.rsplitn(3, ':');
+            let r = p.next()?.parse::<i32>().ok()?;
+            let c = p.next()?.parse::<i32>().ok()?;
+            Some((p.next()?.to_string(), c, r))
+        }) {
+            let from = cfg.desk_map.get(&id).copied();
+            if let Some(other) = cfg.desk_map.iter().find(|(k, v)| **v == (c, r) && **k != id).map(|(k, _)| k.clone()) {
+                if let Some(f) = from {
+                    cfg.desk_map.insert(other, f);
+                }
+            }
+            cfg.desk_map.insert(id, (c, r));
+            return (Effect::Changed, true);
+        }
+        if let Some((c, r)) = action.strip_prefix("desknew:").and_then(|x| x.split_once(':')).and_then(|(c, r)| Some((c.parse::<i32>().ok()?, r.parse::<i32>().ok()?))) {
+            self.desk_pending = Some((c, r));
+            crate::sysw::new_desk();
+            return (Effect::None, false);
+        }
+        if let Some((c, r)) = action.strip_prefix("deskgo:").and_then(|x| x.split_once(':')).and_then(|(c, r)| Some((c.parse::<i32>().ok()?, r.parse::<i32>().ok()?))) {
+            crate::blocks::desk_go(c, r);
+            return (Effect::None, false);
+        }
+        if action == "desk:new" {
+            crate::sysw::new_desk();
+            return (Effect::None, false);
+        }
+        if let Some((i, h)) = action.strip_prefix("deskwin:").and_then(|r| r.split_once(':')).and_then(|(i, h)| Some((i.parse::<usize>().ok()?, h.parse::<isize>().ok()?))) {
+            crate::sysw::show_window_on(self.sys.desk, i, h);
+            return (Effect::None, false);
+        }
+        if let Some(i) = action.strip_prefix("deskclose:").and_then(|i| i.parse::<usize>().ok()) {
+            crate::sysw::close_desk(self.sys.desk, i);
+            return (Effect::None, false);
+        }
         if let Some(i) = action.strip_prefix("desk:").and_then(|i| i.parse::<usize>().ok()) {
             crate::sysw::switch_desk(self.sys.desk, i);
             return (Effect::None, false);
@@ -704,9 +761,33 @@ impl Builtins {
             crate::net::poke();
             return (Effect::Changed, false);
         }
+        // (a network pressed: a saved one, or one with no password, joined at once; one with a password asks for it, under its row; one
+        // that signs in another way (a work network) opens Windows' Wi-Fi settings. Pressed again while it asks: it stops asking)
         if let Some(ssid) = action.strip_prefix("wifi:") {
-            crate::net::join(ssid);
-            return (Effect::None, false);
+            let Some(w) = self.net.wifi.iter().find(|w| w.ssid == ssid).cloned() else { return (Effect::None, false) };
+            if self.net_ask.as_deref() == Some(ssid) {
+                self.net_ask = None;
+                return (Effect::Changed, false);
+            }
+            self.net_ask = None;
+            match w.auth {
+                _ if w.known => crate::net::join(ssid),
+                crate::net::Auth::Open => crate::net::join_new(&w, None),
+                crate::net::Auth::Key(..) => {
+                    self.net_ask = Some(ssid.to_string());
+                    self.focus = Some(format!("wifipass:{ssid}"));
+                }
+                crate::net::Auth::Other => apps::launch_uri("ms-settings:network-wifi"),
+            }
+            return (Effect::Changed, false);
+        }
+        if let Some(ssid) = action.strip_prefix("wifipass:") {
+            let pass = args["text"].as_str().unwrap_or("").to_string();
+            if let Some(w) = self.net.wifi.iter().find(|w| w.ssid == ssid).cloned().filter(|_| !pass.is_empty()) {
+                self.net_ask = None;
+                crate::net::join_new(&w, Some(pass));
+            }
+            return (Effect::Changed, false);
         }
         if action == "btsettings" {
             apps::launch_uri("ms-settings:bluetooth");
@@ -751,6 +832,10 @@ impl Builtins {
             }
             "settings" => {
                 apps::launch_uri("ms-settings:");
+                (Effect::None, false)
+            }
+            "sound_settings" => {
+                apps::launch_uri("ms-settings:sound");
                 (Effect::None, false)
             }
             "tray" => {

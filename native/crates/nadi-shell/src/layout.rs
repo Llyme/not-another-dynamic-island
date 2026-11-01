@@ -202,7 +202,8 @@ pub fn layout(items: &[Item], width: f32, height: f32, m: Metrics, holes: &[(Edg
         let foot = |along: f32| along + 2.0 * m.fillet;
         // what each takes: its want, or a dot. Too many: the last (by rank) shrink to dots, then go; an open panel last of all (the
         // others give way to it), and then it narrows to what there is
-        let mut wants: Vec<f32> = row.iter().map(|i| i.want.max(depth)).collect();
+        // (at least as long as the edge is deep; one that says how deep it is (a square icon, floating or not), as long as it asks)
+        let mut wants: Vec<f32> = row.iter().map(|i| if i.across > 0.0 { i.want.max(1.0) } else { i.want.max(depth) }).collect();
         let mut dots = vec![false; row.len()];
         let mut on = vec![true; row.len()];
         let open: Vec<bool> = row.iter().map(|i| i.across > depth + 0.5).collect();

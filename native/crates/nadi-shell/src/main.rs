@@ -8,6 +8,7 @@
 mod apps;
 mod blocks;
 mod builtin;
+mod clip;
 mod context;
 mod aura;
 mod config;
@@ -128,6 +129,8 @@ fn run() -> windows::core::Result<()> {
                 WM_DISPLAYCHANGE | WM_DPICHANGED => fr.make_screens(),
                 keyhook::WM_LAUNCHER => fr.toggle_launcher(),
                 keyhook::WM_DOCK_KEY => fr.dock_key(wp.0),
+                keyhook::WM_VOLUME_KEY => fr.volume_key(),
+                keyhook::WM_DESK_KEY => fr.desk_key(wp.0),
                 m if m == shell_hook => fr.shell_event(wp.0, lp.0),
                 settings::WM_SETTINGS => fr.settings_messages(),
                 frame::WM_JOB => fr.jobs_done(),
@@ -201,6 +204,16 @@ fn run() -> windows::core::Result<()> {
                 fr.mouse_down(si, x, y);
             }
             WM_RBUTTONDOWN => {}
+            // (near a side of a panel: the arrow to resize it by)
+            WM_SETCURSOR => match fr.sizing_cursor() {
+                Some(c) => unsafe {
+                    if let Ok(h) = LoadCursorW(None, c) {
+                        SetCursor(h);
+                    }
+                    return Some(LRESULT(1));
+                },
+                None => return None,
+            },
             _ => return None,
         }
         Some(LRESULT(0))
@@ -255,6 +268,20 @@ fn watchdog(pid: u32) {
 }
 
 fn main() {
+    // (a panic: what and where, kept in NADI's folder, the newest last)
+    std::panic::set_hook(Box::new(|info| {
+        if let Some(p) = nadi_core::paths::data_dir().map(|d| d.join("crash.log")) {
+            use std::io::Write;
+            if std::fs::metadata(&p).is_ok_and(|m| m.len() > 200_000) {
+                let _ = std::fs::remove_file(&p);
+            }
+            if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(&p) {
+                let t = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_secs());
+                let bt = std::backtrace::Backtrace::force_capture();
+                let _ = writeln!(f, "{t} {} {info}\n{bt}\n", env!("CARGO_PKG_VERSION"));
+            }
+        }
+    }));
     unsafe {
         let _ = SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
         let _ = CoInitializeEx(None, COINIT_APARTMENTTHREADED);
