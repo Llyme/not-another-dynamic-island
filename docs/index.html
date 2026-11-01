@@ -12,39 +12,39 @@
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Outfit:wght@500;600;700&display=swap" rel="stylesheet">
 <style>
-/* The page is a pretend Windows screen with NADI on it: a wallpaper, desktop icons, windows, a taskbar, and NADI's widgets merged
-   into the screen's edges. Everything is drawn here; nothing to scroll (on a phone, the screen shrinks to fit, and the download
-   sits under it). */
+/* The page is a pretend Windows screen with NADI running on it. NADI's part is drawn the way the app draws it: its widgets are one
+   liquid (a metaball, drawn on the graphics card with the app's own shader), merged into the screen's edges, sized and sprung with
+   the app's own numbers; what is in them is drawn over the liquid. */
 :root {
   color-scheme: dark;
   --acc: #5ac88c;
   --two: #e8b04a;
-  --claude: #e08a5a;
+  --claude: #d97757;
   --red: #e87a7a;
   --teal: #5ac8e6;
+  --blue: #4f8ff0;
   --text: #f2f2f5;
-  --dim: #8e8e96;
-  --mute: #5c5c64;
-  --track: #141519;
-  --lit: #1f1f25;
-  --spring: cubic-bezier(.3, 1.32, .5, 1);
-  --soft: cubic-bezier(.2, .9, .3, 1);
+  --dim: #9a9aa4;
+  --track: #1b1b20;
+  --chosen: #34343b;
+  --lit: #26262b;
+  --tile: #161619;
   --tb: 46px;
 }
 * { box-sizing: border-box; }
-html, body { margin: 0; height: 100%; background: #000; color: var(--text); font-family: Inter, "Segoe UI", system-ui, sans-serif; font-size: 13px; }
+html, body { margin: 0; height: 100%; background: #000; color: var(--text); font-family: Inter, "Segoe UI", system-ui, sans-serif; font-size: 12.5px; }
 body { overflow: hidden; }
 body.small { overflow: auto; height: auto; }
 button { font: inherit; color: inherit; background: none; border: 0; padding: 0; cursor: default; }
 a { color: inherit; }
 #wrap { position: relative; width: 100vw; height: 100vh; overflow: hidden; }
 #screen { position: absolute; left: 0; top: 0; width: 100vw; height: 100vh; overflow: hidden; transform-origin: 0 0; user-select: none; -webkit-user-select: none; touch-action: none; }
+body.small #screen { touch-action: pan-y; }
 .ic { display: inline-block; flex: none; }
 .ic svg { display: block; width: 100%; height: 100%; }
 .tab { font-variant-numeric: tabular-nums; }
 .out { font-family: Outfit, Inter, sans-serif; }
 
-/* the wallpaper: a soft bloom of blues */
 #wall { position: absolute; inset: 0; background:
   radial-gradient(42% 52% at 68% 56%, #8fb6ff 0%, #5d8ff0 22%, transparent 60%),
   radial-gradient(60% 70% at 74% 62%, #2f5fd0 0%, transparent 65%),
@@ -52,8 +52,7 @@ a { color: inherit; }
   radial-gradient(70% 80% at 12% 6%, #142456 0%, transparent 70%),
   linear-gradient(160deg, #0b1534, #13275c 55%, #091128); }
 
-/* desktop icons */
-#icons { position: absolute; left: 52px; top: 54px; display: flex; flex-direction: column; gap: 6px; z-index: 2; }
+#icons { position: absolute; left: 54px; top: 54px; display: flex; flex-direction: column; gap: 6px; z-index: 2; }
 .dk { width: 84px; padding: 8px 4px 6px; border-radius: 6px; display: flex; flex-direction: column; align-items: center; gap: 6px; font-size: 11.5px; color: #fff; text-shadow: 0 1px 3px #000c; text-align: center; line-height: 1.25; }
 .dk:hover { background: #ffffff1a; }
 .dk .ib { width: 44px; height: 44px; border-radius: 11px; display: grid; place-items: center; box-shadow: 0 6px 16px #0006; color: #fff; }
@@ -61,7 +60,7 @@ a { color: inherit; }
 
 /* windows */
 #wins { position: absolute; inset: 0; z-index: 5; pointer-events: none; }
-.win { position: absolute; pointer-events: auto; display: flex; flex-direction: column; background: #1e1f25f2; border: 1px solid #ffffff16; border-radius: 9px; box-shadow: 0 24px 60px #0009, 0 2px 8px #0005; overflow: hidden; z-index: 10; transition: opacity .18s, transform .22s var(--soft); backdrop-filter: blur(24px); -webkit-backdrop-filter: blur(24px); }
+.win { position: absolute; pointer-events: auto; display: flex; flex-direction: column; background: #1e1f25f2; border: 1px solid #ffffff16; border-radius: 9px; box-shadow: 0 24px 60px #0009, 0 2px 8px #0005; overflow: hidden; transition: opacity .18s, transform .22s cubic-bezier(.2,.9,.3,1); backdrop-filter: blur(24px); -webkit-backdrop-filter: blur(24px); }
 .win.gone { opacity: 0; transform: translateY(16px) scale(.96); pointer-events: none; }
 .wbar { height: 34px; flex: none; display: flex; align-items: center; padding-left: 12px; gap: 9px; font-size: 12px; color: #d6d6dc; }
 .wbar .ic { width: 15px; height: 15px; }
@@ -74,13 +73,12 @@ a { color: inherit; }
 .wbody::-webkit-scrollbar { width: 10px; }
 .wbody::-webkit-scrollbar-thumb { background: #ffffff22; border-radius: 5px; border: 3px solid transparent; background-clip: padding-box; }
 
-/* the taskbar */
-#taskbar { position: absolute; left: 0; right: 0; bottom: 0; height: var(--tb); z-index: 40; background: #1c1d24e0; border-top: 1px solid #ffffff10; backdrop-filter: blur(30px) saturate(1.4); -webkit-backdrop-filter: blur(30px) saturate(1.4); display: flex; align-items: center; justify-content: center; gap: 4px; }
+#taskbar { position: absolute; left: 0; right: 0; bottom: 0; height: var(--tb); z-index: 40; background: #1c1d24e0; border-top: 1px solid #ffffff10; backdrop-filter: blur(30px) saturate(1.4); -webkit-backdrop-filter: blur(30px) saturate(1.4); display: flex; align-items: center; justify-content: center; }
 .tk { position: relative; width: 40px; height: 40px; border-radius: 6px; display: grid; place-items: center; }
 .tk:hover { background: #ffffff12; }
 .tk .ib { width: 24px; height: 24px; border-radius: 6px; display: grid; place-items: center; color: #fff; }
 .tk .ib .ic { width: 15px; height: 15px; }
-.tk::after { content: ""; position: absolute; bottom: 2px; left: 50%; width: 0; height: 3px; border-radius: 2px; background: #9a9aa6; transform: translateX(-50%); transition: width .2s var(--soft); }
+.tk::after { content: ""; position: absolute; bottom: 2px; left: 50%; width: 0; height: 3px; border-radius: 2px; background: #9a9aa6; transform: translateX(-50%); transition: width .2s; }
 .tk.run::after { width: 6px; }
 .tk.front::after { width: 16px; background: var(--acc); }
 #tray { position: absolute; right: 8px; top: 0; bottom: 0; display: flex; align-items: center; gap: 2px; }
@@ -89,172 +87,206 @@ a { color: inherit; }
 #tray .tt .ic { width: 15px; height: 15px; }
 #clock { text-align: right; line-height: 1.35; }
 
-/* NADI: each widget a piece of black merged into its edge, with a fillet each side where it meets the edge */
+/* NADI: the liquid under, what is in each widget over it */
 #nadi { position: absolute; inset: 0; z-index: 50; pointer-events: none; }
-.w { position: absolute; background: #000; pointer-events: auto; --r: 17px; --f: 9px;
-  transition: left .42s var(--spring), top .42s var(--spring), width .42s var(--spring), height .42s var(--spring), border-radius .32s var(--soft), box-shadow .4s; }
-.w.open, .w.ban { --r: 26px; --f: 12px; }
-.w.sw { transition-duration: .3s, .3s, .3s, .3s, .32s, .4s; }
-.w::before, .w::after { content: ""; position: absolute; width: var(--f); height: var(--f); pointer-events: none; transition: width .3s, height .3s; }
-.e-top { border-radius: 0 0 var(--r) var(--r); }
-.e-top::before { top: 0; left: calc(-1 * var(--f) + .5px); background: radial-gradient(circle at 0 100%, transparent calc(var(--f) - .5px), #000 var(--f)); }
-.e-top::after { top: 0; right: calc(-1 * var(--f) + .5px); background: radial-gradient(circle at 100% 100%, transparent calc(var(--f) - .5px), #000 var(--f)); }
-.e-bottom { border-radius: var(--r) var(--r) 0 0; }
-.e-bottom::before { bottom: 0; left: calc(-1 * var(--f) + .5px); background: radial-gradient(circle at 0 0, transparent calc(var(--f) - .5px), #000 var(--f)); }
-.e-bottom::after { bottom: 0; right: calc(-1 * var(--f) + .5px); background: radial-gradient(circle at 100% 0, transparent calc(var(--f) - .5px), #000 var(--f)); }
-.e-left { border-radius: 0 var(--r) var(--r) 0; }
-.e-left::before { left: 0; top: calc(-1 * var(--f) + .5px); background: radial-gradient(circle at 100% 0, transparent calc(var(--f) - .5px), #000 var(--f)); }
-.e-left::after { left: 0; bottom: calc(-1 * var(--f) + .5px); background: radial-gradient(circle at 100% 100%, transparent calc(var(--f) - .5px), #000 var(--f)); }
-.e-right { border-radius: var(--r) 0 0 var(--r); }
-.e-right::before { right: 0; top: calc(-1 * var(--f) + .5px); background: radial-gradient(circle at 0 0, transparent calc(var(--f) - .5px), #000 var(--f)); }
-.e-right::after { right: 0; bottom: calc(-1 * var(--f) + .5px); background: radial-gradient(circle at 0 100%, transparent calc(var(--f) - .5px), #000 var(--f)); }
-.w.gone::before, .w.gone::after { width: 0; height: 0; }
-.w.drag { border-radius: 999px !important; transition: width .3s var(--spring), height .3s var(--spring), border-radius .2s; box-shadow: 0 14px 34px #000a; z-index: 5; }
-.w.drag::before, .w.drag::after { display: none; }
-.clip { position: absolute; inset: 0; border-radius: inherit; overflow: hidden; }
-.peek { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; gap: 8px; padding: 0 14px; white-space: nowrap; font-weight: 600; font-size: 12.5px; transition: opacity .22s .1s; }
-.v .peek { flex-direction: column; padding: 10px 0; gap: 7px; }
-.w.open .peek, .w.ban .peek, .w.gone .peek { opacity: 0; transition: opacity .1s; }
-.body, .bnr { position: absolute; left: 0; top: 0; opacity: 0; pointer-events: none; transition: opacity .12s; }
-.e-bottom .body, .e-bottom .bnr { top: auto; bottom: 0; }
-.e-right .body, .e-right .bnr { left: auto; right: 0; }
-.w.open .body, .w.ban .bnr { opacity: 1; pointer-events: auto; transition: opacity .26s .14s; }
-.body { padding: 14px; display: flex; flex-direction: column; gap: 12px; }
+#liquid { position: absolute; left: 0; top: 0; }
+.wc { position: absolute; pointer-events: auto; overflow: hidden; }
+.wc.solid { background: #000; }
+.pk { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; gap: 8px; padding: 0 12px; white-space: nowrap; font-weight: 600; font-size: 12.5px; }
+.wc.v .pk { flex-direction: column; padding: 0; gap: 6px; }
+.pb { position: absolute; left: 0; top: 0; padding: 16px; display: flex; flex-direction: column; gap: 12px; }
+.e-bottom .pb { top: auto; bottom: 0; }
+.e-right .pb { left: auto; right: 0; }
 #meas { position: absolute; left: -9999px; top: 0; visibility: hidden; }
-#meas.h { display: inline-flex; align-items: center; gap: 8px; padding: 0 14px; height: 38px; white-space: nowrap; font-weight: 600; font-size: 12.5px; }
-#meas.vv { display: flex; flex-direction: column; align-items: center; gap: 7px; padding: 10px 0; width: 40px; font-weight: 600; font-size: 12.5px; }
+#meas.h { display: inline-flex; align-items: center; gap: 8px; padding: 0 12px; height: 32px; white-space: nowrap; font-weight: 600; font-size: 12.5px; }
+#meas.vv { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 6px; width: 40px; font-weight: 600; font-size: 12.5px; }
+.dim { color: var(--dim); font-weight: 500; }
 
-/* what goes in them */
-.dot { width: 6px; height: 6px; border-radius: 3px; background: var(--acc); flex: none; }
-.dot.pulse { animation: pulse 1.6s ease-in-out infinite; }
+/* peeks */
+.page { width: 24px; height: 26px; border-radius: 6px; background: #26262b; position: relative; overflow: hidden; flex: none; }
+.page i { position: absolute; left: 0; right: 0; top: 0; height: 8px; font-style: normal; font-size: 5.5px; font-weight: 700; color: #04130b; text-align: center; line-height: 8px; }
+.page b { position: absolute; left: 0; right: 0; bottom: 2px; text-align: center; font-size: 12px; font-weight: 700; font-family: Outfit, sans-serif; }
+.pdot { width: 6px; height: 6px; border-radius: 3px; background: var(--acc); flex: none; }
+.pdot.pulse { animation: pulse 1.6s ease-in-out infinite; }
 @keyframes pulse { 50% { transform: scale(1.5); opacity: .55; } }
-.bars { display: flex; gap: 2px; align-items: flex-end; height: 13px; }
-.bars i { display: block; width: 3px; height: 4px; border-radius: 2px; background: var(--acc); animation: bar .8s ease-in-out infinite alternate; }
-.bars i:nth-child(2) { animation-delay: -.5s; animation-duration: .7s; }
-.bars i:nth-child(3) { animation-delay: -.2s; animation-duration: .9s; }
-.bars.still i { animation: none; height: 4px; background: var(--mute); }
-@keyframes bar { to { height: 13px; } }
-.mq { max-width: 120px; overflow: hidden; -webkit-mask: linear-gradient(90deg, #000 85%, transparent); mask: linear-gradient(90deg, #000 85%, transparent); }
-.mq.fits { -webkit-mask: none; mask: none; }
-.mq > span { display: inline-block; }
-.mq > span.go { animation: mq var(--d, 6s) ease-in-out infinite alternate; }
-@keyframes mq { 0%, 18% { transform: translateX(0); } 82%, 100% { transform: translateX(var(--x)); } }
-.burst { color: var(--claude); }
-.burst.spin .ic { animation: spin 3s linear infinite; }
-@keyframes spin { to { transform: rotate(360deg); } }
+.cv { width: 24px; height: 24px; border-radius: 6px; background: #26262b; display: grid; place-items: center; color: #d6d6dc; flex: none; overflow: hidden; }
+.two { display: flex; flex-direction: column; line-height: 1.2; }
+.two small { font-size: 11px; color: var(--dim); font-weight: 500; }
+.viz { display: flex; gap: 2px; align-items: center; height: 14px; }
+.viz i { display: block; width: 3px; height: 6px; border-radius: 2px; background: currentColor; animation: viz .9s ease-in-out infinite alternate; }
+.viz i:nth-child(2) { animation-duration: .7s; }
+.viz i:nth-child(3) { animation-duration: 1.1s; }
+.viz i:nth-child(4) { animation-duration: .8s; }
+.viz.still i { animation: none; height: 4px; opacity: .5; }
+@keyframes viz { to { height: 14px; } }
+.eyes { display: flex; gap: 9px; align-items: center; --ex: 0px; --ey: 0px; }
+.wc.v .eyes { flex-direction: column; gap: 10px; }
+.eyes i { display: block; width: 14px; height: 15px; border-radius: 8px; background: #fff; transform: translate(var(--ex), var(--ey)); transition: transform .12s, height .09s; }
+.wc.v .eyes i { width: 15px; height: 13px; }
+.eyes.blink i { height: 2px !important; }
+.eyes.happy i { height: 6px !important; border-radius: 8px 8px 2px 2px; }
 .flow { display: inline-block; width: 8px; height: 12px; overflow: hidden; -webkit-mask: linear-gradient(transparent, #000 30%, #000 70%, transparent); mask: linear-gradient(transparent, #000 30%, #000 70%, transparent); vertical-align: -1px; flex: none; }
 .flow svg { display: block; width: 8px; height: 24px; fill: none; stroke: currentColor; stroke-width: 1.7; stroke-linecap: round; stroke-linejoin: round; }
-.flow.dn svg { animation: fdn .7s linear infinite; }
-.flow.up svg { animation: fup .7s linear infinite; }
+.flow.dn svg { animation: fdn .625s linear infinite; }
+.flow.up svg { animation: fup .625s linear infinite; }
 @keyframes fdn { from { transform: translateY(-12px); } to { transform: translateY(-6px); } }
 @keyframes fup { from { transform: translateY(-6px); } to { transform: translateY(-12px); } }
-.eyes { display: flex; gap: 6px; align-items: center; --ex: 0px; --ey: 0px; }
-.v .eyes { flex-direction: column; gap: 5px; }
-.eyes i { display: block; width: 6px; height: 13px; border-radius: 3px; background: var(--text); transform: translate(var(--ex), var(--ey)); transition: transform .12s, height .1s; }
-.v .eyes i { width: 13px; height: 6px; }
-.eyes.blink i { height: 1.5px; }
-.v .eyes.blink i { width: 1.5px; height: 6px; }
-.eyes.happy i { height: 5px; border-radius: 6px 6px 0 0; }
+.mq { overflow: hidden; }
+.mq > span { display: inline-block; }
 
-/* panel parts */
-.gb { height: 30px; min-width: 30px; padding: 0 10px; border-radius: 15px; display: inline-flex; align-items: center; justify-content: center; gap: 6px; font-size: 12px; font-weight: 600; color: #d6d6dc; }
+/* panels: the app's blocks */
+.gb { height: 32px; min-width: 32px; padding: 0 10px; border-radius: 16px; display: inline-flex; align-items: center; justify-content: center; gap: 6px; font-size: 12.5px; font-weight: 600; color: #c9c9d1; }
 .gb:hover { background: var(--lit); }
-.gb .ic { width: 15px; height: 15px; }
-.gb.on { color: var(--acc); }
-.sb { height: 32px; padding: 0 16px; border-radius: 16px; font-size: 12.5px; font-weight: 600; display: inline-flex; align-items: center; justify-content: center; gap: 6px; }
-.lab { font-size: 11px; font-weight: 600; color: var(--dim); margin: 2px 2px -4px; }
-.mut { color: var(--dim); }
-.row { width: 100%; text-align: left; display: flex; align-items: center; gap: 10px; min-height: 40px; padding: 4px 8px; margin: 0 -6px; border-radius: 12px; }
+.gb .ic { width: 16px; height: 16px; }
+.card { background: var(--track); border-radius: 18px; padding: 14px 16px; display: flex; gap: 14px; align-items: center; }
+.lab { font-size: 12px; font-weight: 600; color: var(--dim); }
+.row { width: 100%; text-align: left; display: flex; align-items: center; gap: 12px; min-height: 30px; padding: 0 8px; margin: 0 -8px; width: calc(100% + 16px); border-radius: 10px; }
 .row.go:hover { background: var(--lit); }
-.row .tx { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
-.row .tt { font-weight: 600; font-size: 12.5px; white-space: nowrap; overflow: hidden; }
-.row .ts { font-size: 11.5px; color: var(--dim); white-space: nowrap; overflow: hidden; }
-.row .rt { font-size: 11.5px; color: var(--dim); white-space: nowrap; }
-.row .ic { width: 16px; height: 16px; }
-.toggles { display: flex; gap: 4px; padding: 3px; border-radius: 14px; background: var(--track); }
-.toggles button { flex: 1; height: 30px; border-radius: 11px; display: flex; align-items: center; justify-content: center; gap: 7px; font-size: 11.5px; font-weight: 600; color: var(--dim); }
+.row .tx { flex: 1; min-width: 0; font-weight: 600; font-size: 14px; white-space: nowrap; overflow: hidden; }
+.row .mk { display: flex; gap: 8px; color: var(--dim); }
+.row .mk .ic { width: 12px; height: 12px; }
+.toggles { display: flex; gap: 4px; padding: 4px; border-radius: 14px; background: var(--track); }
+.toggles button { flex: 1; height: 32px; border-radius: 11px; display: flex; align-items: center; justify-content: center; gap: 8px; font-size: 13.5px; font-weight: 600; color: var(--dim); }
 .toggles button:hover { background: var(--lit); }
-.toggles button.on { background: #24252c; color: var(--text); }
+.toggles button.on { background: #24242a; color: var(--text); }
 .toggles button.on .ic { color: var(--acc); }
 .toggles .ic { width: 16px; height: 16px; }
-.bar { height: 5px; border-radius: 3px; background: #1d1e24; overflow: hidden; position: relative; }
-.bar > i { position: absolute; left: 0; top: 0; bottom: 0; border-radius: 3px; background: var(--c, var(--acc)); overflow: hidden; transition: width .9s linear; }
-.bar > i::after { content: ""; position: absolute; inset: 0; background: linear-gradient(90deg, transparent, #ffffff48, transparent); animation: shine 2.6s ease-in-out infinite; transform: translateX(-100%); }
-@keyframes shine { 60%, 100% { transform: translateX(100%); } }
-.card { background: var(--track); border-radius: 18px; padding: 12px; display: flex; gap: 12px; align-items: center; }
-
-/* calendar */
-.dayhead { display: flex; align-items: flex-end; justify-content: space-between; padding: 2px 4px 0; }
-.dayhead .big { font-family: Outfit, sans-serif; font-size: 40px; font-weight: 600; line-height: .95; letter-spacing: -.5px; }
-.dayhead .big small { font-size: 14px; font-weight: 600; color: var(--dim); margin-left: 5px; letter-spacing: 0; }
-.dayhead .dr { text-align: right; display: flex; flex-direction: column; gap: 2px; padding-bottom: 3px; }
-.dayhead .dr b { font-size: 13px; }
-.dayhead .dr span { font-size: 12px; color: var(--dim); }
-.week { display: grid; grid-template-columns: repeat(7, 1fr); gap: 2px; }
-.week button { height: 54px; border-radius: 14px; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 3px; }
-.week button:hover { background: var(--lit); }
-.week small { font-size: 10px; color: var(--dim); font-weight: 600; }
-.week b { font-size: 14px; font-family: Outfit, sans-serif; font-weight: 600; width: 26px; height: 26px; border-radius: 13px; display: grid; place-items: center; }
-.week .today b { color: var(--acc); }
-.week .on b { background: var(--acc); color: #04130b; }
+.bar { height: 4px; border-radius: 2px; background: #26262b; overflow: hidden; position: relative; }
+.bar > i { position: absolute; left: 0; top: 0; bottom: 0; border-radius: 2px; background: var(--c, var(--acc)); }
+.ghost { width: 30px; height: 30px; border-radius: 15px; display: grid; place-items: center; color: #b4b4bc; }
+.ghost:hover { background: var(--lit); }
+.ghost .ic { width: 15px; height: 15px; }
+.dayhead { display: flex; align-items: center; }
+.dayhead .big { font-family: Outfit, sans-serif; font-size: 36px; font-weight: 600; line-height: 1; letter-spacing: -.3px; }
+.dayhead .big small { font-size: 15px; color: var(--dim); margin-left: 5px; font-weight: 500; }
+.dayhead .dr { margin-left: auto; text-align: right; display: flex; flex-direction: column; gap: 3px; }
+.dayhead .dr span { font-size: 13px; color: var(--dim); }
+.dayhead .dr b { font-size: 14px; font-weight: 600; }
+.week { display: flex; align-items: center; }
+.week .ghost { color: var(--dim); }
+.week .days { flex: 1; display: grid; grid-template-columns: repeat(7, 1fr); }
+.week .d { height: 60px; margin: 0 2px; border-radius: 12px; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 3px; }
+.week .d:hover { background: var(--lit); }
+.week .d small { font-size: 10.5px; color: var(--dim); font-weight: 600; }
+.week .d b { font-size: 17px; font-family: Outfit, sans-serif; font-weight: 600; }
+.week .d.today b { color: var(--acc); }
+.week .d.on { background: #f2f2f5; }
+.week .d.on small, .week .d.on b { color: #000; }
 .week .ds { display: flex; gap: 2px; height: 4px; }
 .week .ds i { width: 4px; height: 4px; border-radius: 2px; background: var(--acc); }
-.tl { display: flex; flex-direction: column; gap: 2px; }
-.tl .ev { display: flex; gap: 10px; align-items: stretch; padding: 6px 6px; border-radius: 12px; }
+.tl { display: flex; flex-direction: column; gap: 8px; }
+.tl .ev { display: flex; gap: 12px; }
+.tl .tm { width: 40px; text-align: right; font-size: 12.5px; color: var(--dim); padding-top: 9px; flex: none; }
+.tl .bx { flex: 1; border-radius: 8px; background: #5ac88c12; position: relative; padding: 9px 12px 9px 14px; display: flex; flex-direction: column; gap: 3px; }
+.tl .bx::before { content: ""; position: absolute; left: 0; top: 4px; bottom: 4px; width: 3px; border-radius: 2px; background: var(--acc); }
+.tl .bx b { font-size: 14px; font-weight: 600; }
+.tl .bx span { font-size: 13px; color: var(--dim); }
 .tl .ev.past { opacity: .45; }
-.tl .tm { width: 54px; font-size: 11.5px; color: var(--dim); padding-top: 1px; }
-.tl .cb { width: 3px; border-radius: 2px; background: var(--acc); }
-.tl .now { height: 0; border-top: 1.5px solid var(--red); margin: 2px 6px 2px 58px; position: relative; }
-.tl .now::before { content: ""; position: absolute; left: -4px; top: -4.5px; width: 7px; height: 7px; border-radius: 4px; background: var(--red); }
+.tl .now { height: 2px; background: var(--red); margin-left: 52px; position: relative; border-radius: 1px; }
+.tl .now::before { content: ""; position: absolute; left: -3px; top: -3px; width: 8px; height: 8px; border-radius: 4px; background: var(--red); }
+.join { height: 36px; padding: 0 14px; border-radius: 18px; background: var(--acc); color: #04130b; display: inline-flex; align-items: center; gap: 7px; font-size: 14px; font-weight: 600; flex: none; }
+.join .ic { width: 12px; height: 12px; }
+.drv { display: flex; gap: 14px; align-items: center; border-radius: 12px; padding: 6px 8px; margin: -6px -8px; }
+.drv:hover { background: #ffffff08; }
+.drv .tile { width: 46px; height: 46px; border-radius: 12px; background: #26262b; position: relative; overflow: hidden; display: grid; place-items: center; flex: none; }
+.drv .tile b { position: relative; font-family: Outfit, sans-serif; font-size: 22px; font-weight: 600; }
+.drv .tile svg { position: absolute; left: 0; bottom: 0; width: 92px; height: 100%; animation: wave 2.4s linear infinite; }
+@keyframes wave { to { transform: translateX(-46px); } }
+.drv .info { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 6px; }
+.drv .top { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; }
+.drv .top .tt { font-size: 15px; font-weight: 600; }
+.drv .top .sz { font-size: 13px; color: var(--dim); }
+.drv .top .sz b { color: var(--text); font-weight: 600; }
+.drv .graph { display: flex; align-items: center; gap: 8px; height: 20px; }
+.drv .graph svg { flex: 1; height: 20px; }
+.drv .graph span { font-size: 13px; font-weight: 600; color: var(--blue); white-space: nowrap; }
+.xfer { display: flex; flex-direction: column; gap: 10px; }
+.xfer .hd { display: flex; align-items: center; gap: 12px; }
+.xfer .ti { width: 32px; height: 32px; border-radius: 9px; background: var(--track); display: grid; place-items: center; color: #b4b4bc; flex: none; }
+.xfer .ti .ic { width: 16px; height: 16px; }
+.xfer .nm { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.xfer .nm b { font-size: 14px; font-weight: 600; }
+.xfer .nm span { font-size: 12.5px; color: var(--dim); }
+.xfer .rt { font-size: 14px; font-weight: 600; }
+.done { display: flex; align-items: center; gap: 12px; height: 34px; }
+.done .ic.ok { width: 18px; height: 18px; color: var(--acc); }
+.done .nm { flex: 1; font-size: 14px; }
+.cover { border-radius: 16px; margin: 0 auto; display: grid; place-items: center; color: #ffffffcc; }
+.songhead { display: flex; align-items: center; gap: 10px; }
+.songhead .nm { flex: 1; min-width: 0; }
+.songhead b { display: block; font-family: Outfit, sans-serif; font-size: 18px; font-weight: 600; }
+.songhead span { font-size: 14px; color: var(--dim); }
+.seek .bar { height: 5px; border-radius: 3px; }
+.seek .bar > i { background: #f2f2f5; }
+.seek .tm { display: flex; justify-content: space-between; font-size: 11.5px; color: var(--dim); margin-top: 7px; }
+.ctl { display: flex; align-items: center; justify-content: center; gap: 22px; }
+.ctl .ghost { width: 44px; height: 44px; border-radius: 22px; color: #f2f2f5; }
+.ctl .ghost .ic { width: 20px; height: 20px; }
+.ctl .main { width: 52px; height: 52px; border-radius: 26px; background: #f2f2f5; color: #000; display: grid; place-items: center; }
+.ctl .main .ic { width: 22px; height: 22px; }
+.sec { display: flex; flex-direction: column; gap: 10px; }
+.sec .hd { display: flex; align-items: center; gap: 12px; }
+.sec .ct { width: 34px; height: 34px; border-radius: 10px; background: var(--claude); color: #fff; display: grid; place-items: center; font-family: Outfit, sans-serif; font-weight: 600; font-size: 16px; flex: none; }
+.sec .nm { flex: 1; display: flex; flex-direction: column; gap: 2px; }
+.sec .nm b { font-size: 14px; font-weight: 600; }
+.sec .nm span { font-size: 12.5px; color: var(--dim); }
+.strip { border-radius: 10px; padding: 8px 12px; display: flex; justify-content: space-between; font-size: 12.5px; font-weight: 600; }
+.ban { display: flex; flex-direction: column; gap: 12px; }
+.ban .hd { display: flex; align-items: center; gap: 12px; }
+.ban .btns { display: flex; gap: 8px; }
+.ban .btns button { flex: 1; height: 36px; border-radius: 18px; font-size: 13.5px; font-weight: 600; }
+.ban .btns .no { color: #c9c9d1; }
+.ban .btns .no:hover { background: var(--lit); }
 
 /* the launcher */
-#launch { position: absolute; z-index: 60; width: 560px; background: #000; border-radius: 26px; padding: 14px; display: flex; flex-direction: column; gap: 12px; box-shadow: 0 24px 70px #000a; opacity: 0; transform: translateY(18px) scale(.92); pointer-events: none; transition: opacity .18s, transform .38s var(--spring); }
+#launch { position: absolute; z-index: 60; width: 460px; background: #000; border-radius: 26px; padding: 20px; display: flex; flex-direction: column; gap: 14px; opacity: 0; transform: translateY(14px) scale(.94); pointer-events: none; transition: opacity .16s, transform .32s cubic-bezier(.3,1.3,.5,1); }
 #launch.show { opacity: 1; transform: none; pointer-events: auto; }
-.search { height: 42px; border-radius: 21px; background: var(--track); display: flex; align-items: center; gap: 10px; padding: 0 6px 0 16px; }
-.search .ic { width: 16px; height: 16px; color: var(--dim); }
+.search { height: 42px; border-radius: 21px; background: #121214; display: flex; align-items: center; gap: 12px; padding: 0 5px 0 16px; }
+.search > .ic { width: 15px; height: 15px; color: var(--dim); }
 .search input { flex: 1; min-width: 0; background: none; border: 0; outline: 0; color: var(--text); font: inherit; font-size: 13.5px; caret-color: var(--acc); }
-.search input::placeholder { color: var(--mute); }
-.pins { display: grid; grid-template-columns: repeat(6, 1fr); gap: 4px; }
-.pin { height: 84px; border-radius: 16px; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 8px; font-size: 11.5px; color: #d6d6dc; }
-.pin:hover { background: var(--lit); }
-.pin .ib, .row .ib { width: 40px; height: 40px; border-radius: 11px; display: grid; place-items: center; color: #fff; flex: none; }
-.pin .ib .ic { width: 20px; height: 20px; }
-.row .ib { width: 30px; height: 30px; border-radius: 8px; }
-.row .ib .ic { width: 15px; height: 15px; }
-.foot { display: flex; justify-content: flex-end; gap: 2px; border-top: 1px solid #ffffff10; padding-top: 10px; }
-.foot .gb { width: 38px; height: 38px; border-radius: 19px; padding: 0; }
-.foot .gb .ic { width: 17px; height: 17px; }
-.list { display: flex; flex-direction: column; max-height: 340px; overflow: auto; }
-.list .row { margin: 0; }
+.search .all { width: 30px; height: 30px; border-radius: 15px; background: #26262b; display: grid; place-items: center; color: #c9c9d1; }
+.search .all .ic { width: 13px; height: 13px; }
+.pins { display: grid; grid-template-columns: repeat(6, 1fr); row-gap: 4px; }
+.pin { height: 78px; border-radius: 14px; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 7px; font-size: 12px; color: #e4e4ea; min-width: 0; padding: 0 2px; }
+.pin:hover { background: #ffffff0d; }
+.pin > span:last-child { max-width: 100%; overflow: hidden; white-space: nowrap; }
+.tile36 { width: 36px; height: 36px; border-radius: 9px; display: grid; place-items: center; color: #fff; flex: none; background: var(--tile); }
+.tile36 .ic { width: 16px; height: 16px; }
+.foot { display: flex; justify-content: center; gap: 12px; border-top: 1px solid #ffffff14; padding-top: 12px; }
+.foot button { width: 36px; height: 36px; border-radius: 18px; display: grid; place-items: center; color: #b4b4bc; }
+.foot button.red { color: var(--red); }
+.foot button:hover { background: var(--lit); }
+.foot .ic { width: 16px; height: 16px; }
+.list { display: flex; flex-direction: column; max-height: 330px; overflow: auto; }
+.list .row { margin: 0; width: 100%; min-height: 44px; }
+.list .row .tx { font-size: 13.5px; }
 
-/* menu, tip, modal, screens over all */
-#menu { position: absolute; z-index: 70; min-width: 190px; background: #000; border-radius: 16px; padding: 6px; box-shadow: 0 16px 44px #000b; display: none; flex-direction: column; transform-origin: top left; animation: grow .22s var(--spring); }
+#menu { position: absolute; z-index: 70; min-width: 190px; background: #000; border-radius: 16px; padding: 6px; display: none; flex-direction: column; animation: grow .22s cubic-bezier(.3,1.3,.5,1); }
 #menu.show { display: flex; }
 @keyframes grow { from { transform: scale(.85); opacity: 0; } }
 #menu button { height: 34px; padding: 0 12px; border-radius: 11px; display: flex; align-items: center; gap: 10px; font-size: 12.5px; text-align: left; }
 #menu button:hover { background: var(--lit); }
 #menu .ic { width: 16px; height: 16px; color: var(--dim); }
-#tip { position: absolute; z-index: 100; background: #000; color: var(--text); border-radius: 10px; padding: 7px 11px; font-size: 12px; white-space: pre-line; max-width: 260px; line-height: 1.4; box-shadow: 0 8px 24px #0009; opacity: 0; transform: translateY(4px); transition: opacity .14s, transform .2s var(--soft); pointer-events: none; }
-#tip.show { opacity: 1; transform: none; }
+#tip { position: absolute; z-index: 100; background: #000; color: var(--text); border-radius: 12px; padding: 8px 12px; font-size: 12.5px; white-space: pre-line; max-width: 260px; line-height: 1.45; opacity: 0; transition: opacity .14s; pointer-events: none; }
+#tip.show { opacity: 1; }
 #modal { position: absolute; inset: 0; z-index: 80; display: none; place-items: center; }
 #modal.show { display: grid; }
-#modal .dim { position: absolute; inset: 0; background: #0008; animation: fade .25s; }
+#modal .dim2 { position: absolute; inset: 0; background: #0008; animation: fade .25s; }
 @keyframes fade { from { opacity: 0; } }
-#modal .card2 { position: relative; width: 300px; background: #000; border-radius: 26px; padding: 22px 20px 16px; display: flex; flex-direction: column; align-items: center; gap: 8px; box-shadow: 0 20px 60px #000a; animation: pop .34s var(--spring); }
+#modal .card2 { position: relative; width: 300px; background: #000; border-radius: 26px; padding: 22px 20px 16px; display: flex; flex-direction: column; align-items: center; gap: 8px; animation: pop .34s cubic-bezier(.3,1.3,.5,1); }
 @keyframes pop { from { transform: scale(.6); opacity: 0; } }
 #modal .mi { width: 52px; height: 52px; border-radius: 26px; display: grid; place-items: center; background: #e87a7a26; color: var(--red); margin-bottom: 4px; }
 #modal .mi .ic { width: 22px; height: 22px; }
 #modal .mt { font-size: 15px; font-weight: 600; font-family: Outfit, sans-serif; }
-#modal .ms { font-size: 12px; color: var(--dim); text-align: center; line-height: 1.5; }
+#modal .ms { font-size: 12.5px; color: var(--dim); text-align: center; line-height: 1.5; }
 #modal .mb { display: flex; gap: 8px; width: 100%; margin-top: 10px; }
-#modal .mb button { flex: 1; height: 38px; border-radius: 19px; font-size: 12.5px; font-weight: 600; color: #c9c9d1; }
+#modal .mb button { flex: 1; height: 38px; border-radius: 19px; font-size: 13px; font-weight: 600; color: #c9c9d1; }
 #modal .mb button:hover { background: var(--lit); }
 #modal .mb button.red { background: var(--red); color: #1a0606; }
-#modal .mb button.red:hover { background: #f08c8c; }
 #over { position: absolute; inset: 0; z-index: 90; display: none; }
 #over.show { display: block; }
 #over.black { background: #000; animation: fade .6s; }
-#over.lock { animation: fade .4s; }
+#over.lock { animation: fade .4s; background-size: cover; }
 #over .lk { position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center; padding-top: 16vh; color: #fff; text-shadow: 0 2px 20px #0006; }
 #over .lk .big { font-family: Outfit, sans-serif; font-size: 96px; font-weight: 600; line-height: 1; }
 #over .lk .sm { font-size: 18px; margin-top: 10px; }
@@ -263,34 +295,32 @@ a { color: inherit; }
 #over .off button { width: 64px; height: 64px; border-radius: 32px; display: grid; place-items: center; color: #444; }
 #over .off button:hover { color: var(--acc); background: #ffffff08; }
 #over .off .ic { width: 28px; height: 28px; }
-#over.leaving { animation: up .5s var(--soft) forwards; }
+#over.leaving { animation: up .5s cubic-bezier(.2,.9,.3,1) forwards; }
 @keyframes up { to { transform: translateY(-100%); } }
 #over.waking { animation: fadeout .7s forwards; }
 @keyframes fadeout { to { opacity: 0; } }
 
-/* the apps' own windows */
 .readme { padding: 14px 18px 18px; font-size: 13px; line-height: 1.65; color: #e4e4ea; user-select: text; -webkit-user-select: text; }
-.readme h1 { font-family: Outfit, sans-serif; font-size: 22px; font-weight: 600; margin: 2px 0 2px; }
+.readme h1 { font-family: Outfit, sans-serif; font-size: 22px; font-weight: 600; margin: 2px 0; }
 .readme .sub { color: var(--dim); margin-bottom: 12px; }
 .readme ul { margin: 0 0 14px; padding: 0; list-style: none; display: flex; flex-direction: column; gap: 7px; }
 .readme li { display: flex; gap: 10px; align-items: flex-start; }
 .readme li .ic { width: 16px; height: 16px; color: var(--acc); margin-top: 3px; }
 .readme .get { display: flex; gap: 8px; margin-top: 4px; }
-.readme .get a { text-decoration: none; }
+.readme a { text-decoration: none; }
+.sb { height: 34px; padding: 0 16px; border-radius: 17px; font-size: 13px; font-weight: 600; display: inline-flex; align-items: center; justify-content: center; gap: 7px; }
+.sb .ic { width: 15px; height: 15px; }
 .sb.acc { background: var(--acc); color: #04130b; }
 .sb.acc:hover { background: #6fd89e; }
 .sb.gh2 { color: #d6d6dc; }
 .sb.gh2:hover { background: var(--lit); }
 .player { padding: 8px 20px 18px; display: flex; flex-direction: column; gap: 14px; }
-.cover { border-radius: 12px; flex: none; box-shadow: 0 10px 30px #0007; }
-.ctl { display: flex; align-items: center; justify-content: center; gap: 10px; }
-.ctl .gb { width: 40px; height: 40px; padding: 0; border-radius: 20px; }
-.ctl .gb .ic { width: 18px; height: 18px; }
-.ctl .gb.big { width: 50px; height: 50px; border-radius: 25px; background: #ffffff10; }
-.ctl .gb.big:hover { background: #ffffff1c; }
+.player .ctl .ghost { color: #d6d6dc; }
 .trk { display: flex; flex-direction: column; gap: 2px; }
-.trk .row { margin: 0; }
-.trk .row.now .tt { color: var(--acc); }
+.trk .row { margin: 0; width: 100%; min-height: 44px; }
+.trk .row .tx { font-size: 13px; display: flex; flex-direction: column; gap: 2px; }
+.trk .row .tx span { font-size: 11.5px; color: var(--dim); font-weight: 500; }
+.trk .row.now .tx { color: var(--acc); }
 .plug { display: flex; gap: 12px; align-items: flex-start; padding: 12px 14px; border-radius: 12px; }
 .plug:hover { background: #ffffff08; }
 .plug .ib { width: 38px; height: 38px; border-radius: 10px; display: grid; place-items: center; color: #fff; flex: none; }
@@ -299,20 +329,16 @@ a { color: inherit; }
 .plug .tt { font-weight: 600; font-size: 13px; }
 .plug .ts { color: var(--dim); font-size: 12px; line-height: 1.5; margin-top: 2px; }
 .plug .sb { height: 30px; padding: 0 14px; flex: none; }
-.plug .sb.added { color: var(--acc); }
+.plug .added { color: var(--acc); width: 30px; height: 30px; display: grid; place-items: center; }
 .pretend { height: 100%; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 14px; color: var(--dim); }
 .pretend .ib { width: 64px; height: 64px; border-radius: 16px; display: grid; place-items: center; color: #fff; }
 .pretend .ib .ic { width: 30px; height: 30px; }
 
-/* under the screen, on a phone */
 #below { display: none; padding: 26px 20px 40px; text-align: center; }
 body.small #below { display: block; }
-body.small #wrap { width: 100%; }
-body.small #screen { touch-action: pan-y; }
 #below h1 { font-family: Outfit, sans-serif; font-size: 26px; margin: 0 0 6px; }
 #below p { color: var(--dim); margin: 0 0 18px; line-height: 1.55; }
 #below .sb { height: 44px; padding: 0 22px; border-radius: 22px; font-size: 14px; text-decoration: none; }
-@media (prefers-reduced-motion: reduce) { *, *::before, *::after { animation-duration: .01s !important; transition-duration: .01s !important; } }
 </style>
 </head>
 <body>
@@ -322,7 +348,7 @@ body.small #screen { touch-action: pan-y; }
     <div id="icons"></div>
     <div id="wins"></div>
     <div id="taskbar"><div id="tbapps" style="display:flex;gap:4px"></div><div id="tray"></div></div>
-    <div id="nadi"></div>
+    <div id="nadi"><canvas id="liquid"></canvas></div>
     <div id="launch"></div>
     <div id="menu"></div>
     <div id="modal"></div>
@@ -342,73 +368,104 @@ body.small #screen { touch-action: pan-y; }
 const REPO = "https://github.com/Llyme/not-another-dynamic-island";
 const GET = REPO + "/releases/latest";
 const $ = (s, r = document) => r.querySelector(s);
-const scr = $("#screen"), nadi = $("#nadi"), meas = $("#meas");
-const TB = 46, GAP = 6, DEPTH = 38, SIDE = 40;
-let SW = 0, SH = 0, scale = 1, touch = false;
+const scr = $("#screen"), nadiEl = $("#nadi"), meas = $("#meas"), cv = $("#liquid");
+const TB = 46;
+let SW = 0, SH = 0, scale = 1, DPR = 1;
 const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
-const ACC = "#5ac88c", TWO = "#e8b04a", CL = "#e08a5a", RED = "#e87a7a", TEAL = "#5ac8e6";
+const ACC = "#5ac88c", AMBER = "#e8b04a", CLAUDE = "#d97757", RED = "#e87a7a", TEAL = "#5ac8e6", BLUE = "#4f8ff0";
+
+/* the app's own numbers (layout.rs Metrics, frame.rs) */
+const DEPTH_H = 32, DEPTH_V = 40, FILLET = 10, GAP = 6;
+const PANEL_W = 360, PANEL_W_SIDE = 340, PAD = 16, RADIUS_OPEN = 24, BANNER_W = 380;
+const STIFF = 600, DAMP = 36, SHOW_STIFF = 420, SHOW_DAMP = 42, HIDE_STIFF = 520, HIDE_DAMP = 46, SWELL_STIFF = 700, SWELL_DAMP = 34;
+const SWELL_OUT = 5, SWELL_ALONG = 6, HOVER_OPEN = 260, LEAVE_CLOSE = 380, WAVE = 0.22;
+const LIQUID = 2.5 + 0.5 * 7.5, NECK = Math.max(LIQUID * 1.6, 2), REACH = 40;
+
+class Spring {
+  constructor(v) { this.now = v; this.to = v; this.vel = 0; }
+  moving() { return this.now !== this.to || this.vel !== 0; }
+  step(dt, stiff = STIFF, damp = DAMP) {
+    if (!this.moving()) return false;
+    const n = Math.max(1, Math.ceil(dt / (1 / 240))), h = dt / n;
+    for (let i = 0; i < n; i++) { const a = -stiff * (this.now - this.to) - damp * this.vel; this.vel += a * h; this.now += this.vel * h; }
+    const sc = Math.max(1, Math.abs(this.to));
+    if (Math.abs(this.now - this.to) < 0.0015 * sc && Math.abs(this.vel) < 0.02 * sc) { this.now = this.to; this.vel = 0; return false; }
+    return true;
+  }
+}
 
 /* pictograms */
 const F = i => `<svg viewBox="0 0 20 20" fill="currentColor">${i}</svg>`;
 const S = i => `<svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">${i}</svg>`;
 const ICONS = {
-  grid: F('<rect x="3" y="3" width="6" height="6" rx="1.7"/><rect x="11" y="3" width="6" height="6" rx="1.7"/><rect x="3" y="11" width="6" height="6" rx="1.7"/><rect x="11" y="11" width="6" height="6" rx="1.7"/>'),
+  grid: F('<rect x="3" y="3" width="6.2" height="6.2" rx="1.8"/><rect x="10.8" y="3" width="6.2" height="6.2" rx="1.8"/><rect x="3" y="10.8" width="6.2" height="6.2" rx="1.8"/><rect x="10.8" y="10.8" width="6.2" height="6.2" rx="1.8"/>'),
   search: S('<circle cx="8.8" cy="8.8" r="5.3"/><path d="M12.8 12.8l4 4"/>'),
-  lock: S('<rect x="4.5" y="9" width="11" height="8" rx="2.2"/><path d="M7 9V7a3 3 0 0 1 6 0v2"/>'),
-  moon: S('<path d="M15.8 12.3A6.6 6.6 0 0 1 7.7 4.2a6.6 6.6 0 1 0 8.1 8.1z"/>'),
+  lock: F('<path d="M10 2.5a3.5 3.5 0 0 0-3.5 3.5v2H6a2 2 0 0 0-2 2v6a2 2 0 0 0 2 2h8a2 2 0 0 0 2-2v-6a2 2 0 0 0-2-2h-.5V6A3.5 3.5 0 0 0 10 2.5zm0 1.5a2 2 0 0 1 2 2v2H8V6a2 2 0 0 1 2-2z"/>'),
+  moon: F('<path d="M16.2 12.6A7 7 0 0 1 7.4 3.8a7 7 0 1 0 8.8 8.8z"/>'),
   restart: S('<path d="M15.6 10.6a5.7 5.7 0 1 1-1.8-4.7"/><path d="M14.6 2.8v3.6H11"/>'),
   power: S('<path d="M10 2.8v6.4"/><path d="M6 5.6a6.2 6.2 0 1 0 8 0"/>'),
   play: F('<path d="M6.2 4.1v11.8a.8.8 0 0 0 1.2.7l9.5-5.9a.8.8 0 0 0 0-1.4L7.4 3.4a.8.8 0 0 0-1.2.7z"/>'),
-  pause: F('<rect x="5" y="4" width="3.7" height="12" rx="1.3"/><rect x="11.3" y="4" width="3.7" height="12" rx="1.3"/>'),
-  next: F('<path d="M4 5.2v9.6a.8.8 0 0 0 1.2.6l7-4.8a.8.8 0 0 0 0-1.2l-7-4.8A.8.8 0 0 0 4 5.2z"/><rect x="13.6" y="4.5" width="2.6" height="11" rx="1.1"/>'),
-  prev: F('<path d="M16 5.2v9.6a.8.8 0 0 1-1.2.6l-7-4.8a.8.8 0 0 1 0-1.2l7-4.8a.8.8 0 0 1 1.2.6z"/><rect x="3.8" y="4.5" width="2.6" height="11" rx="1.1"/>'),
+  pause: F('<rect x="5" y="4" width="3.8" height="12" rx="1.4"/><rect x="11.2" y="4" width="3.8" height="12" rx="1.4"/>'),
+  next: F('<path d="M4 4.6v10.8a.8.8 0 0 0 1.2.7l8.3-5.4a.8.8 0 0 0 0-1.4L5.2 3.9A.8.8 0 0 0 4 4.6z"/><rect x="14.3" y="4" width="1.9" height="12" rx=".9"/>'),
+  prev: F('<path d="M16 4.6v10.8a.8.8 0 0 1-1.2.7l-8.3-5.4a.8.8 0 0 1 0-1.4l8.3-5.4a.8.8 0 0 1 1.2.7z"/><rect x="3.8" y="4" width="1.9" height="12" rx=".9"/>'),
   airplane: F('<path d="M9 2c.6 0 1.2.4 1.4.9l2.4 5.4 3.2-.2a1.9 1.9 0 0 1 2 1.9 1.9 1.9 0 0 1-2 1.9l-3.2-.2-2.4 5.4c-.2.6-.8.9-1.4.9a.9.9 0 0 1-.9-.9l.7-5.6-2.5-.2-1.1 2.3a.8.8 0 0 1-1.5-.4v-2.4l-1.1-.1A1.1 1.1 0 0 1 2 10v-.1c0-.5.4-1 .9-1L4 8.9V6.5a.8.8 0 0 1 1.5-.4l1.1 2.3 2.5-.2-.7-5.6c-.1-.5.3-.9.7-1z"/>'),
   hotspot: F('<path d="M10 8.25a1.75 1.75 0 1 1 0 3.5 1.75 1.75 0 1 1 0-3.5zM6.64 6.64a4.75 4.75 0 0 0 0 6.72l1.06-1.06a3.25 3.25 0 0 1 0-4.6zM13.36 6.64a4.75 4.75 0 0 1 0 6.72l-1.06-1.06a3.25 3.25 0 0 0 0-4.6zM4.52 4.52a7.75 7.75 0 0 0 0 10.96l1.06-1.06a6.25 6.25 0 0 1 0-8.84zM15.48 4.52a7.75 7.75 0 0 1 0 10.96l-1.06-1.06a6.25 6.25 0 0 0 0-8.84z"/>'),
+  wifi: S('<path d="M2.5 7.6a10.6 10.6 0 0 1 15 0"/><path d="M5 10.5a7 7 0 0 1 10 0"/><path d="M7.5 13.3a3.4 3.4 0 0 1 5 0"/><circle cx="10" cy="15.8" r="1" fill="currentColor"/>'),
   x: S('<path d="M5.5 5.5l9 9M14.5 5.5l-9 9"/>'),
   minus: S('<path d="M5 10h10"/>'),
   square: S('<rect x="5" y="5" width="10" height="10" rx="1.6"/>'),
   folder: F('<path d="M2.5 5.6A1.6 1.6 0 0 1 4.1 4h3.5l1.9 1.8h6.4a1.6 1.6 0 0 1 1.6 1.6v7a1.6 1.6 0 0 1-1.6 1.6H4.1a1.6 1.6 0 0 1-1.6-1.6z"/>'),
-  gear: S('<circle cx="10" cy="10" r="2.5"/><path d="M10 2.6v2.1M10 15.3v2.1M2.6 10h2.1M15.3 10h2.1M4.8 4.8l1.5 1.5M13.7 13.7l1.5 1.5M4.8 15.2l1.5-1.5M13.7 6.3l1.5-1.5"/>'),
+  gear: F('<path d="M8.6 2.4h2.8l.4 2.1 1.3.7 2-.8 1.4 2.4-1.6 1.4v1.6l1.6 1.4-1.4 2.4-2-.8-1.3.7-.4 2.1H8.6l-.4-2.1-1.3-.7-2 .8-1.4-2.4 1.6-1.4V9.2L3.5 7.8l1.4-2.4 2 .8 1.3-.7zM10 7.4a2.6 2.6 0 1 0 0 5.2 2.6 2.6 0 0 0 0-5.2z"/>'),
   globe: S('<circle cx="10" cy="10" r="7"/><path d="M3 10h14M10 3c2.3 2 2.3 12 0 14M10 3c-2.3 2-2.3 12 0 14"/>'),
   term: S('<rect x="2.5" y="4" width="15" height="12" rx="2.2"/><path d="M6 8.2l2.4 1.8L6 11.8M10.5 12.3H14"/>'),
   note: S('<path d="M5 2.6h6.8L15 5.8v11.6H5z"/><path d="M7.6 9.2h4.8M7.6 12.2h4.8"/>'),
-  music: S('<path d="M8 15V5l8-2v10"/><circle cx="6" cy="15" r="2"/><circle cx="14" cy="13" r="2"/>'),
-  cal: S('<rect x="3" y="4" width="14" height="13" rx="2.2"/><path d="M3 8.2h14M7 2.6v3M13 2.6v3"/>'),
+  music: F('<path d="M15.5 2.6v10.2a2.6 2.6 0 1 1-1.5-2.4V5.6L8.5 6.8v8a2.6 2.6 0 1 1-1.5-2.4V4.5a.8.8 0 0 1 .6-.8l7-1.6a.8.8 0 0 1 .9.5z"/>'),
+  cal: F('<path d="M6 2.5a.7.7 0 0 1 .7.7V4h6.6v-.8a.7.7 0 1 1 1.4 0V4h.3A2 2 0 0 1 17 6v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h.3v-.8a.7.7 0 0 1 .7-.7zM4.5 8v7c0 .3.2.5.5.5h10a.5.5 0 0 0 .5-.5V8zm2 1.5h1.5V11H6.5zm3 0H11V11H9.5zm3 0H14V11h-1.5zm-6 3h1.5V14H6.5zm3 0H11V14H9.5z"/>'),
   code: S('<path d="M7 5.5L2.8 10 7 14.5M13 5.5l4.2 4.5-4.2 4.5"/>'),
   get: S('<path d="M10 3v9.5M5.8 8.5l4.2 4.2 4.2-4.2"/><path d="M4 16.5h12"/>'),
+  download: S('<path d="M10 4v8.5M6.5 9l3.5 3.5L13.5 9"/>'),
   store: S('<path d="M4.2 7h11.6l-1 10H5.2z"/><path d="M7.5 7a2.5 2.5 0 0 1 5 0"/>'),
   photo: S('<rect x="3" y="4" width="14" height="12" rx="2.2"/><circle cx="7.5" cy="8.5" r="1.4"/><path d="M3.6 14.2l3.9-3.9 3 3 2-2 3.9 3.9"/>'),
   mail: S('<rect x="3" y="5" width="14" height="10" rx="2.2"/><path d="M3.6 6.2L10 11l6.4-4.8"/>'),
   calc: S('<rect x="4.5" y="2.6" width="11" height="14.8" rx="2.2"/><path d="M7.2 6.2h5.6M7.2 10h.1M10 10h.1M12.8 10h.1M7.2 13.2h.1M10 13.2h.1M12.8 13.2h.1"/>'),
-  paint: S('<path d="M10 3a7 7 0 1 0 0 14c1 0 1.5-.7 1.5-1.5 0-1.2-1-1.3-1-2.3 0-.8.7-1.2 1.5-1.2H14a3 3 0 0 0 3-3C17 5.6 13.9 3 10 3z"/><circle cx="6.5" cy="9" r=".6"/><circle cx="9" cy="6.3" r=".6"/><circle cx="12.5" cy="6.8" r=".6"/>'),
-  game: S('<path d="M6 7h8a4 4 0 0 1 3.8 5.2l-.6 1.9a2 2 0 0 1-3.5.6L12.5 13h-5l-1.2 1.7a2 2 0 0 1-3.5-.6l-.6-1.9A4 4 0 0 1 6 7z"/><path d="M6.5 9.4v2.2M5.4 10.5h2.2M13.5 10.2h.1"/>'),
+  paint: S('<path d="M10 3a7 7 0 1 0 0 14c1 0 1.5-.7 1.5-1.5 0-1.2-1-1.3-1-2.3 0-.8.7-1.2 1.5-1.2H14a3 3 0 0 0 3-3C17 5.6 13.9 3 10 3z"/>'),
+  gamepad: F('<path d="M6.3 5.5h7.4a4.3 4.3 0 0 1 4.1 5.6l-.7 2.2a2.2 2.2 0 0 1-3.9.6L12 12.5H8l-1.2 1.4a2.2 2.2 0 0 1-3.9-.6l-.7-2.2a4.3 4.3 0 0 1 4.1-5.6zM6.5 8a.6.6 0 0 0-.6.6v.8h-.8a.6.6 0 1 0 0 1.2h.8v.8a.6.6 0 1 0 1.2 0v-.8h.8a.6.6 0 1 0 0-1.2h-.8v-.8A.6.6 0 0 0 6.5 8zm7 .3a.8.8 0 1 0 0 1.6.8.8 0 0 0 0-1.6zm-1.6 1.6a.8.8 0 1 0 0 1.6.8.8 0 0 0 0-1.6z"/>'),
   sun: S('<circle cx="10" cy="10" r="3.4"/><path d="M10 2.2v1.9M10 15.9v1.9M2.2 10h1.9M15.9 10h1.9M4.5 4.5l1.3 1.3M14.2 14.2l1.3 1.3M4.5 15.5l1.3-1.3M14.2 5.8l1.3-1.3"/>'),
   battery: S('<rect x="2.5" y="6" width="13" height="8" rx="2.2"/><path d="M17.6 9v2"/>'),
-  burst: S('<path d="M10 2.6v14.8M2.6 10h14.8M4.8 4.8l10.4 10.4M15.2 4.8L4.8 15.2" stroke-width="2.1"/>'),
+  spark: F('<path d="M10 1.8l1.6 5 5 1.6-5 1.6-1.6 5-1.6-5-5-1.6 5-1.6z"/><path d="M15.5 12.5l.7 2 2 .7-2 .7-.7 2-.7-2-2-.7 2-.7z"/>'),
   volume: S('<path d="M3.8 7.8h3l4.2-3.3v11l-4.2-3.3h-3z"/><path d="M14 7.4a3.6 3.6 0 0 1 0 5.2"/>'),
-  chevup: S('<path d="M6 12l4-4 4 4"/>'),
   arrow: S('<path d="M10 16V4.5M5.2 9.2L10 4.4l4.8 4.8"/>'),
   open: S('<path d="M11 4h5v5M16 4l-7 7"/><path d="M14 11.5V16H4V6h4.5"/>'),
   pin: S('<path d="M8 3h4l-.6 5 2.6 2.6v1.2H6v-1.2L8.6 8z"/><path d="M10 11.8V17"/>'),
   eye: S('<path d="M2.5 10s2.7-5 7.5-5 7.5 5 7.5 5-2.7 5-7.5 5-7.5-5-7.5-5z"/><circle cx="10" cy="10" r="2.2"/>'),
   check: S('<path d="M4.5 10.5l3.5 3.5 7.5-8"/>'),
+  star: F('<path d="M10 2.5l2.2 4.6 5 .7-3.6 3.5.9 5-4.5-2.4-4.5 2.4.9-5L2.8 7.8l5-.7z"/>'),
+  chevl: S('<path d="M12 5l-5 5 5 5"/>'),
+  chevr: S('<path d="M8 5l5 5-5 5"/>'),
   win: F('<rect x="3" y="3" width="6.6" height="6.6" rx=".8"/><rect x="10.4" y="3" width="6.6" height="6.6" rx=".8"/><rect x="3" y="10.4" width="6.6" height="6.6" rx=".8"/><rect x="10.4" y="10.4" width="6.6" height="6.6" rx=".8"/>'),
-  drive: S('<rect x="3" y="6" width="14" height="8" rx="2.2"/><path d="M6 10h.1M13 10h1"/>'),
+  pulse: S('<path d="M2.5 10h3l2-4.5 3 9 2-4.5h5"/>'),
+  contrast: F('<path d="M10 2.5a7.5 7.5 0 1 0 0 15 7.5 7.5 0 0 0 0-15zm0 1.5v12a6 6 0 0 1 0-12z"/>'),
 };
 const ic = (n, sz, st = "") => `<i class="ic" style="width:${sz}px;height:${sz}px;${st}">${ICONS[n] || ""}</i>`;
-const wifi = (lv, sz = 16, c = "currentColor") => {
-  const a = k => `opacity="${lv >= k ? 1 : .28}"`;
-  return `<i class="ic" style="width:${sz}px;height:${sz}px;color:${c}"><svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path ${a(3)} d="M2.5 7.6a10.6 10.6 0 0 1 15 0"/><path ${a(2)} d="M5 10.5a7 7 0 0 1 10 0"/><path ${a(1)} d="M7.5 13.3a3.4 3.4 0 0 1 5 0"/><circle cx="10" cy="15.8" r="1.1" fill="currentColor" stroke="none"/></svg></i>`;
-};
+/* the app's signal: four bars, the ones not reached faint */
+const signal = (lv, sz = 16, c = "currentColor") => `<i class="ic" style="width:${sz}px;height:${sz}px;color:${c}"><svg viewBox="0 0 20 20" fill="currentColor">${[0, 1, 2, 3].map(i => `<rect x="${2.5 + i * 4.2}" y="${15.5 - (i + 1) * 3.2}" width="2.8" height="${(i + 1) * 3.2 + 1}" rx="1.2" opacity="${lv > i ? 1 : .22}"/>`).join("")}</svg></i>`;
 const flow = (up, c) => `<span class="flow ${up ? "up" : "dn"}" style="color:${c || "currentColor"}"><svg viewBox="0 0 8 24">${up ? '<path d="M1 7.5l3-3 3 3M1 13.5l3-3 3 3M1 19.5l3-3 3 3M1 25.5l3-3 3 3"/>' : '<path d="M1 4.5l3 3 3-3M1 10.5l3 3 3-3M1 16.5l3 3 3-3M1 22.5l3 3 3-3"/>'}</svg></span>`;
-const ring = (letter, p, sz = 22, c = ACC) => `<svg width="${sz}" height="${sz}" viewBox="0 0 24 24" style="flex:none"><circle cx="12" cy="12" r="10" fill="none" stroke="#2a2b31" stroke-width="2.4"/><circle cx="12" cy="12" r="10" fill="none" stroke="${c}" stroke-width="2.4" stroke-linecap="round" stroke-dasharray="${(p * 62.8).toFixed(1)} 62.8" transform="rotate(-90 12 12)"/><text x="12" y="15.6" text-anchor="middle" font-size="10" font-weight="700" fill="#f2f2f5" font-family="Outfit, sans-serif">${letter}</text></svg>`;
+const ringed = (inner, p, sz, c, track = "#2c2c33") => `<span style="position:relative;width:${sz}px;height:${sz}px;display:grid;place-items:center;flex:none"><svg width="${sz}" height="${sz}" viewBox="0 0 24 24" style="position:absolute;inset:0"><circle cx="12" cy="12" r="10" fill="none" stroke="${track}" stroke-width="2.2"/><circle cx="12" cy="12" r="10" fill="none" stroke="${c}" stroke-width="2.2" stroke-linecap="round" stroke-dasharray="${(p * 62.8).toFixed(1)} 62.8" transform="rotate(-90 12 12)"/></svg>${inner}</span>`;
 const rate = b => b >= 1e6 ? (b / 1e6).toFixed(1) + " MB/s" : Math.round(b / 1e3) + " KB/s";
-const pad = n => String(n).padStart(2, "0");
+const pad2 = n => String(n).padStart(2, "0");
 const DAYS = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
 const MONS = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];
-const clock = d => { const h = d.getHours(); return { t: (h % 12 || 12) + ":" + pad(d.getMinutes()), ap: h < 12 ? "AM" : "PM" }; };
+const clock = d => { const h = d.getHours(); return { t: (h % 12 || 12) + ":" + pad2(d.getMinutes()), ap: h < 12 ? "AM" : "PM" }; };
 const span = d => { const c = clock(d); return c.t + " " + c.ap; };
-const mmss = s => Math.floor(s / 60) + ":" + pad(Math.floor(s % 60));
+const mmss = s => Math.floor(s / 60) + ":" + pad2(Math.floor(s % 60));
+/* (made again every second, what moves stays in step: each moving thing starts where the clock says it is) */
+function inStep(root) {
+  const t = performance.now();
+  for (const el of root.querySelectorAll(".flow svg, .viz i, .drv .tile svg, .pdot.pulse")) {
+    const d = parseFloat(getComputedStyle(el).animationDuration) * 1000 || 1000;
+    el.style.animationDelay = -(t % d) + "ms";
+  }
+}
 
 /* what the pretend PC is doing */
 const T0 = new Date(); T0.setSeconds(0, 0);
@@ -427,141 +484,152 @@ const TRACKS = [
   { title: "Neon Drive", artist: "Synthwave FM", len: 187, a: "#e86aa8", b: "#7a5ae8", c: "#201040" },
 ];
 const music = { i: 0, t: 41, playing: true };
-const dl = { items: [{ name: "Starfield Odyssey", from: "Games", size: 48e9, p: .58, a: "#3d6fd6", b: "#e8b04a" }], done: [{ name: "photos-2026.zip", from: "Browser" }], hist: Array(40).fill(0).map((_, i) => 3e6 + Math.sin(i / 3) * 1e6), rate: 4.2e6 };
-const NEXT_DL = [{ name: "Hollow Night", from: "Games", size: 9e9, a: "#5ac88c", b: "#1b2a5c" }, { name: "Ubuntu 26.04.iso", from: "Browser", size: 6e9, a: "#e87a7a", b: "#7a5ae8" }];
+const dl = { items: [{ name: "Starfield Odyssey", ic: "gamepad", size: 48e9, p: .58 }], done: [{ name: "photos-2026.zip" }], hist: Array(40).fill(0).map((_, i) => 3.4e6 + Math.sin(i / 3) * 9e5), rate: 4.2e6 };
+const NEXT_DL = [{ name: "Hollow Night", ic: "gamepad", size: 9e9 }, { name: "ubuntu-26.04.iso", ic: "globe", size: 6e9 }];
 const drives = [
-  { l: "C", name: "Windows", size: 476, used: 264, r: 0, w: 0 },
-  { l: "D", name: "Games", size: 1863, used: 1210, r: 0, w: 0 },
-  { l: "E", name: "Elderberry", size: 64, used: 12, r: 0, w: 0, usb: true },
+  { l: "C", name: "Windows", free: "212 GB", total: "476 GB", part: .55, r: [], c: BLUE },
+  { l: "D", name: "Games", free: "653 GB", total: "1.8 TB", part: .65, r: [], c: ACC },
+  { l: "E", name: "Elderberry", free: "52 GB", total: "64 GB", part: .19, r: [], c: ACC },
 ];
-const net = { wifi: true, air: false, hot: false, down: 18e6, up: 2.1e6 };
-const claude = { asks: 0, sessions: [{ name: "nadi", what: "Editing frame.rs", st: "work" }, { name: "site", what: "Waiting for you", st: "idle" }] };
+for (const d of drives) d.r = Array(24).fill(0);
+const net = { wifi: true, air: false, hot: false, down: 18.2e6, up: 2.1e6 };
+const claude = { waiting: false, sessions: [{ title: "Fix the thing", sub: "Editing frame.rs", st: "working", since: Date.now() - 134e3 }, { title: "Site", sub: "Finished", st: "finished", since: Date.now() - 180e3 }] };
 
-/* the widgets: what each shows at rest (along an edge, or on a side edge, its icon alone), and opened */
+/* the widgets: at rest along an edge (`v`: on a side edge, its icon alone), and opened */
 const W = {
   calendar: {
     tip: () => { const n = nextEvent(); return n ? n.title + "\n" + soonWords(n) : "Nothing coming up"; },
     peek: v => {
-      const n = nextEvent(), d = new Date(), soon = n && n.s - d <= 3600e3, last = n && n.s - d <= 600e3;
-      const dot = soon ? `<span class="dot${last ? " pulse" : ""}" style="background:${last ? TWO : ACC}"></span>` : "";
-      if (v) return `<svg width="20" height="22" viewBox="0 0 20 22"><rect x="1" y="1" width="18" height="20" rx="4" fill="#1d1e24"/><path d="M1 5a4 4 0 0 1 4-4h10a4 4 0 0 1 4 4v2H1z" fill="${soon ? (last ? TWO : ACC) : "#3a3b44"}"/><text x="10" y="17.5" text-anchor="middle" font-size="9.5" font-weight="700" fill="#f2f2f5" font-family="Outfit, sans-serif">${d.getDate()}</text></svg>`;
-      return `<span>${DAYS[d.getDay()].slice(0, 3)}</span>${dot}`;
+      const d = new Date(), n = nextEvent(), left = n ? n.s - d : Infinity, within = left > 0 && left <= 3600e3, last = within && left <= 600e3;
+      const c = last ? AMBER : ACC;
+      const page = `<span class="page"><i style="background:${within ? c : "#5c5c64"}">${MONS[d.getMonth()].slice(0, 3).toUpperCase()}</i><b>${d.getDate()}</b></span>`;
+      if (v) return page;
+      const ck = clock(d);
+      return `${page}<span class="tab">${ck.t} ${ck.ap}</span><span class="dim">${DAYS[d.getDay()].slice(0, 3)}</span>${within ? `<span class="pdot${last ? " pulse" : ""}" style="background:${c}"></span>` : ""}`;
     },
-    w: 340,
     body: () => {
       const d = new Date(), c = clock(d);
       const sel = new Date(); sel.setHours(0, 0, 0, 0); sel.setDate(sel.getDate() + cal.sel);
+      const today0 = new Date(); today0.setHours(0, 0, 0, 0);
       const ws = new Date(sel); ws.setDate(sel.getDate() - sel.getDay());
-      let week = "";
+      let days = "";
       for (let i = 0; i < 7; i++) {
         const day = new Date(ws); day.setDate(ws.getDate() + i);
-        const off = Math.round((day - new Date(new Date().setHours(0, 0, 0, 0))) / 864e5);
+        const off = Math.round((day - today0) / 864e5);
         const n = EVENTS.filter(e => sameDay(e.s, day)).length;
-        week += `<button data-act="day" data-v="${off}" class="${off === 0 ? "today" : ""} ${off === cal.sel ? "on" : ""}"><small>${"SMTWTFS"[i]}</small><b>${day.getDate()}</b><span class="ds">${"<i></i>".repeat(Math.min(n, 3))}</span></button>`;
+        days += `<button class="d${off === 0 ? " today" : ""}${off === cal.sel ? " on" : ""}" data-act="day" data-v="${off}"><small>${"SMTWTFS"[i]}</small><b>${day.getDate()}</b><span class="ds">${"<i></i>".repeat(Math.min(n, 3))}</span></button>`;
       }
-      let out = `<div class="dayhead"><div class="big tab">${c.t}<small>${c.ap}</small></div><div class="dr"><b>${DAYS[sel.getDay()]}</b><span>${MONS[sel.getMonth()]} ${sel.getDate()}</span></div></div><div class="week">${week}</div>`;
+      let o = `<div class="dayhead"><div class="big tab">${c.t}<small>${c.ap}</small></div><div class="dr"><span>${DAYS[sel.getDay()]}</span><b>${MONS[sel.getMonth()]} ${sel.getDate()}</b></div><button class="ghost" style="margin-left:6px" data-tip="Month">${ic("cal", 14)}</button></div>`;
+      o += `<div class="week"><button class="ghost" data-act="week" data-v="-7">${ic("chevl", 16)}</button><div class="days">${days}</div><button class="ghost" data-act="week" data-v="7">${ic("chevr", 16)}</button></div>`;
       const n = nextEvent();
       if (n && cal.sel === 0) {
-        const left = n.s - d, p = clamp(left / 3600e3, 0, 1), col = left <= 600e3 ? TWO : ACC;
-        out += `<div class="card"><svg width="42" height="42" viewBox="0 0 42 42" style="flex:none"><circle cx="21" cy="21" r="18" fill="none" stroke="#24252c" stroke-width="3.5"/><circle cx="21" cy="21" r="18" fill="none" stroke="${col}" stroke-width="3.5" stroke-linecap="round" stroke-dasharray="${(p * 113).toFixed(1)} 113" transform="rotate(-90 21 21)"/><text x="21" y="25" text-anchor="middle" font-size="11" font-weight="700" fill="#f2f2f5" font-family="Outfit, sans-serif">${soonShort(left)}</text></svg><div style="flex:1;min-width:0"><div style="font-weight:600;font-size:13.5px">${n.title}</div><div class="mut" style="font-size:12px;margin-top:2px">${span(n.s)}${n.where ? ", " + n.where : ""}</div></div>${n.link ? `<button class="sb" data-act="join" style="background:${col};color:#04130b" data-tip="Join the call">Join</button>` : ""}</div>`;
+        const left = n.s - d, p = clamp(left / 3600e3, 0, 1), col = left <= 600e3 ? AMBER : ACC;
+        o += `<div class="card">${ringed(`<b class="out" style="font-size:13px;color:${col}">${soonShort(left)}</b>`, p, 50, col)}<div style="flex:1;min-width:0;display:flex;flex-direction:column;gap:3px"><b style="font-size:15px">${n.title}</b><span class="dim" style="font-size:13.5px">${clock(n.s).t} to ${span(new Date(n.s.getTime() + n.m * 60000))}${n.where ? ", " + n.where : ""}</span></div>${n.link ? `<button class="join" data-act="join">${ic("play", 12)}Join</button>` : ""}</div>`;
       }
       const list = EVENTS.filter(e => sameDay(e.s, sel)).sort((a, b) => a.s - b.s);
       if (list.length) {
-        let rows = "", nowPut = cal.sel !== 0;
+        let rows = "", put = cal.sel !== 0;
         for (const e of list) {
-          if (!nowPut && e.s > d) { rows += '<div class="now"></div>'; nowPut = true; }
-          const past = new Date(e.s.getTime() + e.m * 60000) < d;
-          rows += `<div class="ev${past ? " past" : ""}"><div class="tm tab">${clock(e.s).t}</div><div class="cb"></div><div class="tx" style="display:flex;flex-direction:column;gap:2px"><b style="font-size:12.5px">${e.title}</b><span class="mut" style="font-size:11.5px">${span(e.s)} to ${span(new Date(e.s.getTime() + e.m * 60000))}</span></div></div>`;
+          if (!put && e.s > d) { rows += '<div class="now"></div>'; put = true; }
+          const end = new Date(e.s.getTime() + e.m * 60000);
+          rows += `<div class="ev${end < d ? " past" : ""}"><div class="tm tab">${clock(e.s).t}</div><div class="bx"><b>${e.title}</b><span>${clock(e.s).t} to ${span(end)}${e.where ? ", " + e.where : ""}</span></div></div>`;
         }
-        if (!nowPut) rows += '<div class="now"></div>';
-        out += `<div class="tl">${rows}</div>`;
+        if (!put) rows += '<div class="now"></div>';
+        o += `<div class="tl">${rows}</div>`;
       }
-      return out;
+      return o;
     },
-    open: () => { cal.sel = 0; },
+    opened: () => { cal.sel = 0; },
   },
-  music: {
+  song: {
     tip: () => TRACKS[music.i].title + "\n" + TRACKS[music.i].artist,
     peek: v => {
-      const bars = `<span class="bars${music.playing ? "" : " still"}"><i></i><i></i><i></i></span>`;
-      if (v) return bars;
-      return `${bars}<span class="mq"><span>${TRACKS[music.i].title}</span></span>`;
+      const t = TRACKS[music.i], viz = `<span class="viz${music.playing ? "" : " still"}" style="color:#f2f2f5"><i></i><i></i><i></i></span>`;
+      if (v) return `<span class="cv" style="background:linear-gradient(135deg,${t.a},${t.b} 60%,${t.c})"></span>`;
+      return `<span class="cv" style="background:linear-gradient(135deg,${t.a},${t.b} 60%,${t.c})"></span><span class="two"><span>${t.title}</span><small>${t.artist}</small></span>${viz}`;
     },
-    w: 330,
     body: () => {
       const t = TRACKS[music.i];
-      return `<div style="display:flex;gap:12px;align-items:center"><div class="cover" style="width:58px;height:58px;background:linear-gradient(135deg,${t.a},${t.b} 60%,${t.c})"></div><div style="min-width:0"><div class="out" style="font-size:16px;font-weight:600">${t.title}</div><div class="mut" style="font-size:12px;margin-top:2px">${t.artist}</div></div></div>
-      <div style="display:flex;flex-direction:column;gap:5px"><div class="bar"><i style="width:${(music.t / t.len * 100).toFixed(1)}%"></i></div><div style="display:flex;justify-content:space-between;font-size:11px" class="mut tab"><span>${mmss(music.t)}</span><span>${mmss(t.len)}</span></div></div>
-      <div class="ctl"><button class="gb" data-act="prev" data-tip="Previous">${ic("prev", 18)}</button><button class="gb big" data-act="play" data-tip="${music.playing ? "Pause" : "Play"}">${ic(music.playing ? "pause" : "play", 20)}</button><button class="gb" data-act="next" data-tip="Next">${ic("next", 18)}</button></div>`;
+      return `<div class="cover" style="width:200px;height:200px;background:linear-gradient(135deg,${t.a},${t.b} 60%,${t.c})">${ic("music", 34)}</div>
+      <div class="songhead"><div class="nm"><b>${t.title}</b><span>${t.artist}</span></div><span class="viz${music.playing ? "" : " still"}" style="color:${ACC}"><i></i><i></i><i></i><i></i></span></div>
+      <div class="seek"><div class="bar"><i style="width:${(music.t / t.len * 100).toFixed(2)}%"></i></div><div class="tm tab"><span>${mmss(music.t)}</span><span>${mmss(t.len)}</span></div></div>
+      <div class="ctl"><button class="ghost" data-act="prev" data-tip="Previous">${ic("prev", 20)}</button><button class="main" data-act="play" data-tip="${music.playing ? "Pause" : "Play"}">${ic(music.playing ? "pause" : "play", 22)}</button><button class="ghost" data-act="next" data-tip="Next">${ic("next", 20)}</button></div>`;
     },
   },
   claude: {
-    tip: () => claude.asks ? "Claude needs you" : "Claude Code\n" + claude.sessions.filter(s => s.st === "work").length + " working",
-    peek: () => `<span class="burst${claude.sessions.some(s => s.st === "work") ? " spin" : ""}">${ic("burst", 16)}</span>`,
-    w: 320,
-    body: () => {
-      const chip = s => s.st === "work" ? `<span style="color:${CL}">Working</span>` : s.st === "ask" ? `<span style="color:${TWO}">Needs You</span>` : "Done";
-      return `<div class="lab">Sessions</div><div>${claude.sessions.map(s => `<div class="row"><span class="burst${s.st === "work" ? " spin" : ""}">${ic("burst", 15)}</span><div class="tx"><div class="tt">${s.name}</div><div class="ts">${s.what}</div></div><div class="rt">${chip(s)}</div></div>`).join("")}</div>`;
+    tip: () => claude.waiting ? "Claude needs you" : claude.sessions.some(s => s.st === "working") ? "1 working" : "No sessions",
+    peek: v => {
+      const c = claude.waiting ? AMBER : CLAUDE, working = claude.sessions.some(s => s.st === "working");
+      const i = ringed(ic("spark", 12, "color:" + c), working ? .75 : 0, 22, c, "#2c2c33");
+      return v || !claude.waiting ? i : `${i}<span style="color:${AMBER}">Needs You</span>`;
     },
+    body: () => claude.sessions.map(s => {
+      const tone = s.st === "working" ? CLAUDE : s.st === "waiting" ? AMBER : ACC;
+      const el = Math.floor((Date.now() - s.since) / 1000);
+      const strip = s.st === "working" ? `Working for ${Math.floor(el / 60)}m ${pad2(el % 60)}s` : s.st === "waiting" ? "Waiting for you" : "Done in 6m 02s";
+      return `<div class="sec"><div class="hd"><span class="ct">C</span><div class="nm"><b>${s.title}</b><span>${s.sub}</span></div></div><div class="strip tab" style="background:${tone}1f;color:${tone}"><span>${strip}</span><span style="opacity:.8">${s.st === "finished" ? "3 min ago" : ""}</span></div></div>`;
+    }).join(""),
   },
   drives: {
-    tip: () => drives.map(d => `${d.l}:  ${Math.round(d.size - d.used)} GB free`).join("\n"),
-    peek: v => v ? ring("C", drives[0].used / drives[0].size, 22) : drives.map(d => ring(d.l, d.used / d.size, 22, d.usb ? TWO : ACC)).join(""),
-    w: 310,
-    body: () => drives.map(d => `<div class="row go" data-act="drive" data-tip="${d.name} (${d.l}:)">${ring(d.l, d.used / d.size, 30, d.usb ? TWO : ACC)}<div class="tx" style="gap:5px"><div style="display:flex;justify-content:space-between;gap:8px"><span class="tt">${d.name}</span><span class="rt tab">${Math.round(d.size - d.used)} GB free</span></div><div class="bar" style="--c:${d.usb ? TWO : ACC}"><i style="width:${(d.used / d.size * 100).toFixed(1)}%"></i></div><div style="display:flex;gap:14px;font-size:11px" class="mut tab"><span>${flow(false, TEAL)} ${rate(d.r)}</span><span>${flow(true)} ${rate(d.w)}</span></div></div></div>`).join(""),
+    tip: () => drives.map(d => `${d.l}:  ${d.free} free of ${d.total}`).join("\n"),
+    peek: v => {
+      const ring = d => ringed(`<b class="out" style="font-size:11px">${d.l}</b>`, d.part, 24, d.c);
+      return v ? ring(drives[0]) : drives.map(ring).join("");
+    },
+    body: () => drives.map(d => {
+      const busy = d.r[d.r.length - 1] > .05, top = Math.max(.05, ...d.r);
+      const pts = d.r.map((v, i) => `${(i / (d.r.length - 1) * 100).toFixed(1)},${(18 - v / top * 15).toFixed(1)}`).join(" ");
+      const wave = `<svg viewBox="0 0 92 46" preserveAspectRatio="none"><path d="M0 ${46 - d.part * 46} q11.5 -4 23 0 t23 0 t23 0 t23 0 V46 H0z" fill="${d.c}" opacity=".55"/></svg>`;
+      return `<button class="drv" data-act="drive" style="text-align:left;width:calc(100% + 16px)"><span class="tile">${wave}<b>${d.l}</b></span><span class="info"><span class="top"><span class="tt">${d.name}</span><span class="sz"><b>${d.free}</b> of ${d.total}</span></span><span class="graph"><svg viewBox="0 0 100 20" preserveAspectRatio="none">${busy || d.r.some(v => v > .05) ? `<polyline points="${pts}" fill="none" stroke="${BLUE}" stroke-width="1.6" vector-effect="non-scaling-stroke"/>` : `<line x1="0" y1="18" x2="100" y2="18" stroke="#3a3a42" stroke-width="1.6" vector-effect="non-scaling-stroke"/>`}</svg>${busy ? `<span>${flow(false)} ${rate(d.r[d.r.length - 1] * 1.6e8)}</span>` : ""}</span></span></button>`;
+    }).join(""),
   },
   net: {
-    tip: () => net.air ? "Airplane Mode" : net.wifi ? "Home\nConnected" : "Offline",
+    w: 340,
+    tip: () => net.air ? "Airplane Mode" : net.wifi ? "Home" : "Offline",
     peek: v => {
-      const i = net.air ? ic("airplane", 16) : wifi(net.wifi ? 3 : 0, 16);
-      return v ? i : `${i}<span>${net.air ? "Airplane" : net.wifi ? "Home" : "Offline"}</span>`;
+      const i = net.air ? ic("airplane", 16) : signal(net.wifi ? 3 : 0, 16);
+      return v ? i : `${i}<span>${net.air ? "Airplane Mode" : net.wifi ? "Home" : "Offline"}</span>`;
     },
-    w: 330,
     body: () => {
       const on = net.wifi && !net.air;
-      let o = `<div style="display:flex;gap:12px;align-items:center;padding:2px 2px 0"><div style="width:46px;height:46px;border-radius:23px;background:${on ? "#5ac88c22" : "#e87a7a1f"};display:grid;place-items:center">${net.air ? ic("airplane", 20, "color:" + RED) : wifi(on ? 3 : 0, 20, on ? ACC : RED)}</div><div style="flex:1"><div class="out" style="font-size:16px;font-weight:600">${net.air ? "Airplane Mode" : on ? "Home" : "Offline"}</div><div class="mut" style="font-size:12px;margin-top:2px;display:flex;gap:6px;align-items:center">${net.air ? "Radios off" : on ? ic("lock", 12) + "Connected" : "Not connected"}</div></div>${on ? `<div class="tab" style="display:flex;flex-direction:column;gap:3px;font-size:11.5px;text-align:right"><span style="color:${TEAL}">${flow(false, TEAL)} ${rate(net.down)}</span><span>${flow(true)} ${rate(net.up)}</span></div>` : ""}</div>`;
-      o += `<div class="toggles"><button data-act="wifi" class="${net.wifi && !net.air ? "on" : ""}">${wifi(3, 16)}Wi-Fi</button><button data-act="air" class="${net.air ? "on" : ""}">${ic("airplane", 16)}Airplane</button>${on ? `<button data-act="hot" class="${net.hot ? "on" : ""}">${ic("hotspot", 16)}Hotspot</button>` : ""}</div>`;
-      if (net.hot && on) o += `<div class="row go" data-act="copy" data-tip="Copy the password">${ic("hotspot", 16, "color:" + ACC)}<div class="tx"><div class="tt">PRETEND-PC</div><div class="ts">orange-kite-42</div></div><div class="rt">No Devices</div></div>`;
-      if (net.wifi && !net.air) o += `<div class="lab">Networks</div><div>${[["Neighbours 5G", 2, true], ["Coffee Corner", 1, false], ["Upstairs", 1, true]].map(([n, l, k]) => `<div class="row go" data-act="joinwifi" data-tip="A pretend network">${wifi(l, 16)}<div class="tx"><div class="tt">${n}</div></div>${k ? ic("lock", 13, "color:" + "#8e8e96") : ""}</div>`).join("")}</div>`;
+      let o = `<div class="card"><span style="width:52px;height:52px;border-radius:26px;background:${on ? "#5ac88c26" : "#e87a7a24"};display:grid;place-items:center;flex:none">${net.air ? ic("airplane", 22, "color:" + RED) : signal(on ? 3 : 0, 22, on ? ACC : RED)}</span><div style="flex:1;min-width:0;display:flex;flex-direction:column;gap:3px"><b style="font-size:15.5px">${net.air ? "Airplane Mode" : on ? "Home" : "Offline"}</b><span class="dim" style="font-size:13.5px;display:flex;gap:5px;align-items:center">${net.air ? "Radios off" : on ? ic("lock", 11) + "Connected" : "Not connected"}</span></div>${on ? `<div class="tab" style="display:flex;flex-direction:column;gap:4px;font-size:13.5px;font-weight:600;text-align:right"><span style="color:${TEAL}">${flow(false)} ${rate(net.down)}</span><span style="color:#c9c9d1">${flow(true)} ${rate(net.up)}</span></div>` : ""}</div>`;
+      o += `<div class="toggles"><button data-act="wifi" class="${on ? "on" : ""}" data-tip="Turn ${on ? "Off" : "On"} Wi-Fi">${ic("wifi", 16)}Wi-Fi</button><button data-act="air" class="${net.air ? "on" : ""}" data-tip="Turn ${net.air ? "Off" : "On"} Airplane">${ic("airplane", 16)}Airplane</button>${on ? `<button data-act="hot" class="${net.hot ? "on" : ""}" data-tip="Turn ${net.hot ? "Off" : "On"} Hotspot">${ic("hotspot", 16)}Hotspot</button>` : ""}</div>`;
+      if (net.hot && on) o += `<button class="row go" data-act="copy" style="min-height:44px">${ic("hotspot", 16, "color:" + ACC)}<span class="tx" style="display:flex;flex-direction:column;gap:2px">PRETEND-PC<span class="dim" style="font-size:12.5px">orange-kite-42</span></span><span class="dim" id="copied">No Devices</span></button>`;
+      if (on) o += `<div class="lab">Networks</div><div style="display:flex;flex-direction:column">${[["Neighbours 5G", 2, ["lock"]], ["Coffee Corner", 1, []], ["Upstairs", 1, ["star", "lock"]]].map(([n, l, m]) => `<button class="row go" data-act="joinwifi">${signal(l, 16)}<span class="tx">${n}</span><span class="mk">${m.map(x => ic(x, 12)).join("")}</span></button>`).join("")}</div>`;
+      o += `<div><button class="ghost" data-tip="Network Settings">${ic("gear", 15)}</button></div>`;
       return o;
     },
   },
-  eyes: {
-    tip: () => "Eyes",
-    peek: () => `<span class="eyes"><i></i><i></i></span>`,
-    poke: () => { const e = $(".eyes", st.eyes.el); if (!e) return; e.classList.add("happy"); setTimeout(() => e.classList.remove("happy"), 900); },
-  },
-  apps: {
-    tip: () => "Apps",
-    peek: v => v ? ic("grid", 16) : `${ic("grid", 16)}<span>Apps</span>`,
-    click: () => toggleLauncher(),
-  },
-  dl: {
-    tip: () => dl.items.length ? dl.items[0].name + "\n" + Math.round(dl.items[0].p * 100) + "%" : "Nothing downloading",
-    peek: v => v ? flow(false, TEAL) : `${flow(false, TEAL)}<span class="tab" style="color:${TEAL}">${rate(dl.rate)}</span>`,
-    w: 330,
+  eyes: { tip: () => "Eyes", peek: () => `<span class="eyes"><i></i><i></i></span>`, poke: () => { const e = $(".eyes", st.eyes.wc); if (e) { e.classList.add("happy"); setTimeout(() => e.classList.remove("happy"), 900); } } },
+  apps: { tip: () => "Apps", peek: () => ic("grid", 18), press: () => toggleLauncher() },
+  downloads: {
+    tip: () => dl.items.length ? dl.items[0].name + "\n" + Math.round(dl.items[0].p * 100) + "%" : "No downloads",
+    peek: v => {
+      const it = dl.items[0], i = ringed(ic("download", 11, "color:#c9c9d1"), it ? it.p : 1, 22, BLUE);
+      return v ? i : `${i}<span class="tab">${rate(dl.rate)}</span>`;
+    },
     body: () => {
-      const max = Math.max(...dl.hist) * 1.15, pts = dl.hist.map((v, i) => `${(i / (dl.hist.length - 1) * 302).toFixed(1)},${(56 - v / max * 52).toFixed(1)}`).join(" ");
-      let o = `<div style="display:flex;justify-content:space-between;align-items:baseline"><span class="out tab" style="font-size:22px;font-weight:600;color:${TEAL}">${rate(dl.rate)}</span><span class="mut" style="font-size:11.5px">Last Minute</span></div><svg width="302" height="58" viewBox="0 0 302 58" style="display:block"><defs><linearGradient id="dg" x1="0" x2="0" y1="0" y2="1"><stop offset="0" stop-color="${TEAL}" stop-opacity=".35"/><stop offset="1" stop-color="${TEAL}" stop-opacity="0"/></linearGradient></defs><polygon points="0,58 ${pts} 302,58" fill="url(#dg)"/><polyline points="${pts}" fill="none" stroke="${TEAL}" stroke-width="2" stroke-linejoin="round"/></svg>`;
+      const max = Math.max(...dl.hist) * 1.15, n = dl.hist.length, gw = 250;
+      const pts = dl.hist.map((v, i) => `${(i / (n - 1) * gw).toFixed(1)},${(38 - v / max * 34).toFixed(1)}`).join(" ");
+      const ly = 38 - dl.hist[n - 1] / max * 34;
+      let o = `<div style="display:flex;align-items:flex-end;gap:12px"><svg width="${gw + 4}" height="40" viewBox="0 0 ${gw + 4} 40"><polygon points="0,40 ${pts} ${gw},40" fill="${BLUE}" opacity=".16"/><polyline points="${pts}" fill="none" stroke="${BLUE}" stroke-width="1.8" stroke-linejoin="round"/><circle cx="${gw}" cy="${ly.toFixed(1)}" r="2.6" fill="${BLUE}"/></svg><b class="tab" style="font-size:14px;white-space:nowrap">${rate(dl.rate)}</b></div>`;
       for (const it of dl.items) {
         const left = (1 - it.p) * it.size / dl.rate;
-        o += `<div class="card"><div style="width:46px;height:46px;border-radius:10px;flex:none;background:linear-gradient(135deg,${it.a},${it.b})"></div><div style="flex:1;min-width:0;display:flex;flex-direction:column;gap:6px"><div style="display:flex;justify-content:space-between;gap:8px"><b style="font-size:13px">${it.name}</b><span class="mut tab" style="font-size:11.5px">${Math.round(it.p * 100)}%</span></div><div class="bar" style="--c:${TEAL}"><i style="width:${(it.p * 100).toFixed(1)}%"></i></div><div class="mut tab" style="font-size:11.5px">${it.from}, ${left > 60 ? Math.ceil(left / 60) + " min" : Math.ceil(left) + " s"} left</div></div></div>`;
+        o += `<div class="xfer"><div class="hd"><span class="ti">${ic(it.ic, 16)}</span><span class="nm"><b>${it.name}</b><span class="tab">${rate(dl.rate)}</span></span><span class="rt tab">${left > 60 ? Math.ceil(left / 60) + " min" : Math.ceil(left) + " s"}</span></div><div class="bar" style="--c:${BLUE}"><i style="width:${(it.p * 100).toFixed(2)}%"></i></div></div>`;
       }
-      if (dl.done.length) o += `<div class="lab">Done</div><div>${dl.done.map(d => `<div class="row">${ic("check", 16, "color:" + ACC)}<div class="tx"><div class="tt">${d.name}</div><div class="ts">${d.from}</div></div><button class="gb" data-act="noop" data-tip="Open">${ic("open", 15)}</button><button class="gb" data-act="noop" data-tip="Show in Folder">${ic("folder", 15)}</button></div>`).join("")}</div>`;
+      for (const d of dl.done) o += `<div class="done">${ic("check", 18).replace('class="ic"', 'class="ic ok"')}<span class="nm">${d.name}</span><button class="ghost" data-tip="Show in Folder">${ic("folder", 15)}</button><button class="ghost" data-act="clear" data-v="${d.name}" data-tip="Clear">${ic("x", 14)}</button></div>`;
       return o;
     },
   },
   weather: {
     tip: () => "Sunny\n24°, feels like 25°",
-    peek: v => v ? ic("sun", 17, "color:" + TWO) : `${ic("sun", 17, "color:" + TWO)}<span class="tab">24°</span>`,
-    w: 300,
-    body: () => `<div style="display:flex;align-items:center;gap:14px">${ic("sun", 44, "color:" + TWO)}<div><div class="out" style="font-size:38px;font-weight:600;line-height:1">24°</div><div class="mut" style="margin-top:4px">Sunny, feels like 25°</div></div></div><div style="display:grid;grid-template-columns:repeat(5,1fr);gap:4px;text-align:center" class="tab">${[["Now", 24], ["1 PM", 25], ["2 PM", 26], ["3 PM", 25], ["4 PM", 23]].map(([h, t]) => `<div style="background:#141519;border-radius:12px;padding:8px 0;display:flex;flex-direction:column;gap:5px;align-items:center"><span class="mut" style="font-size:10.5px">${h}</span>${ic("sun", 15, "color:" + TWO)}<b style="font-size:12px">${t}°</b></div>`).join("")}</div>`,
+    peek: v => v ? ic("sun", 18, "color:" + AMBER) : `${ic("sun", 18, "color:" + AMBER)}<span class="tab">24°</span>`,
+    body: () => `<div style="display:flex;align-items:center;gap:14px">${ic("sun", 44, "color:" + AMBER)}<div><div class="out" style="font-size:38px;font-weight:600;line-height:1">24°</div><div class="dim" style="margin-top:4px;font-size:13.5px">Sunny, feels like 25°</div></div></div><div style="display:grid;grid-template-columns:repeat(5,1fr);gap:6px;text-align:center" class="tab">${[["Now", 24], ["1 PM", 25], ["2 PM", 26], ["3 PM", 25], ["4 PM", 23]].map(([h, t]) => `<div style="background:var(--track);border-radius:12px;padding:9px 0;display:flex;flex-direction:column;gap:6px;align-items:center"><span class="dim" style="font-size:11.5px">${h}</span>${ic("sun", 16, "color:" + AMBER)}<b style="font-size:13px">${t}°</b></div>`).join("")}</div>`,
   },
   battery: {
     tip: () => "82%\n3 h 10 min left",
-    peek: v => { const b = `<svg width="22" height="12" viewBox="0 0 22 12"><rect x=".8" y=".8" width="18" height="10.4" rx="3" fill="none" stroke="#5c5c64" stroke-width="1.4"/><rect x="2.6" y="2.6" width="${(14.4 * .82).toFixed(1)}" height="6.8" rx="1.6" fill="${ACC}"/><rect x="20" y="4" width="1.6" height="4" rx=".8" fill="#5c5c64"/></svg>`; return v ? b : `${b}<span class="tab">82%</span>`; },
-    w: 280,
-    body: () => `<div style="display:flex;align-items:center;gap:14px"><div class="out" style="font-size:38px;font-weight:600;line-height:1">82%</div><div class="mut">3 h 10 min left</div></div><div class="bar" style="height:8px"><i style="width:82%"></i></div>`,
+    peek: v => { const b = `<svg width="24" height="13" viewBox="0 0 24 13"><rect x=".8" y=".8" width="19.5" height="11.4" rx="3.4" fill="none" stroke="#5c5c64" stroke-width="1.4"/><rect x="2.7" y="2.7" width="${(15.7 * .82).toFixed(1)}" height="7.6" rx="1.8" fill="${ACC}"/><rect x="21.6" y="4.3" width="1.8" height="4.4" rx=".9" fill="#5c5c64"/></svg>`; return v ? b : `${b}<span class="tab">82%</span>`; },
+    body: () => `<div style="display:flex;align-items:center;gap:14px"><div class="out" style="font-size:38px;font-weight:600;line-height:1">82%</div><div class="dim" style="font-size:13.5px">3 h 10 min left</div></div><div class="bar" style="height:8px;border-radius:4px"><i style="width:82%"></i></div>`,
   },
 };
 const sameDay = (a, b) => a.getFullYear() === b.getFullYear() && a.getMonth() === b.getMonth() && a.getDate() === b.getDate();
@@ -569,230 +637,375 @@ const nextEvent = () => { const d = new Date(); return EVENTS.filter(e => e.s.ge
 const soonShort = ms => { if (ms <= 0) return "Now"; const m = Math.ceil(ms / 60000); return m < 60 ? m + "m" : Math.floor(m / 60) + "h"; };
 const soonWords = e => { const ms = e.s - new Date(); if (ms <= 0) return "now"; const m = Math.ceil(ms / 60000); return m < 60 ? "in " + m + " min" : "in " + Math.floor(m / 60) + " h" + (m % 60 ? " " + (m % 60) + " min" : ""); };
 
-/* the frame: which widgets are on which edge, in order; each one's state */
-const edges = { top: ["calendar", "music", "claude"], right: ["drives", "net"], bottom: ["apps", "dl"], left: ["eyes"] };
+/* the frame: the widgets on each edge, in order */
+const edges = { top: ["calendar", "song", "claude"], right: ["drives", "net"], bottom: ["apps", "downloads"], left: ["eyes"] };
+const horiz = e => e === "top" || e === "bottom";
 const st = {};
-const vert = e => e === "left" || e === "right";
-let PH = null; // (while dragging: where it would go)
+let PH = null, drag = null, justDragged = false;
 
 function make(id, edge) {
-  const el = document.createElement("div");
-  el.className = "w e-" + edge;
-  el.innerHTML = '<div class="clip"><div class="peek"></div><div class="body"></div><div class="bnr"></div></div>';
-  nadi.append(el);
-  const s = st[id] = { id, el, edge, c: 0, bw: 60, bh: DEPTH, pw: 0, ph: 0, banW: 0, banH: 0, open: false, pinned: false, ban: false, sw: false, gone: true, peekHtml: "", bodyHtml: "" };
-  s.peek = $(".peek", el); s.body = $(".body", el); s.bnr = $(".bnr", el);
-  bind(s);
-  renderPeek(s, true);
-  return s;
+  const wc = document.createElement("div");
+  wc.className = "wc";
+  wc.innerHTML = '<div class="pk"></div><div class="pb"></div>';
+  nadiEl.append(wc);
+  const w = st[id] = { id, wc, edge, pk: wc.firstChild, pb: wc.lastChild, peekHtml: "", bodyHtml: "", want: 60, pw: 0, ph: 0,
+    rest: { x: new Spring(0), y: new Spring(0), w: new Spring(0), h: new Spring(0) }, fresh: true,
+    open: new Spring(0), shown: new Spring(0), swell: new Spring(0), pinned: false, ban: null, glow: null };
+  bind(w);
+  renderPeek(w, true);
+  return w;
 }
-
-function renderPeek(s, force) {
-  const v = vert(s.edge), html = W[s.id].peek(v);
-  if (!force && html === s.peekHtml) return false;
-  s.peekHtml = html;
-  s.peek.innerHTML = html;
+function renderPeek(w, force) {
+  const v = !horiz(w.edge), html = W[w.id].peek(v);
+  if (!force && html === w.peekHtml) return false;
+  w.peekHtml = html;
+  w.pk.innerHTML = html;
+  inStep(w.pk);
   meas.className = v ? "vv" : "h";
   meas.innerHTML = html;
-  const mq = $(".mq", meas);
-  if (v) { s.bw = SIDE; s.bh = Math.max(44, meas.offsetHeight); }
-  else { s.bw = Math.max(DEPTH + 6, meas.offsetWidth); s.bh = DEPTH; }
-  marquee(s.peek);
+  w.want = v ? Math.max(DEPTH_V, meas.offsetHeight + 16) : Math.max(DEPTH_H, meas.offsetWidth);
   return true;
 }
-function marquee(root) {
-  for (const m of root.querySelectorAll(".mq")) {
-    const inner = m.firstElementChild, over = inner.scrollWidth - m.clientWidth;
-    m.classList.toggle("fits", over <= 1);
-    if (over > 1) { inner.style.setProperty("--x", -over - 4 + "px"); inner.style.setProperty("--d", (2.2 + over / 22) + "s"); inner.classList.add("go"); }
-  }
+function renderBody(w) {
+  const d = W[w.id];
+  const html = w.ban ? w.ban.html : d.body ? d.body() : "";
+  if (html === w.bodyHtml) return false;
+  w.bodyHtml = html;
+  w.pb.innerHTML = html;
+  inStep(w.pb);
+  w.pw = w.ban ? BANNER_W : d.w || (horiz(w.edge) ? PANEL_W : PANEL_W_SIDE);
+  w.pb.style.width = w.pw + "px";
+  const h = w.pb.offsetHeight;
+  const changed = h !== w.ph;
+  w.ph = h;
+  return changed;
 }
-function renderBody(s) {
-  const d = W[s.id];
-  if (!d.body) return;
-  const html = d.body();
-  if (html === s.bodyHtml) return;
-  s.bodyHtml = html;
-  s.body.innerHTML = html;
-  s.body.style.width = (s.pw = d.w || 320) + "px";
-  s.ph = s.body.offsetHeight;
-}
-function size(s) {
-  const v = vert(s.edge);
-  if (s.gone) return v ? [0, s.bh] : [s.bw, 0];
-  if (s.open) return [s.pw, s.ph];
-  if (s.ban) return [s.banW, s.banH];
-  return s.sw ? (v ? [s.bw + 5, s.bh + 6] : [s.bw + 6, s.bh + 5]) : [s.bw, s.bh];
-}
-function along(s) {
-  const v = vert(s.edge);
-  const [w, h] = s.open ? [s.pw, s.ph] : s.ban ? [s.banW, s.banH] : [s.bw, s.bh];
-  return v ? h : w;
-}
-function layout() {
+const isOpen = w => w.open.to === 1;
+
+/* the layout: each edge's widgets in a row (or column) in its middle, a gap between; an open one as big as its panel, pushing the
+   others aside; its box with the fillets at its two ends */
+function layout(snap) {
   for (const e in edges) {
     const ids = edges[e];
-    const sizes = ids.map(id => id === "PH" ? PH.along : along(st[id]));
-    const total = sizes.reduce((a, b) => a + b, 0) + GAP * Math.max(0, ids.length - 1);
-    const len = vert(e) ? SH - TB : SW;
-    let p = (len - total) / 2;
-    ids.forEach((id, i) => { if (id !== "PH") st[id].c = p + sizes[i] / 2; p += sizes[i] + GAP; });
+    const along = ids.map(id => id === "PH" ? PH.along : isOpen(st[id]) ? (horiz(e) ? st[id].pw : st[id].ph) : st[id].want);
+    const total = along.reduce((a, b) => a + b + 2 * FILLET, 0) + GAP * Math.max(0, ids.length - 1);
+    const len = horiz(e) ? SW : SH - TB;
+    let p = Math.max(0, (len - total) / 2);
+    ids.forEach((id, i) => {
+      const slot = along[i] + 2 * FILLET;
+      if (id !== "PH") {
+        const w = st[id], o = isOpen(w);
+        const across = o ? (horiz(e) ? w.ph : w.pw) : (horiz(e) ? DEPTH_H : DEPTH_V);
+        let b;
+        if (e === "top") b = { x: p, y: 0, w: slot, h: across };
+        else if (e === "bottom") b = { x: p, y: SH - TB - across, w: slot, h: across };
+        else if (e === "left") b = { x: 0, y: p, w: across, h: slot };
+        else b = { x: SW - across, y: p, w: across, h: slot };
+        if (horiz(e)) b.x = clamp(b.x, -FILLET, SW - b.w + FILLET);
+        else b.y = clamp(b.y, -FILLET, SH - TB - b.h + FILLET);
+        for (const k of ["x", "y", "w", "h"]) { w.rest[k].to = b[k]; if (snap || w.fresh) { w.rest[k].now = b[k]; w.rest[k].vel = 0; } }
+        w.fresh = false;
+      }
+      p += slot + GAP;
+    });
   }
-  for (const id in st) place(st[id]);
-}
-function place(s) {
-  if (s.dragging) return;
-  const [w, h] = size(s), e = s.edge;
-  let x, y;
-  if (!vert(e)) { x = clamp(s.c - w / 2, 4, SW - 4 - w); y = e === "top" ? 0 : SH - TB - h; }
-  else { y = clamp(s.c - h / 2, 4, SH - TB - 4 - h); x = e === "left" ? 0 : SW - w; }
-  const el = s.el;
-  el.className = `w e-${e}${vert(e) ? " v" : ""}${s.open ? " open" : ""}${s.ban ? " ban" : ""}${s.sw ? " sw" : ""}${s.gone ? " gone" : ""}`;
-  el.style.left = x + "px"; el.style.top = y + "px"; el.style.width = w + "px"; el.style.height = h + "px";
-  el.style.boxShadow = s.glow && !s.gone ? `0 0 0 1.5px ${s.glow}, 0 0 22px 2px ${s.glow}66` : "none";
-  s.rect = { x, y, w, h };
+  kick();
 }
 
-/* the mouse on them: a swell, then open (on a touch, a tap opens); a press keeps one open; one open at a time */
-function bind(s) {
-  const el = s.el, d = () => W[s.id];
-  el.addEventListener("pointerenter", e => {
+/* the shape now (frame.rs shape_now): grown out of its edge while it comes out, swollen under the mouse, round as it opens */
+function shapeNow(w) {
+  const t = clamp(w.open.now, 0, 1), e = w.edge, h = horiz(e), f = FILLET;
+  let b = { x: w.rest.x.now, y: w.rest.y.now, w: w.rest.w.now, h: w.rest.h.now };
+  if (w.dragging) return { b, body: b, r: Math.min(b.w, b.h) / 2, t: 0, drop: true };
+  const g = Math.max(0, clamp(w.shown.now, -0.1, 1.25));
+  if (Math.abs(g - 1) > 0.001) {
+    const ak = g, lk = 0.5 + 0.5 * g;
+    if (e === "top") { const nw = b.w * lk, nh = b.h * ak; b = { x: b.x + (b.w - nw) / 2, y: b.y, w: nw, h: nh }; }
+    else if (e === "bottom") { const nw = b.w * lk, nh = b.h * ak; b = { x: b.x + (b.w - nw) / 2, y: b.y + b.h - nh, w: nw, h: nh }; }
+    else if (e === "left") { const nw = b.w * ak, nh = b.h * lk; b = { x: b.x, y: b.y + (b.h - nh) / 2, w: nw, h: nh }; }
+    else { const nw = b.w * ak, nh = b.h * lk; b = { x: b.x + b.w - nw, y: b.y + (b.h - nh) / 2, w: nw, h: nh }; }
+  }
+  const sw = clamp(w.swell.now, -0.3, 1.4) * (1 - t);
+  if (Math.abs(sw) > 0.001) {
+    const out = SWELL_OUT * sw, al = SWELL_ALONG * sw;
+    if (e === "top") b = { x: b.x - al / 2, y: b.y, w: b.w + al, h: b.h + out };
+    else if (e === "bottom") b = { x: b.x - al / 2, y: b.y - out, w: b.w + al, h: b.h + out };
+    else if (e === "left") b = { x: b.x, y: b.y - al / 2, w: b.w + out, h: b.h + al };
+    else b = { x: b.x - out, y: b.y - al / 2, w: b.w + out, h: b.h + al };
+  }
+  const body = h ? { x: b.x + f, y: b.y, w: Math.max(4, b.w - 2 * f), h: Math.max(0.5, b.h) } : { x: b.x, y: b.y + f, w: Math.max(0.5, b.w), h: Math.max(4, b.h - 2 * f) };
+  const depth = h ? DEPTH_H : DEPTH_V;
+  const own = Math.min(depth, h ? DEPTH_H : DEPTH_V);
+  let r = own * 0.44 + (RADIUS_OPEN - own * 0.44) * t;
+  const drop = clamp(1 - g, 0, 1);
+  const round = h ? Math.min(body.h, body.w / 2) : Math.min(body.w, body.h / 2);
+  if (drop > 0) r = r + (Math.max(round, r) - r) * drop;
+  return { b, body, r: Math.min(r, body.w / 2, body.h / 2), t, g };
+}
+
+/* the liquid, on the graphics card: the app's own shader (liquidgpu.rs), in WebGL */
+const gl = cv.getContext("webgl", { premultipliedAlpha: true, antialias: false, alpha: true });
+let prog = null, U = {};
+const MAXS = 32;
+if (gl) {
+  const vs = `attribute vec2 a; void main(){ gl_Position = vec4(a, 0.0, 1.0); }`;
+  const fs = `precision highp float;
+uniform vec4 info; uniform vec4 counts; uniform vec4 glow; uniform vec4 shapes[${MAXS * 2}];
+float box(vec2 p, vec2 b, float r){ vec2 q = abs(p) - b + r; return length(max(q, 0.0)) + min(max(q.x, q.y), 0.0) - r; }
+float smin(float a, float b, float k){ vec2 u = max(vec2(k - a, k - b), 0.0); return max(k, min(a, b)) - length(u); }
+void main(){
+  vec2 p = vec2(gl_FragCoord.x, counts.w - gl_FragCoord.y) / info.z + info.xy;
+  float k = max(info.w, 0.5);
+  float da = 1e5; float de = 1e5; float db = 1e5; float lit = 1e5; float unlit = 1e5;
+  int na = int(counts.x); int ne = int(counts.y); int nb = int(counts.z);
+  for (int i = 0; i < ${MAXS}; i++) {
+    if (i >= na + ne + nb) break;
+    vec4 g = shapes[i * 2]; vec4 e = shapes[i * 2 + 1];
+    if (i < na) { float bd = box(p - g.xy, g.zw, e.x); da = smin(da, bd, k); if (e.y > 0.5) lit = min(lit, bd); else unlit = min(unlit, bd); }
+    else if (i < na + ne) { de = min(de, box(p - g.xy, g.zw, 0.0)); }
+    else { float bd = box(p - g.xy, g.zw, e.x); db = smin(db, bd, k); if (e.y > 0.5) lit = min(lit, bd); else unlit = min(unlit, bd); }
+  }
+  float d = min(smin(da, de, k), smin(da, db, k));
+  float a = clamp(0.5 - d * info.z, 0.0, 1.0);
+  if (glow.w > 0.0 && lit < unlit && lit < k * 2.0 + 2.0) {
+    float px = d * info.z; float wpx = 2.6 * info.z;
+    float ln = clamp(px + 1.0, 0.0, 1.0) * clamp(wpx - px + 0.5, 0.0, 1.0);
+    float la = ln * glow.w; float oa = a + la * (1.0 - a);
+    gl_FragColor = vec4(glow.rgb * la, oa); return;
+  }
+  gl_FragColor = vec4(0.0, 0.0, 0.0, a);
+}`;
+  const sh = (t, s) => { const o = gl.createShader(t); gl.shaderSource(o, s); gl.compileShader(o); return gl.getShaderParameter(o, gl.COMPILE_STATUS) ? o : null; };
+  const v = sh(gl.VERTEX_SHADER, vs), f = sh(gl.FRAGMENT_SHADER, fs);
+  if (v && f) {
+    prog = gl.createProgram(); gl.attachShader(prog, v); gl.attachShader(prog, f); gl.linkProgram(prog);
+    if (!gl.getProgramParameter(prog, gl.LINK_STATUS)) prog = null;
+  }
+  if (prog) {
+    gl.useProgram(prog);
+    const buf = gl.createBuffer(); gl.bindBuffer(gl.ARRAY_BUFFER, buf);
+    gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1, -1, 3, -1, -1, 3]), gl.STATIC_DRAW);
+    const loc = gl.getAttribLocation(prog, "a"); gl.enableVertexAttribArray(loc); gl.vertexAttribPointer(loc, 2, gl.FLOAT, false, 0, 0);
+    for (const n of ["info", "counts", "glow", "shapes"]) U[n] = gl.getUniformLocation(prog, n);
+  }
+}
+const hex = c => [parseInt(c.slice(1, 3), 16) / 255, parseInt(c.slice(3, 5), 16) / 255, parseInt(c.slice(5, 7), 16) / 255];
+function drawLiquid(shapes, glowC) {
+  if (!prog) return;
+  const merged = shapes.filter(s => !s.drop), drops = shapes.filter(s => s.drop);
+  const spans = {};
+  for (const s of merged) {
+    const a0 = horiz(s.edge) ? s.b.x : s.b.y, a1 = a0 + (horiz(s.edge) ? s.b.w : s.b.h);
+    const sp = spans[s.edge] || (spans[s.edge] = [a0, a1]); sp[0] = Math.min(sp[0], a0); sp[1] = Math.max(sp[1], a1);
+  }
+  const slabs = [];
+  for (const e in spans) {
+    const a0 = spans[e][0] - 3 * NECK - 20, a1 = spans[e][1] + 3 * NECK + 20, bot = SH - TB;
+    slabs.push(e === "top" ? { x: a0, y: -43, w: a1 - a0, h: 40 } : e === "bottom" ? { x: a0, y: bot + 3, w: a1 - a0, h: 40 } : e === "left" ? { x: -43, y: a0, w: 40, h: a1 - a0 } : { x: SW + 3, y: a0, w: 40, h: a1 - a0 });
+  }
+  const arr = new Float32Array(MAXS * 8);
+  let n = 0;
+  const put = (bx, r, lit) => { if (n >= MAXS) return; const hx = Math.max(0, bx.w) / 2, hy = Math.max(0, bx.h) / 2; arr.set([bx.x + hx, bx.y + hy, hx, hy, Math.max(0, Math.min(r, hx, hy)), lit ? 1 : 0, 0, 0], n * 8); n++; };
+  for (const s of merged) {
+    const bd = s.body, e = s.edge;
+    const ext = e === "top" ? { x: bd.x, y: bd.y - REACH, w: bd.w, h: bd.h + REACH } : e === "bottom" ? { x: bd.x, y: bd.y, w: bd.w, h: bd.h + REACH } : e === "left" ? { x: bd.x - REACH, y: bd.y, w: bd.w + REACH, h: bd.h } : { x: bd.x, y: bd.y, w: bd.w + REACH, h: bd.h };
+    // (coming out or going back: it sinks past its edge too, so it melts into it)
+    const sink = (1 - clamp(s.g, 0, 1)) * (NECK * 1.5 + 4);
+    if (e === "top") ext.y -= sink; else if (e === "bottom") ext.y += sink; else if (e === "left") ext.x -= sink; else ext.x += sink;
+    put(ext, s.r, s.lit);
+  }
+  const na = n;
+  for (const sl of slabs) put(sl, 0, false);
+  const ne = n - na;
+  for (const s of drops) put(s.body, s.r, s.lit);
+  const nb = n - na - ne;
+  gl.viewport(0, 0, cv.width, cv.height);
+  gl.uniform4f(U.info, 0, 0, DPR, NECK);
+  gl.uniform4f(U.counts, na, ne, nb, cv.height);
+  const gc = glowC ? hex(glowC.c) : [0, 0, 0], ga = glowC ? glowC.a : 0;
+  gl.uniform4f(U.glow, gc[0] * ga, gc[1] * ga, gc[2] * ga, ga);
+  gl.uniform4fv(U.shapes, arr);
+  gl.clearColor(0, 0, 0, 0); gl.clear(gl.COLOR_BUFFER_BIT);
+  gl.drawArrays(gl.TRIANGLES, 0, 3);
+}
+
+/* each frame while anything moves: the springs, the shapes, the liquid, what is in them */
+let raf = 0, last = 0;
+function kick() { if (!raf) { last = performance.now(); raf = requestAnimationFrame(frame); } }
+function frame(now) {
+  raf = 0;
+  const dt = Math.min(0.05, Math.max(0.001, (now - last) / 1000)); last = now;
+  let moving = false;
+  for (const id in st) {
+    const w = st[id];
+    for (const k of ["x", "y", "w", "h"]) if (w.rest[k].step(dt)) moving = true;
+    if (w.open.step(dt)) moving = true;
+    const up = w.shown.to > w.shown.now;
+    if (w.shown.step(dt, up ? SHOW_STIFF : HIDE_STIFF, up ? SHOW_DAMP : HIDE_DAMP)) moving = true;
+    if (w.swell.step(dt, SWELL_STIFF, SWELL_DAMP)) moving = true;
+  }
+  const shapes = [];
+  let glowC = null;
+  for (const id in st) {
+    const w = st[id], s = shapeNow(w), e = w.edge, h = horiz(e);
+    s.edge = e; s.drop = !!w.dragging;
+    if (w.glow) { const a = w.glow.breathe ? 0.65 + 0.35 * Math.sin(now / 1000 * 2.6) : 1; s.lit = true; glowC = { c: w.glow.c, a: a * clamp(w.shown.now, 0, 1) }; moving = true; }
+    if (w.shown.now > 0.003 || w.shown.moving() || w.dragging) shapes.push(s);
+    // (what is in it: over its body, its peek fading as its panel comes)
+    const bd = s.body, wc = w.wc;
+    const cls = "wc e-" + e + (h ? "" : " v") + (prog ? "" : " solid");
+    if (wc.className !== cls) wc.className = cls;
+    wc.style.left = bd.x + "px"; wc.style.top = bd.y + "px"; wc.style.width = bd.w + "px"; wc.style.height = bd.h + "px";
+    const r = s.r + "px";
+    wc.style.borderRadius = w.dragging ? r : e === "top" ? `0 0 ${r} ${r}` : e === "bottom" ? `${r} ${r} 0 0` : e === "left" ? `0 ${r} ${r} 0` : `${r} 0 0 ${r}`;
+    const t = s.t;
+    w.pk.style.opacity = clamp(1 - t * 3, 0, 1) * clamp((w.shown.now - 0.6) / 0.4, 0, 1);
+    w.pb.style.opacity = clamp((t - 0.35) / 0.65, 0, 1);
+    w.pb.style.visibility = t > 0.02 ? "visible" : "hidden";
+    w.pb.style.pointerEvents = t > 0.5 ? "auto" : "none";
+    wc.style.visibility = w.shown.now > 0.01 || w.dragging ? "visible" : "hidden";
+  }
+  if (prog) drawLiquid(shapes, glowC);
+  if (moving || drag) raf = requestAnimationFrame(frame);
+}
+
+/* the mouse on a widget: it swells; resting there, it opens (on a touch, a tap); leaving, it shuts a moment later, unless pressed */
+function bind(w) {
+  const wc = w.wc;
+  wc.addEventListener("pointerenter", e => {
     if (e.pointerType === "touch" || drag) return;
-    clearTimeout(s.closeT);
-    if (!s.open && !s.ban && !s.gone) { s.sw = true; place(s); }
-    if (d().body && !s.open && !s.ban) s.openT = setTimeout(() => open(s.id), 260);
+    clearTimeout(w.leaveT);
+    if (!isOpen(w)) { w.swell.to = 1; kick(); }
+    if ((W[w.id].body || w.ban) && !isOpen(w)) w.openT = setTimeout(() => open(w.id), HOVER_OPEN);
   });
-  el.addEventListener("pointerleave", e => {
+  wc.addEventListener("pointerleave", e => {
     if (e.pointerType === "touch") return;
-    clearTimeout(s.openT);
-    if (s.sw) { s.sw = false; place(s); }
-    if (s.open && !s.pinned) s.closeT = setTimeout(() => close(s.id), 320);
+    clearTimeout(w.openT);
+    w.swell.to = 0; kick();
+    if (isOpen(w) && !w.pinned && !w.ban) w.leaveT = setTimeout(() => close(w.id), LEAVE_CLOSE);
   });
-  el.addEventListener("click", e => {
+  wc.addEventListener("click", e => {
     if (justDragged || e.target.closest("[data-act]")) return;
-    clearTimeout(s.openT);
-    const def = d();
-    if (def.click) { def.click(); return; }
-    if (!def.body) { def.poke && def.poke(); return; }
-    if (s.ban) return;
-    if (s.open && s.pinned && !e.target.closest(".body")) close(s.id);
-    else if (!s.open) { open(s.id); s.pinned = true; }
-    else s.pinned = true;
+    clearTimeout(w.openT);
+    const d = W[w.id];
+    if (d.press) return d.press();
+    if (!d.body) return d.poke && d.poke();
+    if (w.ban) return;
+    if (isOpen(w) && w.pinned && !e.target.closest(".pb")) close(w.id);
+    else if (!isOpen(w)) { open(w.id); w.pinned = true; }
+    else w.pinned = true;
   });
-  el.addEventListener("contextmenu", e => { e.preventDefault(); widgetMenu(s.id, e); });
-  el.addEventListener("pointerdown", e => startDrag(s.id, e));
+  wc.addEventListener("contextmenu", e => { e.preventDefault(); widgetMenu(w.id, e); });
+  wc.addEventListener("pointerdown", e => { if (e.button === 0 && !e.target.closest(".pb")) { const p = pt(e); drag = { id: w.id, x0: p.x, y0: p.y, on: false }; } });
 }
 function open(id) {
-  const s = st[id];
-  if (s.open || s.ban || s.gone) return;
-  for (const k in st) if (k !== id && st[k].open) close(k);
+  const w = st[id];
+  if (!w || isOpen(w) || w.shown.to < 1) return;
+  for (const k in st) if (k !== id && isOpen(st[k]) && !st[k].ban) close(k);
   hideLauncher();
-  W[id].open && W[id].open();
-  s.bodyHtml = "";
-  renderBody(s);
-  s.open = true; s.sw = false;
+  W[id].opened && W[id].opened();
+  w.bodyHtml = "";
+  renderBody(w);
+  w.open.to = 1; w.swell.to = 0;
   layout();
 }
 function close(id) {
-  const s = st[id];
-  if (!s.open) return;
-  s.open = false; s.pinned = false;
+  const w = st[id];
+  if (!w || !isOpen(w)) return;
+  w.open.to = 0; w.pinned = false;
   layout();
 }
-function closeAll() { for (const k in st) if (st[k].open) close(k); }
+function closeAll() { for (const k in st) if (isOpen(st[k]) && !st[k].ban) close(k); }
 
-/* a banner: the widget grows into it, says something, and goes back */
-function banner(id, html, w, glow, ms) {
-  const s = st[id];
-  if (!s || s.gone) return;
-  if (s.open) close(id);
-  s.bnr.innerHTML = html;
-  s.bnr.style.width = (s.banW = w) + "px";
-  s.banH = s.bnr.offsetHeight;
-  s.ban = true; s.sw = false; s.glow = glow || null;
+/* banners: the widget becomes one for a moment (or until answered), its neighbours making room */
+function banner(id, html, glow, ms) {
+  const w = st[id];
+  if (!w || w.shown.to < 1) return;
+  w.ban = { html }; w.glow = glow || null;
+  w.bodyHtml = ""; renderBody(w);
+  w.open.to = 1; w.swell.to = 0; w.pinned = false;
   layout();
-  clearTimeout(s.banT);
-  if (ms) s.banT = setTimeout(() => unbanner(id), ms);
+  clearTimeout(w.banT);
+  if (ms) w.banT = setTimeout(() => unbanner(id), ms);
 }
-function unbanner(id) { const s = st[id]; if (!s || !s.ban) return; s.ban = false; s.glow = null; layout(); }
+function unbanner(id) {
+  const w = st[id];
+  if (!w || !w.ban) return;
+  w.ban = null; w.glow = null; w.open.to = 0;
+  layout();
+}
 function claudeAsk() {
-  if (!st.claude || st.claude.gone || claude.asks) return;
-  claude.asks = 1;
-  claude.sessions[1] = { name: "site", what: "Edit docs/index.html?", st: "ask" };
-  banner("claude", `<div style="padding:16px 18px;display:flex;flex-direction:column;gap:12px"><div style="display:flex;gap:12px;align-items:center"><span class="burst spin">${ic("burst", 26)}</span><div><div class="out" style="font-size:15px;font-weight:600">Claude needs you</div><div class="mut" style="font-size:12px;margin-top:2px">Edit docs/index.html?</div></div></div><div style="display:flex;gap:8px"><button class="gb" style="flex:1;height:34px;border-radius:17px" data-act="deny">Deny</button><button class="sb" style="flex:1;background:${CL};color:#1a0d05" data-act="allow">Allow</button></div></div>`, 300, CL);
-  refresh("claude");
+  if (!st.claude || claude.waiting) return;
+  claude.waiting = true;
+  claude.sessions[1] = { title: "Site", sub: "Edit docs/index.html?", st: "waiting", since: Date.now() };
+  renderPeek(st.claude); layout();
+  banner("claude", `<div class="ban"><div class="hd"><span class="ct" style="width:40px;height:40px;border-radius:12px;background:${CLAUDE};display:grid;place-items:center;color:#fff">${ic("spark", 20)}</span><div style="flex:1;display:flex;flex-direction:column;gap:3px"><b style="font-size:15px">Site needs you</b><span class="dim" style="font-size:13px">Claude wants to edit docs/index.html</span></div></div><div class="btns"><button class="no" data-act="deny">Deny</button><button style="background:${CLAUDE};color:#1a0d05" data-act="allow">Allow</button></div></div>`, { c: AMBER, breathe: true });
 }
 function claudeAnswer(ok) {
-  claude.asks = 0;
-  claude.sessions[1] = ok ? { name: "site", what: "Editing docs/index.html", st: "work" } : { name: "site", what: "Waiting for you", st: "idle" };
+  claude.waiting = false;
+  claude.sessions[1] = ok ? { title: "Site", sub: "Editing docs/index.html", st: "working", since: Date.now() } : { title: "Site", sub: "Stopped", st: "finished", since: Date.now() };
   unbanner("claude");
-  refresh("claude");
-  if (ok) setTimeout(() => { claude.sessions[1] = { name: "site", what: "Done, 2 files changed", st: "idle" }; refresh("claude"); }, 9000);
+  renderPeek(st.claude); layout();
+  if (ok) setTimeout(() => { claude.sessions[1] = { title: "Site", sub: "Finished", st: "finished", since: Date.now() }; refresh("claude"); }, 9000);
   setTimeout(claudeAsk, 45000);
 }
 
-/* moving a widget: dragged to another edge (its neighbours make room), or from its menu */
-let drag = null, justDragged = false;
+/* dragged to another edge: a drop under the mouse; its new neighbours make room */
 function pt(e) { const r = scr.getBoundingClientRect(); return { x: (e.clientX - r.left) / scale, y: (e.clientY - r.top) / scale }; }
-function startDrag(id, e) {
-  if (e.button !== 0 || e.target.closest(".body, .bnr")) return;
-  const p = pt(e);
-  drag = { id, x0: p.x, y0: p.y, on: false };
-}
 function moveDrag(e) {
   if (!drag) return;
-  const p = pt(e), s = st[drag.id];
+  const p = pt(e), w = st[drag.id];
   if (!drag.on) {
-    if (Math.hypot(p.x - drag.x0, p.y - drag.y0) < 7) return;
+    if (Math.hypot(p.x - drag.x0, p.y - drag.y0) < 6) return;
+    if (w.ban) { drag = null; return; }
     drag.on = true;
-    clearTimeout(s.openT); hideTip();
-    if (s.open) close(drag.id);
-    if (s.ban) return (drag = null);
-    s.dragging = true; s.sw = false;
-    edges[s.edge] = edges[s.edge].filter(k => k !== drag.id);
-    s.el.className = `w e-${s.edge} drag${vert(s.edge) ? " v" : ""}`;
-    s.el.style.width = Math.max(s.bw, s.bh) + "px"; s.el.style.height = Math.min(s.bw, s.bh) + "px";
-    s.el.style.boxShadow = "none";
+    clearTimeout(w.openT); hideTip();
+    if (isOpen(w)) { w.open.to = 0; w.open.now = 0; w.pinned = false; }
+    w.dragging = true; w.swell.to = 0; w.swell.now = 0;
+    edges[w.edge] = edges[w.edge].filter(k => k !== drag.id);
+    w.dw = horiz(w.edge) ? w.want : 44; w.dh = 32;
   }
-  const dw = parseFloat(s.el.style.width), dh = parseFloat(s.el.style.height);
-  s.el.style.left = p.x - dw / 2 + "px"; s.el.style.top = p.y - dh / 2 + "px";
+  w.rest.x.now = w.rest.x.to = p.x - w.dw / 2; w.rest.y.now = w.rest.y.to = p.y - w.dh / 2;
+  w.rest.w.now = w.rest.w.to = w.dw; w.rest.h.now = w.rest.h.to = w.dh;
+  for (const k of ["x", "y", "w", "h"]) w.rest[k].vel = 0;
   const dist = { top: p.y, bottom: SH - TB - p.y, left: p.x, right: SW - p.x };
   const e2 = Object.keys(dist).sort((a, b) => dist[a] - dist[b])[0];
-  const a = vert(e2) ? p.y : p.x;
+  const a = horiz(e2) ? p.x : p.y;
   const list = edges[e2].filter(k => k !== "PH");
-  let idx = list.findIndex(k => st[k].c > a);
+  let idx = list.findIndex(k => (horiz(e2) ? st[k].rest.x.to + st[k].rest.w.to / 2 : st[k].rest.y.to + st[k].rest.h.to / 2) > a);
   if (idx < 0) idx = list.length;
   if (!PH || PH.edge !== e2 || PH.idx !== idx) {
     for (const k in edges) edges[k] = edges[k].filter(x => x !== "PH");
-    list.splice(idx, 0, "PH");
-    edges[e2] = list;
-    PH = { edge: e2, idx, along: vert(e2) ? 44 : Math.max(s.bw, 60) };
+    list.splice(idx, 0, "PH"); edges[e2] = list;
+    PH = { edge: e2, idx, along: horiz(e2) ? Math.max(w.dw, 40) : 40 };
     layout();
   }
+  kick();
 }
 function endDrag() {
   if (!drag) return;
-  const s = st[drag.id];
+  const w = st[drag.id];
   if (drag.on && PH) {
-    edges[PH.edge] = edges[PH.edge].map(x => x === "PH" ? s.id : x);
-    s.edge = PH.edge; PH = null; s.dragging = false;
-    renderPeek(s, true);
+    edges[PH.edge] = edges[PH.edge].map(x => x === "PH" ? w.id : x);
+    w.edge = PH.edge; PH = null; w.dragging = false;
+    renderPeek(w, true);
     layout();
     justDragged = true; setTimeout(() => (justDragged = false), 0);
   }
   drag = null;
 }
 function moveTo(id, edge) {
-  const s = st[id];
-  if (s.open) close(id);
-  edges[s.edge] = edges[s.edge].filter(k => k !== id);
+  const w = st[id];
+  if (isOpen(w)) close(id);
+  edges[w.edge] = edges[w.edge].filter(k => k !== id);
   edges[edge].push(id);
-  s.edge = edge;
-  renderPeek(s, true);
+  w.edge = edge; w.shown.now = 0; w.shown.to = 1;
+  renderPeek(w, true);
+  w.fresh = true;
   layout();
 }
 
-/* the menu (a widget's, the desktop's) */
+/* menus */
 const menu = $("#menu");
 function showMenu(e, items) {
   const p = pt(e);
@@ -800,9 +1013,7 @@ function showMenu(e, items) {
   menu._items = items;
   menu.classList.add("show");
   const w = menu.offsetWidth, h = menu.offsetHeight;
-  const x = clamp(p.x, 6, SW - w - 6), y = clamp(p.y, 6, SH - h - 6);
-  menu.style.left = x + "px"; menu.style.top = y + "px";
-  menu.style.transformOrigin = `${p.x > SW - w - 6 ? "right" : "left"} ${p.y > SH - h - 6 ? "bottom" : "top"}`;
+  menu.style.left = clamp(p.x, 6, SW - w - 6) + "px"; menu.style.top = clamp(p.y, 6, SH - h - 6) + "px";
 }
 function hideMenu() { menu.classList.remove("show"); }
 menu.addEventListener("click", e => { const b = e.target.closest("[data-mi]"); if (!b) return; const it = menu._items[+b.dataset.mi]; hideMenu(); it.run(); });
@@ -810,58 +1021,61 @@ function widgetMenu(id, e) {
   hideTip();
   const names = { top: ["Top Edge", 0], right: ["Right Edge", 90], bottom: ["Bottom Edge", 180], left: ["Left Edge", 270] };
   const items = Object.keys(names).filter(k => k !== st[id].edge).map(k => ({ icon: "arrow", rot: names[k][1], label: names[k][0], run: () => moveTo(id, k) }));
-  if (W[id].body) items.push({ icon: "pin", label: st[id].open && st[id].pinned ? "Close" : "Keep Open", run: () => { if (st[id].open && st[id].pinned) close(id); else { open(id); st[id].pinned = true; } } });
+  if (W[id].body) items.push({ icon: "pin", label: isOpen(st[id]) && st[id].pinned ? "Close" : "Keep Open", run: () => { if (isOpen(st[id]) && st[id].pinned) close(id); else { open(id); st[id].pinned = true; } } });
   if (id === "weather" || id === "battery") items.push({ icon: "x", label: "Remove", run: () => removeWidget(id) });
   showMenu(e, items);
 }
 
-/* the launcher: pins, a search, the power ones */
+/* the launcher (launcher.rs): a search, pins, the power ones */
 const launch = $("#launch");
 const APPS = [
+  { id: "settings", name: "Settings", ic: "gear" }, { id: "files", name: "File Explorer", ic: "folder" },
+  { id: "term", name: "Terminal", ic: "term" }, { id: "taskmgr", name: "Task Manager", ic: "pulse" },
+  { id: "night", name: "Night Light", ic: "contrast" }, { id: "allwin", name: "All Windows", ic: "grid" },
   { id: "music", name: "Music", ic: "music", bg: "#e87a7a" }, { id: "notepad", name: "Read Me", ic: "note", bg: "#3d8bd6" },
-  { id: "files", name: "File Explorer", ic: "folder", bg: "#d99a2b" }, { id: "browser", name: "Browser", ic: "globe", bg: "#3d6fd6" },
-  { id: "term", name: "Terminal", ic: "term", bg: "#2b2d38" }, { id: "plugins", name: "NADI Plugins", ic: "store", bg: "#2f8f5c" },
-  { id: "games", name: "Games", ic: "game", bg: "#4a3aa8" }, { id: "photos", name: "Photos", ic: "photo", bg: "#7a5ae8" },
+  { id: "browser", name: "Browser", ic: "globe", bg: "#3d6fd6" }, { id: "plugins", name: "NADI Plugins", ic: "store", bg: "#2f8f5c" },
+  { id: "games", name: "Games", ic: "gamepad", bg: "#4a3aa8" }, { id: "photos", name: "Photos", ic: "photo", bg: "#7a5ae8" },
   { id: "mail", name: "Mail", ic: "mail", bg: "#2f8f86" }, { id: "calc", name: "Calculator", ic: "calc", bg: "#4a4d5c" },
-  { id: "paint", name: "Paint", ic: "paint", bg: "#c4508a" }, { id: "settings", name: "Settings", ic: "gear", bg: "#4a4d5c" },
+  { id: "paint", name: "Paint", ic: "paint", bg: "#c4508a" },
 ];
-const POWER = [{ id: "lock", name: "Lock", ic: "lock" }, { id: "sleep", name: "Sleep", ic: "moon" }, { id: "restart", name: "Restart", ic: "restart" }, { id: "shutdown", name: "Shut Down", ic: "power" }];
-const appIb = a => `<span class="ib" style="background:${a.bg}">${ic(a.ic, 20)}</span>`;
+const PINS = ["settings", "files", "term", "taskmgr", "night", "allwin", "music", "notepad", "browser", "plugins", "games", "photos"];
+const POWER = [{ id: "lock", name: "Lock", ic: "lock" }, { id: "sleep", name: "Sleep", ic: "moon" }, { id: "restart", name: "Restart", ic: "restart", red: 1 }, { id: "shutdown", name: "Shut Down", ic: "power", red: 1 }];
+const tile = a => `<span class="tile36" style="${a.bg ? "background:" + a.bg : ""}">${ic(a.ic, 16)}</span>`;
 function toggleLauncher() { launch.classList.contains("show") ? hideLauncher() : showLauncher(); }
 function showLauncher() {
   closeAll(); hideTip();
-  launch.innerHTML = `<div class="search">${ic("search", 16)}<input id="q" placeholder="Search" autocomplete="off" spellcheck="false"><button class="gb" data-act="allapps" data-tip="All Apps">${ic("grid", 15)}</button></div><div id="lres"></div><div class="foot">${POWER.map(p => `<button class="gb" data-act="power" data-v="${p.id}" data-tip="${p.name}">${ic(p.ic, 17)}</button>`).join("")}</div>`;
+  launch.innerHTML = `<div class="search">${ic("search", 15)}<input id="q" autocomplete="off" spellcheck="false"><button class="all" data-act="allapps" data-tip="All Apps">${ic("grid", 13)}</button></div><div id="lres"></div><div class="foot">${POWER.map(p => `<button class="${p.red ? "red" : ""}" data-act="power" data-v="${p.id}" data-tip="${p.name}">${ic(p.ic, 16)}</button>`).join("")}</div>`;
   showPins();
-  const a = st.apps, r = a.rect, lw = 560;
-  launch.style.width = lw + "px";
-  const lh = launch.offsetHeight;
-  let x = clamp(r.x + r.w / 2 - lw / 2, 10, SW - lw - 10), y;
-  if (a.edge === "bottom") y = SH - TB - r.h - 10 - lh;
-  else if (a.edge === "top") y = r.h + 10;
-  else { y = clamp(r.y + r.h / 2 - lh / 2, 10, SH - TB - lh - 10); x = a.edge === "left" ? r.w + 10 : SW - r.w - 10 - lw; }
-  launch.style.left = x + "px"; launch.style.top = y + "px";
-  launch.style.transformOrigin = a.edge === "bottom" ? "50% 100%" : a.edge === "top" ? "50% 0" : a.edge === "left" ? "0 50%" : "100% 50%";
-  requestAnimationFrame(() => launch.classList.add("show"));
+  placeLauncher();
+  requestAnimationFrame(() => { placeLauncher(); launch.classList.add("show"); });
   const q = $("#q");
-  if (!touch) setTimeout(() => q.focus(), 60);
+  setTimeout(() => q.focus({ preventScroll: true }), 60);
   q.addEventListener("input", () => search(q.value));
-  q.addEventListener("keydown", e => {
-    if (e.key === "Escape") hideLauncher();
-    if (e.key === "Enter") { const f = $("#lres [data-act]"); f && f.click(); }
-  });
+  q.addEventListener("keydown", e => { if (e.key === "Escape") hideLauncher(); if (e.key === "Enter") { const f = $("#lres [data-act]"); f && f.click(); } });
 }
-function showPins() { $("#lres").innerHTML = `<div class="pins">${APPS.map(a => `<button class="pin" data-act="app" data-v="${a.id}">${appIb(a)}<span>${a.name}</span></button>`).join("")}</div>`; }
+/* (out of the Apps widget, on the side away from its edge; its foot nearest it) */
+function placeLauncher() {
+  const a = st.apps, lw = 460, lh = launch.offsetHeight;
+  const sh = { x: a.rest.x.to, y: a.rest.y.to, w: a.rest.w.to, h: a.rest.h.to };
+  let x = clamp(sh.x + sh.w / 2 - lw / 2, 10, SW - lw - 10), y;
+  if (a.edge === "bottom") y = sh.y - 10 - lh;
+  else if (a.edge === "top") y = sh.y + sh.h + 10;
+  else { y = clamp(sh.y + sh.h / 2 - lh / 2, 10, SH - TB - lh - 10); x = a.edge === "left" ? sh.x + sh.w + 10 : sh.x - 10 - lw; }
+  launch.style.left = x + "px"; launch.style.top = Math.max(10, y) + "px";
+  launch.style.transformOrigin = a.edge === "bottom" ? "50% 100%" : a.edge === "top" ? "50% 0" : a.edge === "left" ? "0 50%" : "100% 50%";
+}
+function showPins() { $("#lres").innerHTML = `<div class="pins">${PINS.map(id => APPS.find(a => a.id === id)).map(a => `<button class="pin" data-act="app" data-v="${a.id}" data-tip="${a.name}">${tile(a)}<span>${a.name}</span></button>`).join("")}</div>`; }
 function search(q) {
   q = q.trim().toLowerCase();
   if (!q) return showPins();
-  const hits = APPS.filter(a => a.name.toLowerCase().includes(q)).map(a => `<button class="row go" data-act="app" data-v="${a.id}">${appIb(a)}<div class="tx"><div class="tt">${a.name}</div></div></button>`)
-    .concat(POWER.filter(p => p.name.toLowerCase().includes(q)).map(p => `<button class="row go" data-act="power" data-v="${p.id}"><span class="ib" style="background:#24252c">${ic(p.ic, 15)}</span><div class="tx"><div class="tt">${p.name}</div></div></button>`));
-  $("#lres").innerHTML = hits.length ? `<div class="list">${hits.join("")}</div>` : `<div class="mut" style="padding:18px 6px;text-align:center">Nothing called that</div>`;
+  const hits = APPS.filter(a => a.name.toLowerCase().includes(q)).map(a => `<button class="row go" data-act="app" data-v="${a.id}">${tile(a)}<span class="tx">${a.name}</span></button>`)
+    .concat(POWER.filter(p => p.name.toLowerCase().includes(q)).map(p => `<button class="row go" data-act="power" data-v="${p.id}">${tile(p)}<span class="tx">${p.name}</span></button>`));
+  $("#lres").innerHTML = hits.length ? `<div class="list">${hits.join("")}</div>` : `<div class="dim" style="padding:18px 6px;text-align:center">Nothing called that</div>`;
 }
 function allApps() {
   const byL = {};
   for (const a of [...APPS].sort((x, y) => x.name.localeCompare(y.name))) (byL[a.name[0]] = byL[a.name[0]] || []).push(a);
-  $("#lres").innerHTML = `<div class="list">${Object.keys(byL).map(l => `<div class="lab" style="margin:8px 8px 2px">${l}</div>${byL[l].map(a => `<button class="row go" data-act="app" data-v="${a.id}">${appIb(a)}<div class="tx"><div class="tt">${a.name}</div></div></button>`).join("")}`).join("")}</div>`;
+  $("#lres").innerHTML = `<div class="list">${Object.keys(byL).map(l => `<div class="lab" style="margin:8px 8px 2px">${l}</div>${byL[l].map(a => `<button class="row go" data-act="app" data-v="${a.id}">${tile(a)}<span class="tx">${a.name}</span></button>`).join("")}`).join("")}</div>`;
 }
 function hideLauncher() { launch.classList.remove("show"); }
 
@@ -870,7 +1084,7 @@ const wins = $("#wins");
 let z = 10;
 const openWins = {};
 const WINS = {
-  music: { title: "Music", ic: "music", w: 420, h: 470, body: () => musicWin() },
+  music: { title: "Music", ic: "music", w: 420, h: 480, body: () => musicWin() },
   notepad: { title: "Read Me", ic: "note", w: 440, h: 470, body: () => readme() },
   plugins: { title: "NADI Plugins", ic: "store", w: 520, h: 520, body: () => pluginsWin() },
 };
@@ -878,7 +1092,7 @@ function openApp(id) {
   hideLauncher();
   if (openWins[id]) return focusWin(id, true);
   const a = APPS.find(x => x.id === id);
-  const def = WINS[id] || { title: a.name, ic: a.ic, w: 420, h: 300, body: () => `<div class="pretend">${appIb(a).replace("ib", "ib")}<span>A pretend app, on a pretend PC.</span></div>` };
+  const def = WINS[id] || { title: a.name, ic: a.ic, w: 420, h: 300, body: () => `<div class="pretend"><span class="ib" style="background:${a.bg || "#2b2d38"}">${ic(a.ic, 30)}</span><span>A pretend app, on a pretend PC.</span></div>` };
   const el = document.createElement("div");
   el.className = "win gone";
   const n = Object.keys(openWins).length;
@@ -889,28 +1103,21 @@ function openApp(id) {
   wins.append(el);
   openWins[id] = { el, def, min: false };
   el.addEventListener("pointerdown", () => focusWin(id));
-  $(".wbar", el).addEventListener("pointerdown", e => {
+  const bar = $(".wbar", el);
+  bar.addEventListener("pointerdown", e => {
     if (e.target.closest("button")) return;
     const p = pt(e), r = { x: el.offsetLeft, y: el.offsetTop };
     const mv = ev => { const q = pt(ev); el.style.left = clamp(r.x + q.x - p.x, -w + 80, SW - 80) + "px"; el.style.top = clamp(r.y + q.y - p.y, 0, SH - TB - 34) + "px"; };
     const up = () => { removeEventListener("pointermove", mv); removeEventListener("pointerup", up); };
     addEventListener("pointermove", mv); addEventListener("pointerup", up);
   });
-  $(".wbar", el).addEventListener("dblclick", () => maxWin(id));
-  $(".wbar", el).addEventListener("click", e => {
-    const b = e.target.closest("[data-w]"); if (!b) return;
-    if (b.dataset.w === "close") closeWin(id); else if (b.dataset.w === "min") minWin(id); else maxWin(id);
-  });
+  bar.addEventListener("dblclick", () => maxWin(id));
+  bar.addEventListener("click", e => { const b = e.target.closest("[data-w]"); if (!b) return; if (b.dataset.w === "close") closeWin(id); else if (b.dataset.w === "min") minWin(id); else maxWin(id); });
   requestAnimationFrame(() => el.classList.remove("gone"));
   focusWin(id);
   taskbar();
 }
-function focusWin(id, restore) {
-  const w = openWins[id]; if (!w) return;
-  if (restore && w.min) { w.min = false; w.el.classList.remove("gone"); }
-  w.el.style.zIndex = ++z;
-  taskbar();
-}
+function focusWin(id, restore) { const w = openWins[id]; if (!w) return; if (restore && w.min) { w.min = false; w.el.classList.remove("gone"); } w.el.style.zIndex = ++z; taskbar(); }
 function minWin(id) { const w = openWins[id]; w.min = true; w.el.classList.add("gone"); taskbar(); }
 function maxWin(id) {
   const w = openWins[id], el = w.el;
@@ -919,72 +1126,72 @@ function maxWin(id) {
 }
 function closeWin(id) { const w = openWins[id]; if (!w) return; w.el.classList.add("gone"); delete openWins[id]; setTimeout(() => w.el.remove(), 250); taskbar(); }
 function frontWin() { let best = null, bz = -1; for (const k in openWins) { const w = openWins[k]; if (!w.min && +w.el.style.zIndex > bz) { bz = +w.el.style.zIndex; best = k; } } return best; }
-function rerenderWin(id) { const w = openWins[id]; if (w) $(".wbody", w.el).innerHTML = w.def.body(); }
-
+function rerenderWin(id) { const w = openWins[id]; if (w) { $(".wbody", w.el).innerHTML = w.def.body(); inStep(w.el); } }
 function readme() {
   const li = (i, t) => `<li>${ic(i, 16)}<span>${t}</span></li>`;
   return `<div class="readme"><h1>NADI</h1><div class="sub">Not Another Dynamic Island. Widgets that live on the edges of your Windows screen, like the ones around this window. This is a pretend PC: everything on it works.</div><ul>
   ${li("eye", "Hover over a widget to open it. Press it to keep it open.")}
   ${li("arrow", "Drag a widget to another edge, or right-click it.")}
   ${li("grid", "Press Apps for the launcher: pins, search, power.")}
-  ${li("burst", "Claude Code sessions show up, and ask for you when they need you.")}
+  ${li("spark", "Claude Code sessions show up, and ask for you when they need you.")}
   ${li("store", "Plugins add more. They are small Luau scripts, run sandboxed.")}
-  </ul><div class="mut" style="margin-bottom:10px">Windows 10 and 11. Alpha. Under 1% of the CPU at rest.</div><div class="get"><a class="sb acc" href="${GET}" target="_blank" rel="noopener">${ic("get", 15)}Get NADI</a><a class="sb gh2" href="${REPO}" target="_blank" rel="noopener">${ic("code", 15)}GitHub</a></div></div>`;
+  </ul><div class="dim" style="margin-bottom:10px">Windows 10 and 11. Alpha. Under 1% of the CPU at rest.</div><div class="get"><a class="sb acc" href="${GET}" target="_blank" rel="noopener">${ic("get", 15)}Get NADI</a><a class="sb gh2" href="${REPO}" target="_blank" rel="noopener">${ic("code", 15)}GitHub</a></div></div>`;
 }
 function musicWin() {
   const t = TRACKS[music.i];
-  return `<div class="player"><div style="display:flex;justify-content:center;padding-top:6px"><div class="cover" style="width:170px;height:170px;background:linear-gradient(135deg,${t.a},${t.b} 60%,${t.c})"></div></div><div style="text-align:center"><div class="out" style="font-size:19px;font-weight:600">${t.title}</div><div class="mut" style="margin-top:3px">${t.artist}</div></div><div style="display:flex;flex-direction:column;gap:5px"><div class="bar"><i id="mbar" style="width:${(music.t / t.len * 100).toFixed(1)}%"></i></div><div style="display:flex;justify-content:space-between;font-size:11px" class="mut tab"><span id="mtime">${mmss(music.t)}</span><span>${mmss(t.len)}</span></div></div><div class="ctl"><button class="gb" data-act="prev">${ic("prev", 18)}</button><button class="gb big" data-act="play">${ic(music.playing ? "pause" : "play", 20)}</button><button class="gb" data-act="next">${ic("next", 18)}</button></div><div class="trk">${TRACKS.map((x, i) => `<button class="row go${i === music.i ? " now" : ""}" data-act="track" data-v="${i}"><div class="tx"><div class="tt">${x.title}</div><div class="ts">${x.artist}</div></div><div class="rt tab">${mmss(x.len)}</div></button>`).join("")}</div></div>`;
+  return `<div class="player"><div class="cover" style="width:170px;height:170px;background:linear-gradient(135deg,${t.a},${t.b} 60%,${t.c})">${ic("music", 30)}</div><div style="text-align:center"><div class="out" style="font-size:19px;font-weight:600">${t.title}</div><div class="dim" style="margin-top:3px">${t.artist}</div></div><div class="seek"><div class="bar"><i id="mbar" style="width:${(music.t / t.len * 100).toFixed(2)}%"></i></div><div class="tm tab"><span id="mtime">${mmss(music.t)}</span><span>${mmss(t.len)}</span></div></div><div class="ctl"><button class="ghost" data-act="prev">${ic("prev", 20)}</button><button class="main" data-act="play">${ic(music.playing ? "pause" : "play", 22)}</button><button class="ghost" data-act="next">${ic("next", 20)}</button></div><div class="trk">${TRACKS.map((x, i) => `<button class="row go${i === music.i ? " now" : ""}" data-act="track" data-v="${i}"><span class="tx">${x.title}<span>${x.artist}</span></span><span class="dim tab">${mmss(x.len)}</span></button>`).join("")}</div></div>`;
 }
 const PLUGINS = [
-  { id: "now-playing", name: "Now Playing", d: "What is playing, with play, skip and seek, and three bars that dance with the sound.", ic: "music", bg: "#e87a7a", on: true },
+  { id: "now-playing", name: "Now Playing", d: "What is playing, with play, skip and seek, and bars that dance with the sound.", ic: "music", bg: "#e87a7a", on: true },
   { id: "ics-calendar", name: "Calendar", d: "The events of a calendar link (Google, Outlook, iCloud), the time, and a month to look through.", ic: "cal", bg: "#2f8f5c", on: true },
-  { id: "claude", name: "Claude", d: "Your Claude Code sessions as they run, and a banner when one needs you.", ic: "burst", bg: "#b8643a", on: true },
+  { id: "claude", name: "Claude", d: "Your Claude Code sessions as they run, and a banner when one needs you.", ic: "spark", bg: "#b8643a", on: true },
   { id: "downloads", name: "Downloads", d: "What your browsers, Steam and qBittorrent are downloading right now.", ic: "get", bg: "#2f7fa8", on: true },
   { id: "eyes", name: "Eyes", d: "Two eyes that blink, look at your cursor, and glance around when it rests.", ic: "eye", bg: "#4a4d5c", on: true },
   { id: "weather", name: "Weather", d: "The weather where you are, from open-meteo.com.", ic: "sun", bg: "#c48a1e", add: true },
   { id: "battery", name: "Battery", d: "How full the battery is, as a liquid that fills, and a banner when it runs low.", ic: "battery", bg: "#2f8f5c", add: true },
   { id: "work", name: "Work", d: "Time coded, as WakaTime counts it, kept on this PC: by project, language and file.", ic: "code", bg: "#3d6fd6" },
   { id: "page-reader", name: "NADI Chrome", d: "What you are reading, as a card made for its kind: walkthroughs and recipes step by step.", ic: "globe", bg: "#3d6fd6" },
-  { id: "games", name: "Games", d: "The game you play, with its wiki a search away, and how full your controller is.", ic: "game", bg: "#4a3aa8" },
-  { id: "system-meters", name: "System Meters", d: "How busy the CPU, the memory and the graphics card are.", ic: "drive", bg: "#4a4d5c" },
+  { id: "games", name: "Games", d: "The game you play, with its wiki a search away, and how full your controller is.", ic: "gamepad", bg: "#4a3aa8" },
   { id: "speech", name: "Speech", d: "Writes down what is said, by you and in what the computer plays, and tells the voices apart.", ic: "volume", bg: "#7a5ae8" },
   { id: "picture", name: "Picture", d: "Pictures you paste into it, a map or a guide, to zoom and pan; popped out, over a game.", ic: "photo", bg: "#c4508a" },
 ];
 function pluginsWin() {
   return `<div style="padding:6px 6px 10px">${PLUGINS.map(p => {
     const added = p.on || st[p.id];
-    const btn = added ? `<span class="sb added">${ic("check", 15)}</span>` : p.add ? `<button class="sb acc" data-act="addplug" data-v="${p.id}">Add</button>` : "";
+    const btn = added ? `<span class="added">${ic("check", 16)}</span>` : p.add ? `<button class="sb acc" data-act="addplug" data-v="${p.id}">Add</button>` : "";
     return `<div class="plug"><span class="ib" style="background:${p.bg}">${ic(p.ic, 18)}</span><div class="tx"><div class="tt">${p.name}</div><div class="ts">${p.d}</div></div>${btn}</div>`;
-  }).join("")}<div class="mut" style="padding:8px 14px;font-size:12px">On the real thing, plugins install from GitHub, in Settings.</div></div>`;
+  }).join("")}<div class="dim" style="padding:8px 14px;font-size:12px">On the real thing, plugins install from GitHub, in Settings.</div></div>`;
 }
 function addWidget(id) {
   if (st[id]) return;
   const edge = id === "battery" ? "bottom" : "top";
   edges[edge].push(id);
-  const s = make(id, edge);
+  const w = make(id, edge);
   layout();
-  requestAnimationFrame(() => requestAnimationFrame(() => { s.gone = false; layout(); }));
+  w.shown.to = 1; kick();
   rerenderWin("plugins");
 }
 function removeWidget(id) {
-  const s = st[id]; if (!s) return;
-  s.gone = true; layout();
-  setTimeout(() => { edges[s.edge] = edges[s.edge].filter(k => k !== id); s.el.remove(); delete st[id]; layout(); rerenderWin("plugins"); }, 420);
+  const w = st[id]; if (!w) return;
+  if (isOpen(w)) close(id);
+  w.shown.to = 0; kick();
+  setTimeout(() => { edges[w.edge] = edges[w.edge].filter(k => k !== id); w.wc.remove(); delete st[id]; layout(); rerenderWin("plugins"); }, 450);
 }
 
 /* the taskbar */
 const TBAPPS = ["start", "music", "notepad", "files", "browser", "plugins"];
+const TBC = { music: "#e87a7a", notepad: "#3d8bd6", files: "#d99a2b", browser: "#3d6fd6", plugins: "#2f8f5c" };
 function taskbar() {
   const f = frontWin();
   $("#tbapps").innerHTML = TBAPPS.map(id => {
     if (id === "start") return `<button class="tk" data-act="start" data-tip="Apps"><span class="ib" style="color:#4cc2ff">${ic("win", 18)}</span></button>`;
-    const a = APPS.find(x => x.id === id), w = openWins[id];
-    return `<button class="tk${w ? " run" : ""}${f === id ? " front" : ""}" data-act="tb" data-v="${id}" data-tip="${a.name}"><span class="ib" style="background:${a.bg}">${ic(a.ic, 15)}</span></button>`;
+    const a = APPS.find(x => x.id === id);
+    return `<button class="tk${openWins[id] ? " run" : ""}${f === id ? " front" : ""}" data-act="tb" data-v="${id}" data-tip="${a.name}"><span class="ib" style="background:${TBC[id]}">${ic(a.ic, 15)}</span></button>`;
   }).join("");
 }
 function tray() {
   const d = new Date();
-  $("#tray").innerHTML = `<button class="tt" data-act="openw" data-v="net" data-tip="${net.air ? "Airplane Mode" : net.wifi ? "Home" : "Offline"}">${net.air ? ic("airplane", 15) : wifi(net.wifi ? 3 : 0, 15)}${ic("volume", 15)}</button><button class="tt" data-act="openw" data-v="calendar"><span id="clock" class="tab">${span(d)}<br>${d.getMonth() + 1}/${d.getDate()}/${d.getFullYear()}</span></button>`;
+  $("#tray").innerHTML = `<button class="tt" data-act="openw" data-v="net" data-tip="${net.air ? "Airplane Mode" : net.wifi ? "Home" : "Offline"}">${net.air ? ic("airplane", 15) : ic("wifi", 15)}${ic("volume", 15)}</button><button class="tt" data-act="openw" data-v="calendar"><span id="clock" class="tab">${span(d)}<br>${d.getMonth() + 1}/${d.getDate()}/${d.getFullYear()}</span></button>`;
 }
 
 /* desktop icons */
@@ -999,26 +1206,29 @@ $("#icons").innerHTML = DESK.map((d, i) => `<button class="dk" data-act="desk" d
 
 /* what is pressed */
 function refresh(id) {
-  const s = st[id];
-  if (!s) return;
-  if (renderPeek(s)) layout();
-  if (s.open) { const h = s.ph; renderBody(s); if (s.ph !== h) place(s); }
+  const w = st[id];
+  if (!w) return;
+  let re = renderPeek(w);
+  if (isOpen(w) && !w.ban && renderBody(w)) re = true;
+  if (re) layout();
 }
 function act(a, el) {
   const v = el.dataset.v;
   switch (a) {
     case "play": music.playing = !music.playing; syncMusic(); break;
     case "next": music.i = (music.i + 1) % TRACKS.length; music.t = 0; syncMusic(); break;
-    case "prev": if (music.t > 4) music.t = 0; else music.i = (music.i + TRACKS.length - 1) % TRACKS.length, music.t = 0; syncMusic(); break;
+    case "prev": if (music.t > 4) music.t = 0; else { music.i = (music.i + TRACKS.length - 1) % TRACKS.length; music.t = 0; } syncMusic(); break;
     case "track": music.i = +v; music.t = 0; music.playing = true; syncMusic(); break;
     case "day": cal.sel = +v; refresh("calendar"); break;
-    case "join": flash(el, "Joining"); break;
+    case "week": cal.sel += +v; refresh("calendar"); break;
+    case "join": nudge(el); break;
     case "wifi": net.wifi = net.air ? true : !net.wifi; net.air = false; if (!net.wifi) net.hot = false; syncNet(); break;
     case "air": net.air = !net.air; if (net.air) net.hot = false; syncNet(); break;
     case "hot": net.hot = !net.hot; syncNet(); break;
-    case "copy": flash(el.querySelector(".rt"), "Copied"); break;
-    case "joinwifi": flash(el, null); break;
+    case "copy": { const c = $("#copied"); if (c) { c.textContent = "Copied"; setTimeout(() => refresh("net"), 1200); } break; }
+    case "joinwifi": nudge(el); break;
     case "drive": openApp("files"); break;
+    case "clear": dl.done = dl.done.filter(d => d.name !== v); refresh("downloads"); break;
     case "allow": claudeAnswer(true); break;
     case "deny": claudeAnswer(false); break;
     case "app": openApp(v); break;
@@ -1029,37 +1239,22 @@ function act(a, el) {
     case "openw": if (st[v]) { open(v); st[v].pinned = true; } break;
     case "desk": DESK[+v].run(); break;
     case "addplug": addWidget(v); break;
-    case "dlopen": unbanner("dl"); break;
   }
 }
-function flash(el, text) {
-  if (!el) return;
-  if (text) { const old = el.innerHTML; el.textContent = text; setTimeout(() => (el.innerHTML = old), 1200); }
-  el.animate([{ transform: "scale(.96)" }, { transform: "none" }], { duration: 260, easing: "cubic-bezier(.3,1.4,.5,1)" });
-}
-function syncMusic() {
-  refresh("music");
-  rerenderWin("music");
-}
+function nudge(el) { el.animate([{ transform: "scale(.95)" }, { transform: "none" }], { duration: 260, easing: "cubic-bezier(.3,1.4,.5,1)" }); }
+function syncMusic() { refresh("song"); rerenderWin("music"); }
 function syncNet() { refresh("net"); tray(); }
-scr.addEventListener("click", e => {
-  const b = e.target.closest("[data-act]");
-  if (b && scr.contains(b)) { e.stopPropagation(); act(b.dataset.act, b); }
-});
+scr.addEventListener("click", e => { const b = e.target.closest("[data-act]"); if (b && scr.contains(b)) { e.stopPropagation(); act(b.dataset.act, b); } });
 
 /* power: lock, sleep, restart, shut down (asked first) */
 const modal = $("#modal"), over = $("#over");
-function ask(title, text, label, run) {
-  modal.innerHTML = `<div class="dim"></div><div class="card2"><div class="mi">${ic(label === "Restart" ? "restart" : "power", 22)}</div><div class="mt">${title}</div><div class="ms">${text}</div><div class="mb"><button data-m="no">Cancel</button><button class="red" data-m="yes">${label}</button></div></div>`;
+function ask(title, text, label, icn, run) {
+  modal.innerHTML = `<div class="dim2"></div><div class="card2"><div class="mi">${ic(icn, 22)}</div><div class="mt">${title}</div><div class="ms">${text}</div><div class="mb"><button data-m="no">Cancel</button><button class="red" data-m="yes">${label}</button></div></div>`;
   modal.classList.add("show");
-  modal.onclick = e => {
-    const b = e.target.closest("[data-m]");
-    if (!b && e.target.closest(".card2")) return;
-    modal.classList.remove("show");
-    if (b && b.dataset.m === "yes") run();
-  };
+  modal.onclick = e => { const b = e.target.closest("[data-m]"); if (!b && e.target.closest(".card2")) return; modal.classList.remove("show"); if (b && b.dataset.m === "yes") run(); };
 }
 function power(kind) {
+  over.style.backgroundImage = "";
   if (kind === "lock") {
     const d = new Date(), c = clock(d);
     over.className = "show lock";
@@ -1067,43 +1262,39 @@ function power(kind) {
     over.innerHTML = `<div class="lk"><div class="big tab">${c.t}</div><div class="sm">${DAYS[d.getDay()]}, ${MONS[d.getMonth()]} ${d.getDate()}</div><div class="hint">Press anywhere</div></div>`;
     over.onclick = () => { over.classList.add("leaving"); setTimeout(() => { over.className = ""; over.innerHTML = ""; }, 500); };
   } else if (kind === "sleep") {
-    over.className = "show black"; over.innerHTML = ""; over.style.backgroundImage = "";
+    over.className = "show black"; over.innerHTML = "";
     over.onclick = () => { over.classList.add("waking"); setTimeout(() => (over.className = ""), 700); };
-  } else if (kind === "restart") {
-    ask("Restart?", "Apps that are open will close.", "Restart", () => goDark(true));
-  } else {
-    ask("Shut Down?", "Apps that are open will close.", "Shut Down", () => goDark(false));
-  }
+  } else if (kind === "restart") ask("Restart?", "Apps that are open will close.", "Restart", "restart", () => goDark(true));
+  else ask("Shut Down?", "Apps that are open will close.", "Shut Down", "power", () => goDark(false));
 }
 function goDark(back) {
-  for (const k in st) { st[k].gone = true; st[k].open = false; st[k].ban = false; }
+  for (const k in st) { const w = st[k]; w.ban = null; w.glow = null; w.open.to = 0; w.pinned = false; w.shown.to = 0; }
   layout();
   for (const k in openWins) closeWin(k);
   setTimeout(() => {
-    over.className = "show black"; over.style.backgroundImage = "";
-    over.innerHTML = back ? "" : `<div class="off"><button data-tip="Turn On">${ic("power", 28)}</button></div>`;
-    const wake = () => { over.classList.add("waking"); setTimeout(() => { over.className = ""; over.innerHTML = ""; boot(); }, 700); };
+    over.className = "show black";
+    over.innerHTML = back ? "" : `<div class="off"><button>${ic("power", 28)}</button></div>`;
+    const wake = () => { over.classList.add("waking"); setTimeout(() => { over.className = ""; over.innerHTML = ""; comeOut(); }, 700); };
     if (back) setTimeout(wake, 1600); else over.onclick = e => { if (e.target.closest("button")) wake(); };
-  }, 380);
+  }, 400);
 }
-function boot() {
-  const order = Object.keys(st);
-  order.forEach((k, i) => setTimeout(() => { st[k].gone = false; place(st[k]); }, 140 + i * 70));
-  setTimeout(layout, 160 + order.length * 70);
+/* coming out: a wave, nearest the middle first (WAVE: the longest wait) */
+function comeOut() {
+  const ids = Object.keys(st);
+  ids.forEach((k, i) => setTimeout(() => { st[k].shown.to = 1; kick(); }, 120 + i / Math.max(1, ids.length - 1) * WAVE * 1000 * 2.5));
 }
 
-/* tips: plain, after a moment on something that has one */
+/* tips: plain, a moment after the mouse rests on something that has one */
 const tip = $("#tip");
 let tipT = 0, tipFor = null;
 function tipText(el) {
   if (el.dataset.tip) return el.dataset.tip;
-  const w = el.closest(".w");
-  if (w && el === w) for (const k in st) if (st[k].el === w && !st[k].open && !st[k].ban) return W[k].tip();
+  for (const k in st) if (st[k].wc === el && !isOpen(st[k])) return W[k].tip();
   return "";
 }
 scr.addEventListener("pointerover", e => {
   if (e.pointerType === "touch") return;
-  const el = e.target.closest("[data-tip], .w");
+  const el = e.target.closest("[data-tip], .wc");
   if (el === tipFor) return;
   hideTip();
   if (!el || drag) return;
@@ -1114,78 +1305,69 @@ scr.addEventListener("pointerover", e => {
     const r = el.getBoundingClientRect(), sr = scr.getBoundingClientRect();
     const x = (r.left - sr.left) / scale, y = (r.top - sr.top) / scale, w = r.width / scale, h = r.height / scale;
     const tw = tip.offsetWidth, th = tip.offsetHeight;
-    let tx = clamp(x + w / 2 - tw / 2, 6, SW - tw - 6), ty = y + h + 8;
-    if (ty + th > SH - TB - 4) ty = y - th - 8;
+    let tx = clamp(x + w / 2 - tw / 2, 6, SW - tw - 6), ty = y + h + 10;
+    if (ty + th > SH - TB - 4) ty = y - th - 10;
+    if (x < 4 && h > w) { tx = x + w + 10; ty = clamp(y + h / 2 - th / 2, 6, SH - th - 6); }
+    if (x + w > SW - 4 && h > w) { tx = x - tw - 10; ty = clamp(y + h / 2 - th / 2, 6, SH - th - 6); }
     tip.style.left = tx + "px"; tip.style.top = ty + "px";
     tip.classList.add("show");
-  }, 520);
+  }, 500);
 });
 scr.addEventListener("pointerout", e => { if (!e.relatedTarget || !tipFor || !tipFor.contains(e.relatedTarget)) hideTip(); });
 function hideTip() { clearTimeout(tipT); tipFor = null; tip.classList.remove("show"); }
 
-/* the pointer: eyes follow it; drags; a press elsewhere shuts what is open */
+/* the pointer: the eyes follow it; drags; a press elsewhere shuts what a press opened */
 addEventListener("pointermove", e => {
   moveDrag(e);
-  const p = pt(e);
-  for (const eyes of document.querySelectorAll(".eyes")) {
-    const r = eyes.getBoundingClientRect(), sr = scr.getBoundingClientRect();
+  const p = pt(e), sr = scr.getBoundingClientRect();
+  for (const eyes of nadiEl.querySelectorAll(".eyes")) {
+    const r = eyes.getBoundingClientRect();
     const cx = (r.left + r.width / 2 - sr.left) / scale, cy = (r.top + r.height / 2 - sr.top) / scale;
     const dx = p.x - cx, dy = p.y - cy, d = Math.hypot(dx, dy) || 1, k = Math.min(1, d / 260);
-    eyes.style.setProperty("--ex", (dx / d * 3 * k).toFixed(2) + "px");
-    eyes.style.setProperty("--ey", (dy / d * 3 * k).toFixed(2) + "px");
+    eyes.style.setProperty("--ex", (dx / d * 3.5 * k).toFixed(2) + "px");
+    eyes.style.setProperty("--ey", (dy / d * 3.5 * k).toFixed(2) + "px");
   }
 });
 addEventListener("pointerup", endDrag);
 scr.addEventListener("pointerdown", e => {
-  touch = e.pointerType === "touch";
   hideTip();
   if (!e.target.closest("#menu")) hideMenu();
-  if (!e.target.closest(".w")) for (const k in st) if (st[k].open && st[k].pinned) close(k);
-  if (!e.target.closest("#launch, [data-act=start], .w")) hideLauncher();
+  if (!e.target.closest(".wc")) for (const k in st) if (isOpen(st[k]) && st[k].pinned) close(k);
+  if (!e.target.closest("#launch, [data-act=start], .wc")) hideLauncher();
 });
 scr.addEventListener("contextmenu", e => {
   e.preventDefault();
-  if (e.target.closest(".w, .win, #taskbar, #launch")) return;
+  if (e.target.closest(".wc, .win, #taskbar, #launch")) return;
   showMenu(e, [
     { icon: "get", label: "Get NADI", run: () => window.open(GET, "_blank", "noopener") },
     { icon: "code", label: "GitHub", run: () => window.open(REPO, "_blank", "noopener") },
     { icon: "note", label: "Read Me", run: () => openApp("notepad") },
   ]);
 });
-addEventListener("keydown", e => {
-  if (e.key === "Escape") { hideLauncher(); hideMenu(); closeAll(); modal.classList.remove("show"); }
-});
-setInterval(() => {
-  for (const eyes of document.querySelectorAll(".eyes")) { eyes.classList.add("blink"); setTimeout(() => eyes.classList.remove("blink"), 130); }
-}, 4200);
+addEventListener("keydown", e => { if (e.key === "Escape") { hideLauncher(); hideMenu(); closeAll(); modal.classList.remove("show"); } });
+setInterval(() => { for (const eyes of nadiEl.querySelectorAll(".eyes")) { eyes.classList.add("blink"); setTimeout(() => eyes.classList.remove("blink"), 120); } }, 4300);
 
-/* time goes on: the clock, the music, the downloads, the drives, the network */
+/* time goes on: once a second */
 function tick() {
   const t = TRACKS[music.i];
-  if (music.playing) {
-    music.t += 1;
-    if (music.t >= t.len) { music.i = (music.i + 1) % TRACKS.length; music.t = 0; syncMusic(); }
-  }
+  if (music.playing) { music.t += 1; if (music.t >= t.len) { music.i = (music.i + 1) % TRACKS.length; music.t = 0; syncMusic(); } }
   const mb = $("#mbar"), mt = $("#mtime");
-  if (mb) { mb.style.width = (music.t / TRACKS[music.i].len * 100).toFixed(1) + "%"; mt.textContent = mmss(music.t); }
-  dl.rate = clamp(dl.rate + (Math.random() - .5) * 1.2e6, 1.8e6, 7.5e6);
+  if (mb) { mb.style.width = (music.t / TRACKS[music.i].len * 100).toFixed(2) + "%"; mt.textContent = mmss(music.t); }
+  dl.rate = clamp(dl.rate + (Math.random() - .5) * 8e5, 2.6e6, 6.4e6);
   dl.hist.push(dl.rate); dl.hist.shift();
   const it = dl.items[0];
   if (it) {
     it.p = Math.min(1, it.p + dl.rate / it.size * 40);
     if (it.p >= 1) {
       dl.items.shift();
-      dl.done.unshift({ name: it.name, from: it.from }); dl.done.length = Math.min(dl.done.length, 3);
-      banner("dl", `<div style="padding:14px 16px;display:flex;gap:12px;align-items:center"><div style="width:42px;height:42px;border-radius:10px;flex:none;background:linear-gradient(135deg,${it.a},${it.b})"></div><div style="flex:1"><div class="out" style="font-size:14.5px;font-weight:600">${it.name}</div><div class="mut" style="font-size:12px;margin-top:2px">Downloaded</div></div><button class="gb" data-act="dlopen" data-tip="Open">${ic("open", 15)}</button></div>`, 300, ACC, 5000);
-      const nx = NEXT_DL.shift(); nx.p = 0; dl.items.push(nx); NEXT_DL.push({ ...it, p: 0 });
+      dl.done.unshift({ name: it.name }); dl.done.length = Math.min(dl.done.length, 3);
+      if (!isOpen(st.downloads)) banner("downloads", `<div class="ban"><div class="hd">${ic("check", 22, "color:" + ACC)}<div style="flex:1;display:flex;flex-direction:column;gap:3px"><b style="font-size:15px">${it.name}</b><span class="dim" style="font-size:13px">Downloaded</span></div></div></div>`, null, 4500);
+      const nx = NEXT_DL.shift(); nx.p = 0; dl.items.push(nx); NEXT_DL.push({ name: it.name, ic: it.ic, size: it.size });
     }
   }
-  for (const d of drives) {
-    d.r = Math.random() < .3 ? Math.random() * 9e7 : Math.random() * 2e5;
-    d.w = Math.random() < .2 ? Math.random() * 4e7 : Math.random() * 1e5;
-  }
-  net.down = clamp(net.down + (Math.random() - .5) * 6e6, 2e6, 40e6);
-  net.up = clamp(net.up + (Math.random() - .5) * 1e6, 3e5, 6e6);
+  for (const d of drives) { d.r.push(Math.random() < (d.l === "C" ? .45 : .08) ? Math.random() : Math.random() * .03); d.r.shift(); }
+  net.down = clamp(net.down + (Math.random() - .5) * 4e6, 6e6, 32e6);
+  net.up = clamp(net.up + (Math.random() - .5) * 6e5, 8e5, 4e6);
   for (const k in st) refresh(k);
   const c = $("#clock"); if (c) { const d = new Date(); c.innerHTML = `${span(d)}<br>${d.getMonth() + 1}/${d.getDate()}/${d.getFullYear()}`; }
 }
@@ -1195,31 +1377,30 @@ const wrap = $("#wrap");
 function fit() {
   const small = innerWidth < 820 || innerHeight < 480;
   document.body.classList.toggle("small", small);
-  if (small) {
-    SW = 1280; SH = 760; scale = innerWidth / SW;
-    scr.style.width = SW + "px"; scr.style.height = SH + "px"; scr.style.transform = `scale(${scale})`;
-    wrap.style.height = SH * scale + "px";
-  } else {
-    SW = innerWidth; SH = innerHeight; scale = 1;
-    scr.style.width = SW + "px"; scr.style.height = SH + "px"; scr.style.transform = "none";
-    wrap.style.height = SH + "px";
-  }
-  layout();
+  if (small) { SW = 1280; SH = 760; scale = innerWidth / SW; scr.style.transform = `scale(${scale})`; wrap.style.height = SH * scale + "px"; }
+  else { SW = innerWidth; SH = innerHeight; scale = 1; scr.style.transform = "none"; wrap.style.height = SH + "px"; }
+  scr.style.width = SW + "px"; scr.style.height = SH + "px";
+  DPR = Math.min(2, (window.devicePixelRatio || 1) * scale);
+  // (the liquid stops at the taskbar: nothing of it drawn over it)
+  cv.width = Math.round(SW * DPR); cv.height = Math.round((SH - TB) * DPR);
+  cv.style.width = SW + "px"; cv.style.height = SH - TB + "px";
+  if (!prog) for (const k in st) st[k].wc.classList.add("solid");
+  layout(true);
 }
 addEventListener("resize", fit);
 
-/* start: the widgets come out of their edges, one after another */
+/* start */
 for (const e in edges) for (const id of edges[e]) make(id, e);
 taskbar(); tray();
 fit();
-// (the fonts come late, or not at all: the widgets come out anyway, and are measured again when they do)
-setTimeout(boot, 350);
+if (!prog) for (const k in st) st[k].wc.classList.add("solid");
 if (document.fonts) document.fonts.ready.then(() => { for (const k in st) renderPeek(st[k], true); layout(); });
 openApp("notepad");
 openApp("music");
-{ const w = openWins.notepad.el; w.style.left = Math.max(110, SW * .1) + "px"; w.style.top = Math.max(60, SH * .12) + "px"; }
-{ const w = openWins.music.el; w.style.left = clamp(SW * .56, 560, SW - 480) + "px"; w.style.top = Math.max(80, SH * .2) + "px"; }
+{ const w = openWins.notepad.el; w.style.left = Math.max(150, SW * .12) + "px"; w.style.top = Math.max(70, SH * .13) + "px"; }
+{ const w = openWins.music.el; w.style.left = clamp(SW * .56, 600, SW - 480) + "px"; w.style.top = Math.max(90, SH * .2) + "px"; }
 focusWin("notepad");
+setTimeout(comeOut, 400);
 setInterval(tick, 1000);
 setTimeout(claudeAsk, 14000);
 </script>
