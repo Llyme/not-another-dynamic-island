@@ -120,9 +120,9 @@ body.small #screen { touch-action: pan-y; }
 .viz.still i { animation: none; height: 4px; opacity: .5; }
 @keyframes viz { to { height: 14px; } }
 .eyes { display: flex; gap: 9px; align-items: center; --ex: 0px; --ey: 0px; }
-.wc.v .eyes { flex-direction: column; gap: 10px; }
+.wc.v .eyes { flex-direction: column; gap: 17px; }
 .eyes i { display: block; width: 14px; height: 15px; border-radius: 8px; background: #fff; transform: translate(var(--ex), var(--ey)); transition: transform .12s, height .09s; }
-.wc.v .eyes i { width: 15px; height: 13px; }
+.wc.v .eyes i { width: 15px; height: 12px; }
 .eyes.blink i { height: 2px !important; }
 .eyes.happy i { height: 6px !important; border-radius: 8px 8px 2px 2px; }
 .flow { display: inline-block; width: 8px; height: 12px; overflow: hidden; -webkit-mask: linear-gradient(transparent, #000 30%, #000 70%, transparent); mask: linear-gradient(transparent, #000 30%, #000 70%, transparent); vertical-align: -1px; flex: none; }
@@ -1135,7 +1135,7 @@ function readme() {
   ${li("grid", "Press Apps for the launcher: pins, search, power.")}
   ${li("spark", "Claude Code sessions show up, and ask for you when they need you.")}
   ${li("store", "Plugins add more. They are small Luau scripts, run sandboxed.")}
-  </ul><div class="dim" style="margin-bottom:10px">Windows 10 and 11. Alpha. Under 1% of the CPU at rest.</div><div class="get"><a class="sb acc" href="${GET}" target="_blank" rel="noopener">${ic("get", 15)}Get NADI</a><a class="sb gh2" href="${REPO}" target="_blank" rel="noopener">${ic("code", 15)}GitHub</a></div></div>`;
+  </ul><div class="dim" style="margin-bottom:10px">Windows 10 and 11. Alpha. Under 1% of the CPU at rest.</div><div class="get"><a class="sb acc" href="${GET}" data-act="go" data-v="${GET}">${ic("get", 15)}Get NADI</a><a class="sb gh2" href="${REPO}" data-act="go" data-v="${REPO}">${ic("code", 15)}GitHub</a></div></div>`;
 }
 function musicWin() {
   const t = TRACKS[music.i];
@@ -1196,8 +1196,8 @@ function tray() {
 
 /* desktop icons */
 const DESK = [
-  { label: "Get NADI", ic: "get", bg: "#5ac88c", fg: "#04130b", run: () => window.open(GET, "_blank", "noopener") },
-  { label: "GitHub", ic: "code", bg: "#24292f", run: () => window.open(REPO, "_blank", "noopener") },
+  { label: "Get NADI", ic: "get", bg: "#5ac88c", fg: "#04130b", run: () => go(GET) },
+  { label: "GitHub", ic: "code", bg: "#24292f", run: () => go(REPO) },
   { label: "Read Me", ic: "note", bg: "#3d8bd6", run: () => openApp("notepad") },
   { label: "NADI Plugins", ic: "store", bg: "#2f8f5c", run: () => openApp("plugins") },
   { label: "Music", ic: "music", bg: "#e87a7a", run: () => openApp("music") },
@@ -1239,12 +1239,20 @@ function act(a, el) {
     case "openw": if (st[v]) { open(v); st[v].pinned = true; } break;
     case "desk": DESK[+v].run(); break;
     case "addplug": addWidget(v); break;
+    case "go": go(v); break;
   }
 }
 function nudge(el) { el.animate([{ transform: "scale(.95)" }, { transform: "none" }], { duration: 260, easing: "cubic-bezier(.3,1.4,.5,1)" }); }
 function syncMusic() { refresh("song"); rerenderWin("music"); }
 function syncNet() { refresh("net"); tray(); }
-scr.addEventListener("click", e => { const b = e.target.closest("[data-act]"); if (b && scr.contains(b)) { e.stopPropagation(); act(b.dataset.act, b); } });
+scr.addEventListener("click", e => { const b = e.target.closest("[data-act]"); if (b && scr.contains(b)) { e.preventDefault(); e.stopPropagation(); act(b.dataset.act, b); } });
+/* a link out: a new tab; where new tabs are not allowed (a preview, a frame), this one goes there instead */
+function go(url) {
+  let w = null;
+  try { w = window.open(url, "_blank"); } catch (e) { w = null; }
+  if (w) { try { w.opener = null; } catch (e) {} return; }
+  try { window.top.location.href = url; } catch (e) { location.href = url; }
+}
 
 /* power: lock, sleep, restart, shut down (asked first) */
 const modal = $("#modal"), over = $("#over");
@@ -1339,8 +1347,8 @@ scr.addEventListener("contextmenu", e => {
   e.preventDefault();
   if (e.target.closest(".wc, .win, #taskbar, #launch")) return;
   showMenu(e, [
-    { icon: "get", label: "Get NADI", run: () => window.open(GET, "_blank", "noopener") },
-    { icon: "code", label: "GitHub", run: () => window.open(REPO, "_blank", "noopener") },
+    { icon: "get", label: "Get NADI", run: () => go(GET) },
+    { icon: "code", label: "GitHub", run: () => go(REPO) },
     { icon: "note", label: "Read Me", run: () => openApp("notepad") },
   ]);
 });
