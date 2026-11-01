@@ -427,6 +427,19 @@ fn is_program(id: &str) -> bool {
     id.contains(":\\") && !id.contains('!') && std::path::Path::new(id).is_file()
 }
 
+/// Whether something holds the pointer in part of the screens (a game, in its window).
+fn held() -> bool {
+    unsafe {
+        let mut c = RECT::default();
+        if GetClipCursor(&mut c).is_err() {
+            return false;
+        }
+        let (vx, vy) = (GetSystemMetrics(SM_XVIRTUALSCREEN), GetSystemMetrics(SM_YVIRTUALSCREEN));
+        let (vw, vh) = (GetSystemMetrics(SM_CXVIRTUALSCREEN), GetSystemMetrics(SM_CYVIRTUALSCREEN));
+        c.left > vx || c.top > vy || c.right < vx + vw || c.bottom < vy + vh
+    }
+}
+
 pub struct Launcher {
     pub hwnd: HWND,
     _target: IDCompositionTarget,
@@ -491,6 +504,9 @@ pub struct Launcher {
     unlit: bool,
     /// something in it moves by itself (a name gliding, the caret blinking): drawn again every frame while it is out
     alive: bool,
+    /// opened over something that had the mouse (a game: the pointer held in its window, or hidden): where the pointer was, put back
+    /// when it shuts. While it is out the pointer is free
+    freed: Option<POINT>,
     /// a question to ask before doing it (restart, shut down), for the frame to put in a modal; where it was asked (logical, inside)
     ask: Option<(Value, (f32, f32))>,
     /// the pins' grid: its top left and how wide a tile is (where a tile at a place in it goes)
@@ -625,6 +641,7 @@ impl Launcher {
                 ctx: None,
                 naming: None,
                 alive: true,
+                freed: None,
                 ask: None,
                 unlit: false,
                 grid: (PAD, 0.0, (W - 2.0 * PAD) / TILE_COLS as f32),
@@ -821,6 +838,36 @@ impl Launcher {
         }
         self.since = Some(Instant::now());
         self.clip();
+        self.free_mouse(x, y, w, h);
+    }
+
+    /// Over a game that holds the mouse (the pointer kept in its window, or hidden): let it go, and put the pointer in the middle of the
+    /// launcher, so it can be used.
+    fn free_mouse(&mut self, x: i32, y: i32, w: i32, h: i32) {
+        unsafe {
+            let mut ci = CURSORINFO { cbSize: std::mem::size_of::<CURSORINFO>() as u32, ..Default::default() };
+            let hidden = GetCursorInfo(&mut ci).is_ok() && (ci.flags.0 & CURSOR_SHOWING.0) == 0;
+            if !held() && !hidden {
+                return;
+            }
+            let mut p = POINT::default();
+            let _ = GetCursorPos(&mut p);
+            self.freed = Some(p);
+            let _ = ClipCursor(None);
+            let _ = SetCursorPos(x + w / 2, y + h / 2);
+            if let Ok(c) = LoadCursorW(None, IDC_ARROW) {
+                SetCursor(c);
+            }
+        }
+    }
+
+    /// While it is out over a game: the game may take the mouse back (it holds the pointer each frame); let go of it again.
+    pub fn keep_mouse_free(&self) {
+        if self.shown && self.freed.is_some() && held() {
+            unsafe {
+                let _ = ClipCursor(None);
+            }
+        }
     }
 
     /// Back on top of the frame's windows (they are put on top now and then).
@@ -834,6 +881,12 @@ impl Launcher {
 
     pub fn hide(&mut self) {
         log("hide");
+        // (the pointer back where the game had it)
+        if let Some(p) = self.freed.take() {
+            unsafe {
+                let _ = SetCursorPos(p.x, p.y);
+            }
+        }
         self.to = 0.0;
         self.shown = false;
         self.since = None;

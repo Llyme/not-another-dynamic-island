@@ -1317,9 +1317,22 @@ impl Frame {
             let st = |k: &str| m[k].as_str().unwrap_or("").to_string();
             match m["cmd"].as_str().unwrap_or("") {
                 "ready" => {
-                    // (the first time: what the main repository has, looked at)
-                    if nadi_core::repo::available().as_object().is_some_and(|o| o.is_empty()) {
+                    // (the first time: what the main repository has, looked at; after that, each one looked at again once its list is an
+                    // hour old, so a new release shows without pressing Refresh)
+                    // (the official repository is always in the list, never taken out: looked at whenever it is not there)
+                    let known = nadi_core::repo::available();
+                    if !known.as_object().is_some_and(|o| o.contains_key("Llyme/nadi-plugins")) {
                         self.repo_job_sync("Llyme/nadi-plugins".into());
+                    }
+                    let stale: Vec<String> = known
+                        .as_object()
+                        .into_iter()
+                        .flatten()
+                        .filter(|(_, e)| e["at"].as_str().and_then(|t| chrono::DateTime::parse_from_rfc3339(t).ok()).map_or(true, |t| chrono::Utc::now().signed_duration_since(t) > chrono::Duration::hours(1)))
+                        .map(|(r, _)| r.clone())
+                        .collect();
+                    for r in stale {
+                        self.repo_job_sync(r);
                     }
                 }
                 "exit" => unsafe { PostQuitMessage(0) },
@@ -1384,7 +1397,8 @@ impl Frame {
                         }
                     });
                 }
-                "repo_remove" => {
+                // (the official repository stays)
+                "repo_remove" if !st("repo").eq_ignore_ascii_case("Llyme/nadi-plugins") => {
                     let _ = nadi_core::repo::remove_repo(&st("repo"));
                     let _ = self.tx.send(Command::Rescan);
                 }
@@ -4711,6 +4725,9 @@ impl Frame {
 
     /// How often to tick: every frame while something moves, else four times a second.
     fn tick_rate(&mut self) {
+        if let Some(l) = &self.launcher {
+            l.keep_mouse_free();
+        }
         let launcher_moves = self.launcher.as_ref().is_some_and(|l| l.moving()) || self.modal.as_ref().is_some_and(|m| m.moving());
         let banner_moves = launcher_moves || self.banner.as_ref().is_some_and(|b| b.slide.moving() || b.home.is_some_and(|h| h.moving()) || b.typing || b.marquee || b.glowing || (b.say["pill"]["rows"].is_array() && b.since.elapsed().as_secs_f32() < 2.0));
         let rolling = self.rolls.borrow().values().any(|r| r.2.elapsed().as_secs_f32() < ROLL_FOR + 0.1);

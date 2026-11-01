@@ -372,6 +372,11 @@ fn plugin_dirs(files: &BTreeMap<String, Vec<u8>>) -> Vec<(String, Vec<(String, &
                 .iter()
                 .filter_map(|(k, v)| {
                     let (parent, name) = k.rsplit_once('/').unwrap_or(("", k.as_str()));
+                    // (its own files, and its program's: `bin/`, what it needs to run)
+                    let bin = if d.is_empty() { "bin".to_string() } else { format!("{d}/bin") };
+                    if parent == bin && !name.starts_with('.') {
+                        return Some((format!("bin/{name}"), v));
+                    }
                     (parent == d && !name.starts_with('.')).then(|| (name.to_string(), v))
                 })
                 .collect();
@@ -384,7 +389,11 @@ fn stage(root: &Path, id: &str, files: &[(String, &Vec<u8>)]) -> Result<PathBuf,
     let to = root.join(id);
     std::fs::create_dir_all(&to).map_err(|e| e.to_string())?;
     for (name, bytes) in files {
-        std::fs::write(to.join(name), bytes).map_err(|e| e.to_string())?;
+        let at = to.join(name);
+        if let Some(parent) = at.parent() {
+            std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+        }
+        std::fs::write(at, bytes).map_err(|e| e.to_string())?;
     }
     Ok(to)
 }
@@ -602,6 +611,14 @@ fn install_from(token: &str, ids: Vec<String>, keep_on: bool, drop_cache: bool, 
         for e in std::fs::read_dir(&src).map_err(|e| e.to_string())?.flatten() {
             if e.path().is_file() {
                 std::fs::copy(e.path(), dst.join(e.file_name())).map_err(|e| e.to_string())?;
+            } else if e.file_name() == "bin" && e.path().is_dir() {
+                // (its program, and what it needs to run)
+                std::fs::create_dir_all(dst.join("bin")).map_err(|e| e.to_string())?;
+                for b in std::fs::read_dir(e.path()).map_err(|e| e.to_string())?.flatten() {
+                    if b.path().is_file() {
+                        std::fs::copy(b.path(), dst.join("bin").join(b.file_name())).map_err(|e| e.to_string())?;
+                    }
+                }
             }
         }
         // (two plugins that became one: the old ones of this repository go, and the new one is on when one of them was)
