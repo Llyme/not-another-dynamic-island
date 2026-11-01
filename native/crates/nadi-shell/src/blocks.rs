@@ -748,6 +748,14 @@ impl<'a, 'b> Ctx<'a, 'b> {
         }
     }
 
+    /// A chevron pointing left or right, centred on (cx, cy).
+    fn chev(&self, cx: f32, cy: f32, left: bool, c: crate::paint::Color) {
+        if self.draw {
+            let d = if left { 1.0 } else { -1.0 };
+            self.p.line(&[(cx + 2.5 * d, cy - 5.0), (cx - 2.5 * d, cy), (cx + 2.5 * d, cy + 5.0)], 1.8, c);
+        }
+    }
+
     fn round(&self, r: Rect, rad: f32, c: crate::paint::Color) {
         if self.draw {
             self.p.round(r, rad, c);
@@ -2325,6 +2333,224 @@ impl<'a, 'b> Ctx<'a, 'b> {
                     self.hit(Rect::new(x - 6.0, y, w + 12.0, h), Press::Action(action.to_string(), b["args"].clone()));
                 }
                 h
+            }
+            // (a day's head: the time, big; the day and the date on its right; a ghost button beside them (the month))
+            "dayhead" => {
+                let h = 46.0;
+                let cy = y + h / 2.0;
+                let time = s(b, "time");
+                let ampm = s(b, "ampm");
+                let tw = self.text(time, x, cy, 34.0, Weight::Semibold, w * 0.6, TEXT);
+                if !ampm.is_empty() {
+                    self.text(ampm, x + tw + 4.0, cy + 6.0, 14.0, Weight::Semibold, 40.0, DIM);
+                }
+                let mut rx = x + w;
+                if !s(b, "toggle").is_empty() {
+                    let r = Rect::new(rx - 30.0, cy - 15.0, 30.0, 30.0);
+                    if self.draw && hovered(r) {
+                        self.p.circle(r.x + 15.0, cy, 15.0, LIT);
+                    }
+                    self.icon(if s(b, "toggle_icon").is_empty() { "calendar" } else { s(b, "toggle_icon") }, r.x + 8.0, cy - 7.0, 14.0, if hovered(r) { TEXT } else { DIM });
+                    let tip = if s(b, "toggle_tip").is_empty() { Value::Null } else { b["toggle_tip"].clone() };
+                    self.hit_tip(r, Press::Action(s(b, "toggle").to_string(), Value::Null), tip);
+                    rx -= 36.0;
+                }
+                self.text_end(s(b, "day"), rx, cy - 8.0, 12.0, Weight::Regular, w * 0.4, DIM);
+                self.text_end(s(b, "date"), rx, cy + 9.0, 13.0, Weight::Semibold, w * 0.4, TEXT);
+                h
+            }
+            // (a week, a day each: its letter, its number, a dot for each of its events; the day picked lit, today's number in the theme's
+            // colour; ‹ › at its ends)
+            "weekstrip" => {
+                let h = 60.0;
+                let days = b["days"].as_array().cloned().unwrap_or_default();
+                let side = 24.0;
+                let cy = y + h / 2.0;
+                for (k, a, icon) in [("prev", x, "left"), ("next", x + w - side, "chevron")] {
+                    let act = s(b, k);
+                    if act.is_empty() {
+                        continue;
+                    }
+                    let r = Rect::new(a, cy - 15.0, side, 30.0);
+                    if self.draw && hovered(r) {
+                        self.p.round(r, 12.0, LIT);
+                    }
+                    self.chev(a + side / 2.0, cy, icon == "left", if hovered(r) { TEXT } else { DIM });
+                    self.hit(r, Press::Action(act.to_string(), Value::Null));
+                }
+                let (x0, iw) = (x + side + 2.0, w - 2.0 * side - 4.0);
+                let n = days.len().max(1) as f32;
+                let cw = iw / n;
+                for (i, d) in days.iter().enumerate() {
+                    let r = Rect::new(x0 + i as f32 * cw + 2.0, y, cw - 4.0, h);
+                    let on = d["on"] == true;
+                    let today = d["today"] == true;
+                    if on {
+                        self.round(r, 14.0, TEXT);
+                    } else if !s(d, "action").is_empty() && self.draw && hovered(r) {
+                        self.p.round(r, 14.0, LIT);
+                    }
+                    let mid = r.x + r.w / 2.0;
+                    let l = s(d, "label");
+                    let lw = self.p.measure(l, 10.0, Weight::Regular, cw);
+                    self.text(l, mid - lw / 2.0, y + 13.0, 10.0, Weight::Regular, cw, if on { crate::paint::Color(0.16, 0.16, 0.19, 1.0) } else { DIM });
+                    let num = s(d, "num");
+                    let nw = self.p.measure(num, 16.0, Weight::Semibold, cw);
+                    let nc = if on { crate::paint::Color(0.0, 0.0, 0.0, 1.0) } else if today { accent() } else { TEXT };
+                    self.text(num, mid - nw / 2.0, y + 32.0, 16.0, Weight::Semibold, cw, nc);
+                    let dots = d["dots"].as_array().cloned().unwrap_or_default();
+                    let dn = dots.len().min(3) as f32;
+                    let dx = mid - (dn * 4.0 + (dn - 1.0).max(0.0) * 2.0) / 2.0;
+                    for (k, c) in dots.iter().take(3).enumerate() {
+                        if self.draw {
+                            self.p.circle(dx + k as f32 * 6.0 + 2.0, y + 48.0, 2.0, color_of(c, accent()));
+                        }
+                    }
+                    if !s(d, "action").is_empty() {
+                        self.hit(r, Press::Action(s(d, "action").to_string(), Value::Null));
+                    }
+                }
+                h
+            }
+            // (what is next: a ring running down to it, its words inside; its title and when; a button to join it)
+            "nextup" => {
+                let h = 64.0;
+                self.round(Rect::new(x, y, w, h), 16.0, CARD);
+                let c = color_of(&b["color"], accent());
+                let (rx, cy) = (x + 12.0 + 22.0, y + h / 2.0);
+                if self.draw {
+                    self.p.ring(rx, cy, 19.0, 3.0, f(b, "part"), 0.0, c, TRACK);
+                }
+                let t = s(b, "text");
+                let tw = self.p.measure(t, 11.0, Weight::Bold, 40.0);
+                self.text(t, rx - tw / 2.0, cy, 11.0, Weight::Bold, 40.0, c);
+                let mut right = x + w - 12.0;
+                if !s(b, "join").is_empty() {
+                    let label = "Join";
+                    let lw = self.p.measure(label, 12.0, Weight::Semibold, 60.0) + 34.0;
+                    let r = Rect::new(right - lw, cy - 15.0, lw, 30.0);
+                    self.round(r, 15.0, accent());
+                    self.icon("play", r.x + 10.0, cy - 6.0, 12.0, crate::paint::Color(0.02, 0.07, 0.04, 1.0));
+                    self.text(label, r.x + 26.0, cy, 12.0, Weight::Semibold, 60.0, crate::paint::Color(0.02, 0.07, 0.04, 1.0));
+                    self.hit(r, Press::Action(s(b, "join").to_string(), Value::Null));
+                    right = r.x - 8.0;
+                }
+                let tx = x + 12.0 + 44.0 + 12.0;
+                self.text(s(b, "title"), tx, cy - 8.0, 13.0, Weight::Semibold, right - tx, TEXT);
+                self.text(s(b, "sub"), tx, cy + 9.0, 11.5, Weight::Regular, right - tx, DIM);
+                h
+            }
+            // (a day's events in time: each a bar of its colour on a ground of it, its time beside it; past ones faded; a red line where
+            // now is)
+            "timeline" => {
+                let rows = b["rows"].as_array().cloned().unwrap_or_default();
+                let now_at = b["now"].as_i64().unwrap_or(-1);
+                let red = crate::paint::Color(0.91, 0.42, 0.42, 1.0);
+                let mut yy = y;
+                let tcol = 44.0;
+                for (i, r) in rows.iter().enumerate() {
+                    if i as i64 == now_at {
+                        if self.draw {
+                            self.p.round(Rect::new(x + tcol + 10.0, yy + 1.0, w - tcol - 10.0, 1.5), 0.75, red);
+                            self.p.circle(x + tcol + 10.0, yy + 1.75, 4.0, red);
+                        }
+                        yy += 8.0;
+                    }
+                    let c = color_of(&r["color"], accent());
+                    let past = r["past"] == true;
+                    let k = if past { 0.5 } else { 1.0 };
+                    let has_sub = !s(r, "sub").is_empty();
+                    let rh = if has_sub { 46.0 } else { 32.0 };
+                    self.text_end(s(r, "time"), x + tcol, yy + 13.0, 11.0, Weight::Regular, tcol, DIM.alpha(k));
+                    let card = Rect::new(x + tcol + 10.0, yy, w - tcol - 10.0, rh);
+                    self.round(card, 12.0, c.alpha(0.13 * k));
+                    self.round(Rect::new(card.x + 1.0, card.y + 7.0, 3.0, rh - 14.0), 1.5, c.alpha(k));
+                    self.text(s(r, "title"), card.x + 12.0, yy + if has_sub { 14.0 } else { rh / 2.0 }, 12.5, Weight::Semibold, card.w - 20.0, TEXT.alpha(k));
+                    if has_sub {
+                        self.text(s(r, "sub"), card.x + 12.0, yy + 31.0, 11.0, Weight::Regular, card.w - 20.0, DIM.alpha(k));
+                    }
+                    if !s(r, "action").is_empty() {
+                        self.hit(card, Press::Action(s(r, "action").to_string(), Value::Null));
+                    }
+                    yy += rh + 6.0;
+                }
+                if now_at >= rows.len() as i64 && !rows.is_empty() {
+                    if self.draw {
+                        self.p.round(Rect::new(x + tcol + 10.0, yy + 1.0, w - tcol - 10.0, 1.5), 0.75, red);
+                        self.p.circle(x + tcol + 10.0, yy + 1.75, 4.0, red);
+                    }
+                    yy += 8.0;
+                }
+                (yy - y - 6.0).max(0.0)
+            }
+            // (a month: its name between ‹ ›, a ghost to go back, the days of the week, then its days (only its own): today in the theme's
+            // colour, the day picked ringed, weekends softer, a dot for each event under its number)
+            "monthgrid" => {
+                let mut h = 0.0;
+                let hy = y + 15.0;
+                for (k, a, icon) in [("prev", x, "left"), ("next", x + w - 30.0, "chevron")] {
+                    let act = s(b, k);
+                    if act.is_empty() {
+                        continue;
+                    }
+                    let r = Rect::new(a, y, 30.0, 30.0);
+                    if self.draw && hovered(r) {
+                        self.p.circle(r.x + 15.0, hy, 15.0, LIT);
+                    }
+                    self.chev(a + 15.0, hy, icon == "left", if hovered(r) { TEXT } else { DIM });
+                    self.hit(r, Press::Action(act.to_string(), Value::Null));
+                }
+                let title = s(b, "title");
+                let tw = self.p.measure(title, 16.0, Weight::Semibold, w - 80.0);
+                let tr = Rect::new(x + w / 2.0 - tw / 2.0 - 8.0, y, tw + 16.0, 30.0);
+                if !s(b, "press").is_empty() {
+                    self.ghost(tr, 12.0);
+                    self.hit(tr, Press::Action(s(b, "press").to_string(), Value::Null));
+                }
+                self.text(title, x + w / 2.0 - tw / 2.0, hy, 16.0, Weight::Semibold, w - 80.0, TEXT);
+                h += 38.0;
+                let cw = w / 7.0;
+                for (i, l) in b["labels"].as_array().cloned().unwrap_or_default().iter().enumerate().take(7) {
+                    let l = l.as_str().unwrap_or("");
+                    let lw = self.p.measure(l, 10.0, Weight::Regular, cw);
+                    self.text(l, x + i as f32 * cw + cw / 2.0 - lw / 2.0, y + h + 6.0, 10.0, Weight::Regular, cw, SOFT_DIM);
+                }
+                h += 16.0;
+                let lead = b["lead"].as_u64().unwrap_or(0) as usize;
+                let rh = 42.0;
+                let days = b["days"].as_array().cloned().unwrap_or_default();
+                for (i, d) in days.iter().enumerate() {
+                    let k = lead + i;
+                    let r = Rect::new(x + (k % 7) as f32 * cw + 2.0, y + h + (k / 7) as f32 * rh + 2.0, cw - 4.0, rh - 4.0);
+                    let today = d["today"] == true;
+                    let sel = d["sel"] == true;
+                    if today {
+                        self.round(r, 12.0, accent());
+                    } else if !s(d, "action").is_empty() && self.draw && hovered(r) {
+                        self.p.round(r, 12.0, LIT);
+                    }
+                    if sel && self.draw {
+                        self.p.outline(r, 12.0, 1.5, TEXT);
+                    }
+                    let num = s(d, "num");
+                    let nw = self.p.measure(num, 14.0, Weight::Semibold, cw);
+                    let nc = if today { crate::paint::Color(0.02, 0.07, 0.04, 1.0) } else if d["weekend"] == true { DIM } else { TEXT };
+                    let dots = d["dots"].as_array().cloned().unwrap_or_default();
+                    let ny = if dots.is_empty() { r.y + r.h / 2.0 } else { r.y + r.h / 2.0 - 4.0 };
+                    self.text(num, r.x + r.w / 2.0 - nw / 2.0, ny, 14.0, Weight::Semibold, cw, nc);
+                    let dn = dots.len().min(3) as f32;
+                    let dx = r.x + r.w / 2.0 - (dn * 4.0 + (dn - 1.0).max(0.0) * 2.0) / 2.0;
+                    for (j, c) in dots.iter().take(3).enumerate() {
+                        if self.draw {
+                            self.p.circle(dx + j as f32 * 6.0 + 2.0, r.y + r.h / 2.0 + 9.0, 2.0, if today { crate::paint::Color(0.02, 0.07, 0.04, 1.0) } else { color_of(c, accent()) });
+                        }
+                    }
+                    if !s(d, "action").is_empty() {
+                        self.hit(r, Press::Action(s(d, "action").to_string(), Value::Null));
+                    }
+                }
+                let rows = (lead + days.len()).div_ceil(7);
+                h + rows as f32 * rh
             }
             // (blocks on a ground of their own)
             "card" => {

@@ -409,9 +409,11 @@ impl Builtins {
                 let u = used(&a.key);
                 let file = a.key.rsplit(['\\', '/']).next().unwrap_or("").to_string();
                 let running = !a.windows.is_empty();
+                let in_apps = cfg.launcher_pins.as_ref().is_some_and(|l| l.iter().any(|p| p.kind == "app" && p.id.eq_ignore_ascii_case(&a.key)));
                 let mut menu = vec![
                     json!({ "icon": "window-new", "label": "New Window", "action": format!("launch:{}", a.key) }),
                     json!({ "icon": if a.pinned { "unpin" } else { "pin" }, "label": if a.pinned { "Unpin" } else { "Pin" }, "action": format!("pin:{}", a.key) }),
+                    json!({ "icon": "grid", "label": if in_apps { "Unpin from Apps" } else { "Pin to Apps" }, "action": format!("apppin:{}", a.key) }),
                 ];
                 if std::path::Path::new(&a.key).is_file() {
                     menu.push(json!({ "icon": "folder", "label": "Reveal in File Explorer", "action": format!("reveal:{}", a.key) }));
@@ -462,9 +464,11 @@ impl Builtins {
                 let title = if w.title.is_empty() { a.name.clone() } else { w.title.clone() };
                 let u = used(&a.key);
                 // (its menu: close it, pin its app, end its task; ending is held)
+                let in_apps = cfg.launcher_pins.as_ref().is_some_and(|l| l.iter().any(|p| p.kind == "app" && p.id.eq_ignore_ascii_case(&a.key)));
                 let mut menu = vec![
                     json!({ "icon": "x", "label": "Close", "action": format!("close:{}", w.hwnd) }),
                     json!({ "icon": if a.pinned { "unpin" } else { "pin" }, "label": if a.pinned { "Unpin" } else { "Pin" }, "action": format!("pin:{}", a.key) }),
+                    json!({ "icon": "grid", "label": if in_apps { "Unpin from Apps" } else { "Pin to Apps" }, "action": format!("apppin:{}", a.key) }),
                 ];
                 if std::path::Path::new(&a.key).is_file() {
                     menu.push(json!({ "icon": "folder", "label": "Reveal in File Explorer", "action": format!("reveal:{}", a.key) }));
@@ -472,7 +476,7 @@ impl Builtins {
                 if let Some(item) = context_item(w) {
                     menu.push(item);
                 }
-                menu.push(json!({ "icon": "power", "label": "End Task", "action": format!("kill:{}", w.hwnd), "hold": true, "tone": "no" }));
+                menu.push(json!({ "icon": "power", "label": "End Task", "action": format!("kill:{}", w.hwnd), "hold": true, "tone": "no", "confirm": "What it has not saved will be lost." }));
                 let file = a.key.rsplit(['\\', '/']).next().unwrap_or("").to_string();
                 tiles.push(json!({ "key": a.key, "hwnd": if w.minimized { 0 } else { w.hwnd }, "image": a.image, "title": title, "short": short_title(&title, &a.name), "action": format!("win:{}", w.hwnd), "front": w.front, "cpu": u.cpu, "ram": (u.mem as f64 / total) as f32, "progress": progress.get(&file).copied(), "sound": self.sounding.contains(&a.key), "attention": self.flashing.contains(&w.hwnd), "menu": menu }));
             }
@@ -545,6 +549,11 @@ impl Builtins {
 
     /// A press on one of them.
     pub fn press(&mut self, cfg: &mut Config, action: &str, args: &Value) -> (Effect, bool) {
+        // (lock, sleep, restart, shut down: asked first, in a modal)
+        if let Some(what) = action.strip_prefix("power:") {
+            power(what);
+            return (Effect::None, false);
+        }
         let apps = self.dock_apps(cfg);
         let find = |k: &str| apps.iter().find(|a| a.key == k).cloned();
         // (the second value: the config changed, and is kept)
@@ -746,6 +755,22 @@ impl Builtins {
             self.mic = crate::audiodev::mic_get();
             return (Effect::Changed, false);
         }
+        // the hotspot on or off; its password copied
+        if action == "hotspot" {
+            let on = self.net.hotspot.as_ref().is_some_and(|h| h.on);
+            if let Some(h) = self.net.hotspot.as_mut() {
+                h.on = !on;
+                h.busy = true;
+            }
+            crate::hotspot::set(!on);
+            return (Effect::Changed, false);
+        }
+        if action == "hotspotcopy" {
+            if let Some(h) = &self.net.hotspot {
+                crate::clip::copy_text(&h.pass);
+            }
+            return (Effect::None, false);
+        }
         // the network: a radio on or off (airplane: all off, or all on again); a network joined; Windows' own pages
         if let Some(r) = action.strip_prefix("radio:") {
             let st = crate::radios::now();
@@ -806,6 +831,16 @@ impl Builtins {
         if let Some(k) = action.strip_prefix("launch:") {
             apps::launch(k);
             return (Effect::None, false);
+        }
+        // (an app pinned to the launcher, or taken off it)
+        if let Some(k) = action.strip_prefix("apppin:") {
+            let pins = cfg.launcher_pins.get_or_insert_with(crate::launcher::default_pins);
+            if let Some(i) = pins.iter().position(|p| p.kind == "app" && p.id.eq_ignore_ascii_case(k)) {
+                pins.remove(i);
+            } else if let Some(a) = find(k) {
+                pins.push(crate::config::AppPin { kind: "app".into(), id: a.key.clone(), name: a.name.clone(), folder: String::new() });
+            }
+            return (Effect::Changed, true);
         }
         if let Some(k) = action.strip_prefix("pin:") {
             if let Some(i) = cfg.pinned.iter().position(|p| p.id.to_lowercase() == k) {

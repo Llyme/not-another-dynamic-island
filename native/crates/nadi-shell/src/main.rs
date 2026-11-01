@@ -21,6 +21,7 @@ mod gfx;
 mod keyhook;
 mod launcher;
 mod menu;
+mod modal;
 mod icons;
 mod icons_data;
 mod icons_fluent;
@@ -48,6 +49,7 @@ mod volume;
 mod winlist;
 mod sysw;
 mod audiodev;
+mod hotspot;
 mod net;
 
 use std::cell::RefCell;
@@ -172,6 +174,9 @@ fn run() -> windows::core::Result<()> {
         }
         if fr.launcher_hwnd() == Some(hwnd) {
             return fr.launcher_message(msg, wp, lp);
+        }
+        if fr.modal_hwnd() == Some(hwnd) {
+            return fr.modal_message(msg, wp, lp);
         }
         let si = fr.is_frame_window(hwnd)?;
         let s = fr.screen_scale(si);

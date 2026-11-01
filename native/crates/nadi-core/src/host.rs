@@ -61,6 +61,8 @@ pub enum Update {
     Cancel { plugin: String, key: String },
     /// it asks that ambient banners wait (a game runs), or no longer
     Quiet { plugin: String, on: bool },
+    /// it asks something in a modal (only as the answer to something pressed)
+    Modal { plugin: String, spec: Value },
 }
 
 /// What the shell asks.
@@ -1001,6 +1003,12 @@ impl Host {
                     self.plugins[i].widgets.insert(wid.clone(), content.clone());
                 }
                 self.out.push(Update::Widget { plugin: id.clone(), widget: wid.clone(), content });
+            }
+        }
+        // (a question in a modal: only as the answer to a press, never by itself)
+        if let Some(m) = o.get("modal").filter(|m| m.is_object() && weight(m) <= MAX_JSON) {
+            if by_user {
+                self.out.push(Update::Modal { plugin: id.clone(), spec: m.clone() });
             }
         }
         if let Some(says) = o.get("say").and_then(|s| s.as_array()) {

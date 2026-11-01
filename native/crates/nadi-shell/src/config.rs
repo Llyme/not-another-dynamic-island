@@ -46,6 +46,18 @@ pub struct WidgetConfig {
     pub pop_size: Option<(f32, f32)>,
 }
 
+/// A thing pinned to the launcher: an app, a file, a page of Settings, one of the PC's own tools; in a folder of pins, or not.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Default)]
+#[serde(default)]
+pub struct AppPin {
+    /// "app" (a program's path or a store app's id), "file" (its path), "setting" (its address), "sys" (a tool's name)
+    pub kind: String,
+    pub id: String,
+    pub name: String,
+    /// the folder of pins it is in (none: loose)
+    pub folder: String,
+}
+
 /// An app pinned to the dock.
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Default)]
 #[serde(default)]
@@ -72,6 +84,10 @@ pub struct Config {
     /// "all": when the mouse comes to any edge).
     pub auto_hide: String,
     pub pinned: Vec<Pin>,
+    /// the launcher's pins, in their order (none: the ones it starts with)
+    pub launcher_pins: Option<Vec<AppPin>>,
+    /// the launcher's foot: pins of its own, small, in a row (none: lock, sleep, restart, shut down)
+    pub launcher_foot: Option<Vec<AppPin>>,
     /// the Windows key: "auto" (the launcher while the taskbar is hidden, else Start), "launcher", "start"
     pub win_key: String,
     /// which widgets show: "all" (always), "edges" (all of them, when the mouse comes to any edge), "edge" (the edge the mouse comes
@@ -115,7 +131,7 @@ impl Config {
 
 impl Default for Config {
     fn default() -> Self {
-        Config { widgets: BTreeMap::new(), monitors: "follow".into(), taskbar: "keep".into(), scale: 1.0, auto_hide: "fullscreen".into(), pinned: Vec::new(), win_key: "auto".into(), reveal: "all".into(), hold_key: "none".into(), open_on: "hover".into(), tray_pinned: Vec::new(), quiet_full: true, quiet_banners: Vec::new(), liquid: 50.0, theme: "#5ac88c".into(), theme2: "#e8b04a".into(), desk_map: BTreeMap::new(), desk_keys: true }
+        Config { widgets: BTreeMap::new(), monitors: "follow".into(), taskbar: "keep".into(), scale: 1.0, auto_hide: "fullscreen".into(), pinned: Vec::new(), launcher_pins: None, launcher_foot: None, win_key: "auto".into(), reveal: "all".into(), hold_key: "none".into(), open_on: "hover".into(), tray_pinned: Vec::new(), quiet_full: true, quiet_banners: Vec::new(), liquid: 50.0, theme: "#5ac88c".into(), theme2: "#e8b04a".into(), desk_map: BTreeMap::new(), desk_keys: true }
     }
 }
 

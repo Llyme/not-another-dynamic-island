@@ -257,6 +257,17 @@ impl Overlay {
         }
     }
 
+    /// A piece on the glass over all the others there (the liquid: the glows stay under it, never over a widget beside theirs).
+    pub fn glass_piece_top(&self, gfx: &Gfx, w: u32, h: u32) -> Result<Piece> {
+        unsafe {
+            let visual = gfx.dcomp.CreateVisual()?;
+            let surface = gfx.surface(w, h)?;
+            visual.SetContent(&surface)?;
+            self.glass_root.AddVisual(&visual, false, None)?;
+            Ok(Piece { visual, surface, alloc: (w, h), x: 0, y: 0 })
+        }
+    }
+
     pub fn remove_glass(&self, p: &Piece) {
         unsafe {
             let _ = self.glass_root.RemoveVisual(&p.visual);

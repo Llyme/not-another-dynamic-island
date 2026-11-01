@@ -53,7 +53,7 @@ pub fn keep_moving() {
 
 /// how wide a flow's chevrons are, beside words of `size`, and the gap after them
 fn flow_w(size: f32) -> f32 {
-    (size * 0.6).round()
+    (size * 0.52).round()
 }
 const FLOW_GAP: f32 = 4.0;
 
@@ -130,6 +130,7 @@ pub struct Painter<'a> {
 
 impl<'a> Painter<'a> {
     pub fn words(&self, text: &str, size: f32, weight: Weight, max_w: f32) -> Result<Words> {
+        crate::paint::SCALE.with(|s| s.set(self.s));
         words(&self.g.dwrite, text, size * self.s, weight, (max_w * self.s).max(1.0), Align::Start)
     }
 
@@ -147,7 +148,7 @@ impl<'a> Painter<'a> {
     /// how wide. Words that begin with "↑" or "↓" are drawn with it in place of the arrow.
     pub fn flow(&self, x: f32, cy: f32, up: bool, size: f32, c: Color) -> f32 {
         let w = flow_w(size);
-        let h = size * 1.2;
+        let h = size * 1.05;
         let top = cy - h / 2.0;
         let gap = h * 0.36;
         let rise = w * 0.28;
@@ -221,7 +222,7 @@ impl<'a> Painter<'a> {
         use windows::core::HSTRING;
         use windows::Win32::Graphics::DirectWrite::*;
         unsafe {
-            let Ok(format) = self.g.dwrite.CreateTextFormat(&HSTRING::from("Segoe UI Variable Text"), None, DWRITE_FONT_WEIGHT_NORMAL, DWRITE_FONT_STYLE_NORMAL, DWRITE_FONT_STRETCH_NORMAL, size * self.s, &HSTRING::from("en-us")) else { return 0.0 };
+            let Ok(format) = ({ let (face, coll) = crate::paint::face(&self.g.dwrite, size * self.s, false, self.s); self.g.dwrite.CreateTextFormat(&HSTRING::from(face.as_str()), coll.as_ref(), DWRITE_FONT_WEIGHT_NORMAL, DWRITE_FONT_STYLE_NORMAL, DWRITE_FONT_STRETCH_NORMAL, size * self.s, &HSTRING::from("en-us")) }) else { return 0.0 };
             let line_h = size * 1.35 * self.s;
             let _ = format.SetLineSpacing(DWRITE_LINE_SPACING_METHOD_UNIFORM, line_h, line_h * 0.8);
             if let Ok(sign) = self.g.dwrite.CreateEllipsisTrimmingSign(&format) {
@@ -249,7 +250,7 @@ impl<'a> Painter<'a> {
         use windows::core::{Interface, HSTRING};
         use windows::Win32::Graphics::DirectWrite::*;
         unsafe {
-            let Ok(format) = self.g.dwrite.CreateTextFormat(&HSTRING::from("Segoe UI Variable Text"), None, DWRITE_FONT_WEIGHT_NORMAL, DWRITE_FONT_STYLE_NORMAL, DWRITE_FONT_STRETCH_NORMAL, size * self.s, &HSTRING::from("en-us")) else { return 0.0 };
+            let Ok(format) = ({ let (face, coll) = crate::paint::face(&self.g.dwrite, size * self.s, false, self.s); self.g.dwrite.CreateTextFormat(&HSTRING::from(face.as_str()), coll.as_ref(), DWRITE_FONT_WEIGHT_NORMAL, DWRITE_FONT_STYLE_NORMAL, DWRITE_FONT_STRETCH_NORMAL, size * self.s, &HSTRING::from("en-us")) }) else { return 0.0 };
             let line_h = size * 1.35 * self.s;
             let _ = format.SetLineSpacing(DWRITE_LINE_SPACING_METHOD_UNIFORM, line_h, line_h * 0.8);
             let wide: Vec<u16> = text.encode_utf16().collect();
@@ -561,6 +562,20 @@ impl<'a> Painter<'a> {
             let _ = std::mem::ManuallyDrop::into_inner(params.geometricMask);
         }
         true
+    }
+
+    /// A box with only its top corners round (a page's top).
+    pub fn round_top(&self, r: Rect, radius: f32, c: Color) {
+        if r.w <= 0.0 || r.h <= 0.0 {
+            return;
+        }
+        unsafe {
+            self.dc.PushAxisAlignedClip(&self.px(r).d2d(), D2D1_ANTIALIAS_MODE_PER_PRIMITIVE);
+        }
+        self.round(Rect::new(r.x, r.y, r.w, r.h + radius), radius, c);
+        unsafe {
+            self.dc.PopAxisAlignedClip();
+        }
     }
 
     /// A box with round corners, its outline only.

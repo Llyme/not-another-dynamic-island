@@ -102,18 +102,116 @@ pub struct Words {
     pub height: f32,
 }
 
+// ---------------------------------------------------------------------------------------------------------- its typefaces
+
+/// NADI's own typefaces, inside it (not installed on the PC): Inter for what is read, Outfit for what is big and seen at a glance (the
+/// clock, titles, a drive's letter, big numbers). Both under the SIL Open Font License (assets/fonts/OFL-*.txt).
+static FONT_FILES: [&[u8]; 7] = [
+    include_bytes!("../assets/fonts/inter-400.ttf"),
+    include_bytes!("../assets/fonts/inter-500.ttf"),
+    include_bytes!("../assets/fonts/inter-600.ttf"),
+    include_bytes!("../assets/fonts/inter-700.ttf"),
+    include_bytes!("../assets/fonts/outfit-500.ttf"),
+    include_bytes!("../assets/fonts/outfit-600.ttf"),
+    include_bytes!("../assets/fonts/outfit-700.ttf"),
+];
+
+/// the words' typeface for what is read, and for what is big
+const TEXT_FACE: &str = "Inter";
+const DISPLAY_FACE: &str = "Outfit";
+/// Windows' own, when NADI's could not be loaded
+const SYSTEM_FACE: &str = "Segoe UI Variable Text";
+
+/// A collection of NADI's own typefaces, made from the files inside it.
+unsafe fn own_fonts(dw: &IDWriteFactory) -> Result<IDWriteFontCollection> {
+    use windows::core::Interface;
+    let f5: IDWriteFactory5 = dw.cast()?;
+    let loader = f5.CreateInMemoryFontFileLoader()?;
+    f5.RegisterFontFileLoader(&loader)?;
+    let builder: IDWriteFontSetBuilder1 = f5.CreateFontSetBuilder()?.cast()?;
+    for data in FONT_FILES {
+        let file = loader.CreateInMemoryFontFileReference(&f5, data.as_ptr() as *const _, data.len() as u32, None)?;
+        builder.AddFontFile(&file)?;
+    }
+    let set = builder.CreateFontSet()?;
+    let coll = f5.CreateFontCollectionFromFontSet(&set)?;
+    let coll: IDWriteFontCollection = coll.cast()?;
+    // (both there, by the start of their name (the display face's files name their family "Outfit Thin"); or none of it)
+    let mut names = Vec::new();
+    for i in 0..coll.GetFontFamilyCount() {
+        if let Ok(ns) = coll.GetFontFamily(i).and_then(|f| f.GetFamilyNames()) {
+            let mut buf = [0u16; 128];
+            let _ = ns.GetString(0, &mut buf);
+            names.push(String::from_utf16_lossy(&buf[..buf.iter().position(|c| *c == 0).unwrap_or(0)]));
+        }
+    }
+    let find = |start: &str| names.iter().find(|n| n.starts_with(start)).cloned();
+    let (Some(text), Some(display)) = (find(TEXT_FACE), find(DISPLAY_FACE)) else {
+        return Err(windows::core::Error::from(windows::Win32::Foundation::E_FAIL));
+    };
+    FACES.with(|f| *f.borrow_mut() = (text, display));
+    Ok(coll)
+}
+
+thread_local! {
+    /// the two typefaces' family names, as their files give them (for what is read, for what is big)
+    static FACES: std::cell::RefCell<(String, String)> = std::cell::RefCell::new((TEXT_FACE.to_string(), DISPLAY_FACE.to_string()));
+    /// the scale words are drawn at now (physical px a logical px): sizes come in physical px
+    pub static SCALE: std::cell::Cell<f32> = const { std::cell::Cell::new(1.0) };
+    /// NADI's typefaces (made once; none: they could not be, and Windows' own is used)
+    static FONTS: std::cell::RefCell<Option<Option<IDWriteFontCollection>>> = const { std::cell::RefCell::new(None) };
+    /// numbers all as wide (so a number that changes does not jiggle): the typography every line is set with
+    static TABULAR: std::cell::RefCell<Option<IDWriteTypography>> = const { std::cell::RefCell::new(None) };
+}
+
+fn fonts(dw: &IDWriteFactory) -> Option<IDWriteFontCollection> {
+    FONTS.with(|f| {
+        if let Some(c) = &*f.borrow() {
+            return c.clone();
+        }
+        let c = unsafe { own_fonts(dw) }.ok();
+        *f.borrow_mut() = Some(c.clone());
+        c
+    })
+}
+
+/// Which typeface, and from where, for words of a size and weight: big and strong ones (14 px and more, semibold or bold), Outfit;
+/// the rest, Inter.
+pub fn face(dw: &IDWriteFactory, size_px: f32, weight_bold: bool, scale: f32) -> (String, Option<IDWriteFontCollection>) {
+    match fonts(dw) {
+        Some(c) => (FACES.with(|f| if weight_bold && size_px / scale.max(0.5) >= 14.0 { f.borrow().1.clone() } else { f.borrow().0.clone() }), Some(c)),
+        None => (SYSTEM_FACE.to_string(), None),
+    }
+}
+
+fn tabular(dw: &IDWriteFactory) -> Option<IDWriteTypography> {
+    TABULAR.with(|t| {
+        if let Some(x) = &*t.borrow() {
+            return Some(x.clone());
+        }
+        let x = unsafe {
+            let typo = dw.CreateTypography().ok()?;
+            typo.AddFontFeature(DWRITE_FONT_FEATURE { nameTag: DWRITE_FONT_FEATURE_TAG_TABULAR_FIGURES, parameter: 1 }).ok()?;
+            typo
+        };
+        *t.borrow_mut() = Some(x.clone());
+        Some(x)
+    })
+}
+
 thread_local! {
     /// the text formats, made once each (by size in tenths of a px, weight, alignment)
     static FORMATS: std::cell::RefCell<std::collections::HashMap<(u32, u8, u8), IDWriteTextFormat>> = std::cell::RefCell::new(std::collections::HashMap::new());
 }
 
 fn format(dw: &IDWriteFactory, size: f32, weight: Weight, align: Align) -> Result<IDWriteTextFormat> {
-    let key = ((size * 10.0).round() as u32, weight as u8, align as u8);
+    let key = ((size * 10.0).round() as u32 * 16 + (SCALE.with(|s| s.get()) * 4.0).round() as u32, weight as u8, align as u8);
     if let Some(f) = FORMATS.with(|f| f.borrow().get(&key).cloned()) {
         return Ok(f);
     }
     unsafe {
-        let format = dw.CreateTextFormat(&HSTRING::from("Segoe UI Variable Text"), None, weight.dw(), DWRITE_FONT_STYLE_NORMAL, DWRITE_FONT_STRETCH_NORMAL, size, &HSTRING::from("en-us"))?;
+        let (name, coll) = face(dw, size, matches!(weight, Weight::Semibold | Weight::Bold), SCALE.with(|s| s.get()));
+        let format = dw.CreateTextFormat(&HSTRING::from(name.as_str()), coll.as_ref(), weight.dw(), DWRITE_FONT_STYLE_NORMAL, DWRITE_FONT_STRETCH_NORMAL, size, &HSTRING::from("en-us"))?;
         format.SetWordWrapping(DWRITE_WORD_WRAPPING_NO_WRAP)?;
         format.SetTextAlignment(match align {
             Align::Start => DWRITE_TEXT_ALIGNMENT_LEADING,
@@ -132,6 +230,13 @@ pub fn words(dw: &IDWriteFactory, text: &str, size: f32, weight: Weight, max_w: 
         let format = format(dw, size, weight, align)?;
         let wide: Vec<u16> = text.encode_utf16().collect();
         let layout = dw.CreateTextLayout(&wide, &format, max_w.max(1.0), size * 2.0)?;
+        // (mostly a number (a time, a size, a speed): its digits all as wide, so it does not jiggle as it changes; names keep theirs)
+        let (digits, alnum) = text.chars().fold((0, 0), |(d, a), c| (d + c.is_ascii_digit() as usize, a + c.is_alphanumeric() as usize));
+        if digits * 10 >= alnum.max(1) * 3 {
+            if let Some(t) = tabular(dw) {
+                let _ = layout.SetTypography(&t, DWRITE_TEXT_RANGE { startPosition: 0, length: wide.len() as u32 });
+            }
+        }
         let mut m = DWRITE_TEXT_METRICS::default();
         layout.GetMetrics(&mut m)?;
         Ok(Words { layout, width: m.width, height: m.height })

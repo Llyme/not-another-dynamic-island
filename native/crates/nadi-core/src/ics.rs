@@ -16,6 +16,22 @@ pub struct CalendarEvent {
     /// exclusive end (== start for zero-length events)
     pub end_ms: i64,
     pub all_day: bool,
+    /// where it is (its LOCATION), and a link to join it when it has one (a Meet, Teams, Zoom or Webex address in its URL, LOCATION
+    /// or DESCRIPTION; else its URL)
+    pub location: String,
+    pub link: String,
+}
+
+/// A meeting's address in some words: the first web address of a meeting service in them.
+fn meeting_link(text: &str) -> Option<String> {
+    const HOSTS: [&str; 5] = ["meet.google.com", "teams.microsoft.com", "teams.live.com", "zoom.us", "webex.com"];
+    for word in text.split(|c: char| c.is_whitespace() || c == '<' || c == '>' || c == '"' || c == '(' || c == ')') {
+        let w = word.trim_end_matches(['.', ',', ';']);
+        if (w.starts_with("https://") || w.starts_with("http://")) && HOSTS.iter().any(|h| w.contains(h)) {
+            return Some(w.to_string());
+        }
+    }
+    None
 }
 use chrono::{Datelike, Duration as CDuration, Local, Months, NaiveDate, NaiveDateTime, TimeZone, Utc, Weekday};
 use std::collections::{HashMap, HashSet};
@@ -64,6 +80,9 @@ struct RawEvent {
     rrule: Option<String>,
     exdates: Vec<i64>,
     recurrence_id: Option<i64>,
+    location: String,
+    url: String,
+    description: String,
 }
 
 fn local_naive(ms: i64) -> Option<NaiveDateTime> {
@@ -210,6 +229,9 @@ fn parse_ics_window(text: &str, now_ms: i64) -> Vec<CalendarEvent> {
                     c.summary = Some(value.replace("\\n", " ").replace("\\,", ",").trim().to_string())
                 }
                 "UID" => c.uid = Some(value.trim().to_string()),
+                "LOCATION" => c.location = value.replace("\\n", " ").replace("\\,", ",").trim().to_string(),
+                "URL" => c.url = value.trim().to_string(),
+                "DESCRIPTION" => c.description = value.replace("\\n", " ").replace("\\,", ","),
                 "RRULE" => c.rrule = Some(value.trim().to_string()),
                 "EXDATE" => {
                     for v in value.split(',') {
@@ -242,6 +264,7 @@ fn parse_ics_window(text: &str, now_ms: i64) -> Vec<CalendarEvent> {
             _ => 0,
         };
         let uid = r.uid.clone().unwrap_or_else(|| format!("{summary}|{start_ms}"));
+        let link = meeting_link(&r.url).or_else(|| meeting_link(&r.location)).or_else(|| meeting_link(&r.description)).unwrap_or_else(|| if r.url.starts_with("http") { r.url.clone() } else { String::new() });
         let recurring = r.rrule.is_some() && r.recurrence_id.is_none();
         let starts: Vec<i64> = if recurring {
             let skip: HashSet<i64> = r
@@ -268,6 +291,8 @@ fn parse_ics_window(text: &str, now_ms: i64) -> Vec<CalendarEvent> {
                 start_ms: s,
                 end_ms: s + duration,
                 all_day,
+                location: r.location.clone(),
+                link: link.clone(),
             });
         }
     }

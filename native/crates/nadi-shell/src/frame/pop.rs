@@ -204,6 +204,7 @@ impl Frame {
                 sections_open: HashSet::new(),
                 sections_closed: HashSet::new(),
                 hover_since: None,
+                swell: Spring::at(0.0),
                 left_at: None,
                 alive: false,
                 pinned: true,

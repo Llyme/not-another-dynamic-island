@@ -72,6 +72,9 @@ const SHOW_DAMP: f32 = 42.0;
 /// going back: no bounce, a little quicker
 const HIDE_STIFF: f32 = 520.0;
 const HIDE_DAMP: f32 = 46.0;
+/// a widget swelling under the mouse: quick, one soft overshoot
+const SWELL_STIFF: f32 = 700.0;
+const SWELL_DAMP: f32 = 34.0;
 /// the longest a widget waits for its turn in the wave (seconds), the farthest from the mouse
 const WAVE: f32 = 0.22;
 
@@ -174,11 +177,10 @@ struct Hold {
     rect: Rect,
     plugin: String,
     action: String,
-    at: Instant,
+    /// what is asked before it is done
+    spec: Value,
 }
 
-/// how long a thing is held for it to happen
-const HOLD_FOR: Duration = Duration::from_millis(1200);
 
 /// A menu open on the screen: a widget's, or the short one (no widget), or a thing's own (its rows, from its plugin).
 struct Menu {
@@ -254,6 +256,9 @@ struct Widget {
 
 /// How far a glow reaches out of its piece (logical px).
 const GLOW: f32 = 18.0;
+/// how much a widget swells with the mouse on it: out of its edge, and along it (logical px)
+const SWELL_OUT: f32 = 5.0;
+const SWELL_ALONG: f32 = 6.0;
 
 /// A box, logical px, in the monitor.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
@@ -290,6 +295,8 @@ struct Item {
     sections_closed: HashSet<String>,
     hover_since: Option<Instant>,
     left_at: Option<Instant>,
+    /// the mouse on it, shut: it swells a little out of its edge (1), and settles back as the mouse goes (0)
+    swell: Spring,
     /// what moves in it (a spinner, the bars of the sound): drawn each frame
     alive: bool,
     /// opened by a press: it stays open until the mouse goes and comes back, or another press
@@ -512,6 +519,8 @@ pub struct Frame {
     /// the dock and quick settings
     bi: crate::builtin::Builtins,
     pub launcher: Option<crate::launcher::Launcher>,
+    /// the modal: one question over everything
+    pub modal: Option<crate::modal::Modal>,
     /// the settings window, while it is open
     pub settings: Option<crate::settings::Settings>,
     /// what the repositories are doing (looking, installing), and what went wrong with the last look
@@ -654,6 +663,7 @@ impl Frame {
             tear_neck: None,
             bi: crate::builtin::Builtins::new(),
             launcher: None,
+            modal: None,
             settings: None,
             repo_busy: HashSet::new(),
             repo_errors: BTreeMap::new(),
@@ -677,6 +687,7 @@ impl Frame {
             aura_alive: false,
         };
         f.launcher = crate::launcher::Launcher::new(&f.g).ok();
+        f.modal = crate::modal::Modal::new(&f.g).ok();
         if std::env::var_os("NADI_OPEN_SETTINGS").is_some() {
             f.open_settings();
         }
@@ -1198,7 +1209,9 @@ impl Frame {
             if l.shown {
                 l.hide();
             } else {
-                l.show(g, area, s, pinned, pick);
+                let pins = self.config.launcher_pins.clone().unwrap_or_else(crate::launcher::default_pins);
+                let foot = self.config.launcher_foot.clone().unwrap_or_else(crate::launcher::default_foot);
+                l.show(g, area, s, pinned, pins, foot, pick);
                 // (its first frame drawn, then shown)
                 l.render(g, &self.pc);
                 unsafe {
@@ -1456,6 +1469,17 @@ impl Frame {
                 l.render(&self.g, &self.pc);
             }
         }
+        // (it asks before doing something (restart, shut down): in a modal, out of where it was pressed)
+        if let Some((spec, at)) = self.launcher.as_mut().and_then(|l| l.take_ask()) {
+            self.ask(spec, crate::builtin::PLUGIN.into(), Some(at));
+        }
+        // (its pins changed: kept)
+        if let Some(pins) = self.launcher.as_mut().and_then(|l| l.take_pins()) {
+            self.change_config(|c| {
+                c.launcher_pins = Some(pins.0);
+                c.launcher_foot = Some(pins.1);
+            });
+        }
         // (an app picked to pin: on the dock, last)
         if let Some(a) = self.launcher.as_mut().and_then(|l| l.take_picked()) {
             self.change_config(|c| {
@@ -1513,6 +1537,56 @@ impl Frame {
         }
         self.commit();
         handled.then_some(LRESULT(0))
+    }
+
+    pub fn modal_hwnd(&self) -> Option<HWND> {
+        self.modal.as_ref().map(|m| m.hwnd)
+    }
+
+    /// Ask, in a modal (see `modal`): on the screen of `at` (physical px on the desktop), growing out of there; none: where the mouse
+    /// is. What is pressed goes to `owner` as one of its actions.
+    pub fn ask(&mut self, spec: Value, owner: String, at: Option<(i32, i32)>) {
+        let point = at.unwrap_or_else(|| {
+            let mut p = POINT::default();
+            unsafe {
+                let _ = windows::Win32::UI::WindowsAndMessaging::GetCursorPos(&mut p);
+            }
+            (p.x, p.y)
+        });
+        let si = self.screens.iter().position(|sc| {
+            let m = sc.ov.monitor.rect;
+            point.0 >= m.left && point.0 < m.right && point.1 >= m.top && point.1 < m.bottom
+        });
+        let Some(si) = si.or(if self.screens.is_empty() { None } else { Some(0) }) else { return };
+        let (mon, s) = (self.screens[si].ov.monitor.rect, self.screens[si].s);
+        let from = ((point.0 - mon.left) as f32 / s, (point.1 - mon.top) as f32 / s);
+        let g = &self.g;
+        if let Some(m) = &mut self.modal {
+            m.ask(g, mon, s, from, spec, owner);
+            m.render(g, &self.pc);
+        }
+        self.commit();
+        self.tick_rate();
+    }
+
+    /// What the modal's window hears.
+    pub fn modal_message(&mut self, msg: u32, wp: WPARAM, lp: LPARAM) -> Option<LRESULT> {
+        let g = &self.g;
+        let r = self.modal.as_mut()?.message(msg, wp, lp, g, &self.pc);
+        if let Some(m) = &mut self.modal {
+            m.render(g, &self.pc);
+        }
+        self.modal_answered();
+        self.commit();
+        self.tick_rate();
+        r
+    }
+
+    /// The modal's answer, when there is one: to whoever asked, as one of its actions.
+    fn modal_answered(&mut self) {
+        if let Some((owner, action, args)) = self.modal.as_mut().and_then(|m| m.take_result()) {
+            self.act(owner, action, args);
+        }
     }
 
     pub fn launcher_hwnd(&self) -> Option<HWND> {
@@ -2023,6 +2097,7 @@ impl Frame {
                 }
                 Update::Say { plugin, say } => self.say(plugin, say),
                 Update::Cancel { plugin, key } => self.cancel(&plugin, &key),
+                Update::Modal { plugin, spec } => self.ask(spec, plugin, None),
                 Update::Quiet { plugin, on } => {
                     if on {
                         self.quiet.insert(plugin);
@@ -2391,6 +2466,7 @@ impl Frame {
                             sections_open: HashSet::new(),
                             sections_closed: HashSet::new(),
                             hover_since: None,
+                            swell: Spring::at(0.0),
                             left_at: None,
                             alive: false,
                             pinned: false,
@@ -2697,7 +2773,7 @@ impl Frame {
         let g = &self.g;
         let sc = &mut self.screens[si];
         if sc.liquid.is_none() {
-            sc.liquid = sc.ov.glass_piece(g, need.0 + 64, need.1 + 64).ok();
+            sc.liquid = sc.ov.glass_piece_top(g, need.0 + 64, need.1 + 64).ok();
         }
         let Some(lp) = sc.liquid.as_mut() else { return };
         if need.0 > lp.alloc.0 || need.1 > lp.alloc.1 {
@@ -2873,6 +2949,24 @@ impl Frame {
                     let l = matches!(c, Corner::TopLeft | Corner::BottomLeft);
                     let tp = matches!(c, Corner::TopLeft | Corner::TopRight);
                     Bx { x: if l { b.x } else { b.x + b.w - w }, y: if tp { b.y } else { b.y + b.h - h }, w, h }
+                }
+            }
+        } else {
+            b
+        };
+        // (the mouse on it: swollen a little, out of its edge and along it; none of it once its panel is open)
+        let sw = it.swell.now.clamp(-0.3, 1.4) * (1.0 - t);
+        let b = if sw.abs() > 0.001 {
+            let (out, along) = (SWELL_OUT * sw, SWELL_ALONG * sw);
+            match it.slot.place {
+                Place::Edge(Edge::Top) => Bx { x: b.x - along / 2.0, w: b.w + along, h: b.h + out, ..b },
+                Place::Edge(Edge::Bottom) => Bx { x: b.x - along / 2.0, y: b.y - out, w: b.w + along, h: b.h + out },
+                Place::Edge(Edge::Left) => Bx { y: b.y - along / 2.0, w: b.w + out, h: b.h + along, ..b },
+                Place::Edge(Edge::Right) => Bx { x: b.x - out, y: b.y - along / 2.0, w: b.w + out, h: b.h + along },
+                Place::Corner(c) => {
+                    let l = matches!(c, Corner::TopLeft | Corner::BottomLeft);
+                    let tp = matches!(c, Corner::TopLeft | Corner::TopRight);
+                    Bx { x: if l { b.x } else { b.x - along }, y: if tp { b.y } else { b.y - out }, w: b.w + along, h: b.h + out }
                 }
             }
         } else {
@@ -3221,7 +3315,7 @@ impl Frame {
             content["\u{0}handle"] = json!(if pulled { 1.0 } else { (since / 0.12).min(1.0) });
             content["\u{0}handle_w"] = json!(if pulled { (32.0 - self.tear_pull * 0.5).max(12.0) } else { 32.0 });
         }
-        let held_here = self.hold.as_ref().filter(|h| h.si == si && h.key.as_deref() == Some(k)).map(|h| (h.rect, (h.at.elapsed().as_secs_f32() / HOLD_FOR.as_secs_f32()).min(1.0)));
+        let held_here = self.hold.as_ref().filter(|h| h.si == si && h.key.as_deref() == Some(k)).map(|h| (h.rect, 0.0));
         let idle_faded = self.edit.is_some() && content["idle"] == true;
         let eyes_place = slot.place;
         let lit = self.aura_target().is_some_and(|(asi, ak)| asi == si && ak == k);
@@ -3961,6 +4055,7 @@ impl Frame {
         crate::images::forget();
         self.close_settings();
         self.launcher = None;
+        self.modal = None;
         self.banner = None;
         for sc in &self.screens {
             for it in sc.items.values() {
@@ -3974,6 +4069,7 @@ impl Frame {
         self.make_screens();
         drop(old);
         self.launcher = crate::launcher::Launcher::new(&self.g).ok();
+        self.modal = crate::modal::Modal::new(&self.g).ok();
         true
     }
 
@@ -4220,6 +4316,13 @@ impl Frame {
             self.step_dock(dt);
             self.prof_add("dock step", tq);
         }
+        // the modal's spring (its countdown may answer)
+        if let Some(m) = &mut self.modal {
+            if m.step(&self.g, dt) {
+                m.render(&self.g, &self.pc);
+            }
+        }
+        self.modal_answered();
         // the launcher's spring
         if let Some(l) = &mut self.launcher {
             let changed = l.check();
@@ -4359,13 +4462,20 @@ impl Frame {
             }
         }
         // springs and what lives
+        let hv = self.hover.clone();
+        let calm = self.drag.is_none() && self.edit.is_none() && self.tear.is_none() && self.sizing.is_none() && self.menu.is_none();
         for si in 0..self.screens.len() {
+            let full = self.screens[si].full;
             let keys: Vec<String> = self.screens[si].items.keys().cloned().collect();
             for k in keys {
                 let it = self.screens[si].items.get_mut(&k).unwrap();
+                let on = hv.as_ref().is_some_and(|(hs, hk)| *hs == si && *hk == k);
+                let swell = on && calm && !full && !is_pop(&k) && it.open.to == 0.0 && it.drag_place.is_none() && it.shown.to >= 1.0;
+                it.swell.to = if swell { 1.0 } else { 0.0 };
+                let swelled = it.swell.step_with(dt, SWELL_STIFF, SWELL_DAMP);
                 let opened = it.open.step(dt);
                 let rested = it.rest.step(dt);
-                let moved = opened || rested;
+                let moved = opened || rested || swelled;
                 let alive = it.alive;
                 if moved {
                     relayer = true;
@@ -4601,11 +4711,11 @@ impl Frame {
 
     /// How often to tick: every frame while something moves, else four times a second.
     fn tick_rate(&mut self) {
-        let launcher_moves = self.launcher.as_ref().is_some_and(|l| l.moving());
+        let launcher_moves = self.launcher.as_ref().is_some_and(|l| l.moving()) || self.modal.as_ref().is_some_and(|m| m.moving());
         let banner_moves = launcher_moves || self.banner.as_ref().is_some_and(|b| b.slide.moving() || b.home.is_some_and(|h| h.moving()) || b.typing || b.marquee || b.glowing || (b.say["pill"]["rows"].is_array() && b.since.elapsed().as_secs_f32() < 2.0));
         let rolling = self.rolls.borrow().values().any(|r| r.2.elapsed().as_secs_f32() < ROLL_FOR + 0.1);
         let rolling = rolling || self.dock_front.as_ref().is_some_and(|f| f.2.elapsed().as_secs_f32() < DOCK_FRONT_S + 0.05);
-        let moving = banner_moves || rolling || self.scrollbar_moves().is_some() || self.hold.is_some() || self.tip.as_ref().is_some_and(|t| t.grow.moving() || t.moving) || self.menu.as_ref().is_some_and(|m| m.grow.moving()) || self.ghost.as_ref().is_some_and(|g| g.rest.moving()) || self.screens.iter().any(|s| s.items.values().any(|i| i.open.moving() || i.rest.moving())) || self.pops.values().any(|m| m.anim.is_some() || (m.strip_a > 0.0 && m.strip_a < 1.0)) || self.tear.is_some();
+        let moving = banner_moves || rolling || self.scrollbar_moves().is_some() || self.hold.is_some() || self.tip.as_ref().is_some_and(|t| t.grow.moving() || t.moving) || self.menu.as_ref().is_some_and(|m| m.grow.moving()) || self.ghost.as_ref().is_some_and(|g| g.rest.moving()) || self.screens.iter().any(|s| s.items.values().any(|i| i.open.moving() || i.rest.moving() || i.swell.moving())) || self.pops.values().any(|m| m.anim.is_some() || (m.strip_a > 0.0 && m.strip_a < 1.0)) || self.tear.is_some();
         let alive = self.screens.iter().any(|s| s.items.values().any(|i| (i.alive && i.shown.now > 0.01) || i.shown.moving())) || self.hover.is_some() || self.press.is_some() || self.drag.is_some();
         // (widgets that show as the mouse comes: the mouse is looked at often)
         let watching = self.menu.is_some() || self.edit.is_some() || !self.pops.is_empty() || (self.click_to_open() && self.screens.iter().any(|s| s.items.values().any(|i| i.open.to == 1.0))) || !(self.config.reveal.is_empty() || self.config.reveal == "all") || self.screens.iter().any(|s| s.full || (s.maxed && self.config.auto_hide == "maximized"));
@@ -4723,7 +4833,8 @@ impl Frame {
                 let m = self.menu.as_ref().unwrap();
                 if let (Some((plugin, items)), Some((r, _))) = (&m.items, m.hits.get(i)) {
                     if let Some(it) = items.get(i).filter(|it| it["hold"] == true) {
-                        self.hold = Some(Hold { si, key: None, row: Some(i), rect: *r, plugin: plugin.clone(), action: it["action"].as_str().unwrap_or("").to_string(), at: Instant::now() });
+                        let spec = confirm_spec(it["icon"].as_str().unwrap_or("bang"), it["label"].as_str().unwrap_or(""), it["confirm"].as_str().unwrap_or(""), it["action"].as_str().unwrap_or(""));
+                        self.hold = Some(Hold { si, key: None, row: Some(i), rect: *r, plugin: plugin.clone(), action: it["action"].as_str().unwrap_or("").to_string(), spec });
                         self.tick_rate();
                     }
                 }
@@ -4793,7 +4904,12 @@ impl Frame {
                     let held = it.hits.iter().find(|h| h.hold && lx >= h.rect.x && lx < h.rect.x + h.rect.w && ly >= h.rect.y && ly < h.rect.y + h.rect.h);
                     if let (Some(h), Some(w)) = (held, self.widgets.get(unpop(&k))) {
                         if let Press::Action(a, _) = &h.press {
-                            self.hold = Some(Hold { si, key: Some(k.clone()), row: None, rect: h.rect, plugin: w.plugin.clone(), action: a.clone(), at: Instant::now() });
+                            let label = match &h.tip {
+                                Value::String(t) => t.trim_start_matches("Hold to ").to_string(),
+                                _ => String::new(),
+                            };
+                            let spec = confirm_spec("bang", &label, "", a);
+                            self.hold = Some(Hold { si, key: Some(k.clone()), row: None, rect: h.rect, plugin: w.plugin.clone(), action: a.clone(), spec });
                             self.tick_rate();
                             return;
                         }
@@ -5570,14 +5686,18 @@ impl Frame {
             self.press = None;
             return;
         }
-        // (a held thing let go of before its ring filled: nothing happens)
+        // (a thing that is asked about first, let go of on it: asked, in a modal, out of where it was pressed)
         if let Some(h) = self.hold.take() {
-            match h.key {
-                Some(k) => self.render(h.si, &k),
-                None => self.render_menu(),
+            match &h.key {
+                Some(k) => self.render(h.si, k),
+                None => self.close_menu(),
             }
-            self.commit();
             self.press = None;
+            let m = self.screens[h.si].ov.monitor.rect;
+            let s = self.screens[h.si].s;
+            let (mx, my) = (self.mouse.1, self.mouse.2);
+            self.ask(h.spec, h.plugin, Some((m.left + (mx * s) as i32, m.top + (my * s) as i32)));
+            self.commit();
             return;
         }
         // (a window held by its grip, or pulled off its edge: put down)
@@ -5945,7 +6065,7 @@ impl Frame {
         });
         let hover = m.hover;
         let items = m.items.as_ref().map(|(_, i)| i.clone());
-        let held = self.hold.as_ref().filter(|h| h.key.is_none()).and_then(|h| h.row.map(|r| (r, (h.at.elapsed().as_secs_f32() / HOLD_FOR.as_secs_f32()).min(1.0))));
+        let held = self.hold.as_ref().filter(|h| h.key.is_none()).and_then(|h| h.row.map(|r| (r, 0.0)));
         let Ok(shape) = shape::floating(&self.g.d2d_factory, b.w * s, b.h * s, crate::menu::RADIUS * s) else { return };
         let surface = m.piece.surface.clone();
         let p = self.painter(s);
@@ -5993,7 +6113,8 @@ impl Frame {
                 }),
                 None => self.menu_hit(h.si, mx, my) == h.row,
             };
-        let done = h.at.elapsed() >= HOLD_FOR;
+        // (nothing fills now: a press asks, in a modal)
+        let done = false;
         let (key, si) = (h.key.clone(), h.si);
         if !still || done {
             let h = self.hold.take().unwrap();
@@ -7234,3 +7355,10 @@ fn edge_of(p: Place) -> Vec<Edge> {
     }
 }
 
+
+/// What is asked before something that cannot be undone is done: its pictogram, "Label?", a line of what happens, Cancel and the
+/// thing itself, red.
+fn confirm_spec(icon: &str, label: &str, text: &str, action: &str) -> Value {
+    let label = if label.is_empty() { "Continue" } else { label };
+    json!({ "icon": icon, "tone": "red", "title": format!("{label}?"), "text": text, "buttons": [{ "label": "Cancel" }, { "label": label, "action": action, "tone": "red" }] })
+}

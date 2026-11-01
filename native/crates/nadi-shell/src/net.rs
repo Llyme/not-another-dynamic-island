@@ -50,6 +50,8 @@ pub struct State {
     pub has_wifi: bool,
     pub wifi: Vec<Wifi>,
     pub paired: Vec<Paired>,
+    /// the mobile hotspot (None: the connection can't be shared now)
+    pub hotspot: Option<crate::hotspot::Hotspot>,
 }
 
 static NOW: Mutex<Option<State>> = Mutex::new(None);
@@ -74,7 +76,7 @@ pub fn start() {
             }
             looks = looks.wrapping_add(1);
             let (has_wifi, wifi) = networks();
-            let s = State { online: online(), has_wifi, wifi, paired: paired_now.clone() };
+            let s = State { online: online(), has_wifi, wifi, paired: paired_now.clone(), hotspot: crate::hotspot::read() };
             let mut now = NOW.lock().unwrap();
             if now.as_ref() != Some(&s) {
                 *now = Some(s);
@@ -430,7 +432,23 @@ pub fn widget(s: &State, radios: crate::radios::States, speed: Option<(f64, f64)
         toggles.push(json!({ "icon": "wifi", "label": "Wi-Fi", "on": radios.wifi == Some(true), "action": "radio:wifi" }));
     }
     toggles.push(json!({ "icon": "airplane", "label": "Airplane", "on": airplane, "action": "radio:airplane" }));
+    if let Some(h) = &s.hotspot {
+        toggles.push(json!({ "icon": "hotspot", "label": "Hotspot", "on": h.on, "action": "hotspot" }));
+    }
     let mut body = vec![hero, json!({ "kind": "toggles", "items": toggles })];
+    // (the hotspot on: its network, its password (pressed: copied), and who is on it)
+    if let Some(h) = s.hotspot.as_ref().filter(|h| h.on) {
+        let right = if h.busy {
+            "Starting".to_string()
+        } else {
+            match h.clients {
+                0 => "No Devices".to_string(),
+                1 => "1 Device".to_string(),
+                n => format!("{n} Devices"),
+            }
+        };
+        body.push(json!({ "kind": "list", "rows": [{ "icon": "hotspot", "title": h.ssid, "sub": h.pass, "right": right, "action": "hotspotcopy" }] }));
+    }
     let others: Vec<&Wifi> = s.wifi.iter().filter(|w| !w.joined).collect();
     if radios.wifi != Some(false) && !others.is_empty() {
         body.push(json!({ "kind": "text", "label": "Networks" }));

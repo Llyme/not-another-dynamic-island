@@ -34,11 +34,34 @@ fn two_rows_w(p: &Painter, peek: &Value) -> f32 {
     let (t, _) = clock_text(peek["clock"]["h24"].as_bool() == Some(true));
     let tw = p.measure(&t, BIG_TIME, Weight::Semibold, 240.0);
     let dw = if peek["clock"]["date"].as_bool() == Some(true) { p.measure(&long_date(), BIG_DATE, Weight::Regular, 240.0) } else { 0.0 };
-    CLOCK_PAD * 2.0 + tw.max(dw)
+    CLOCK_PAD * 2.0 + tw.max(dw) + next_w(p, peek)
+}
+
+/// A large clock's next event, on its right (a bar of its colour, its title, how soon): how wide (none: 0).
+fn next_w(p: &Painter, peek: &Value) -> f32 {
+    let n = &peek["clock"]["next"];
+    if !n.is_object() {
+        return 0.0;
+    }
+    let s = |k: &str| n[k].as_str().unwrap_or("").to_string();
+    18.0 + 4.0 + 10.0 + p.measure(&s("title"), 13.0, Weight::Semibold, 160.0).max(p.measure(&s("when"), 11.0, Weight::Regular, 160.0))
 }
 
 fn draw_two_rows(p: &Painter, peek: &Value, body: Rect) {
     let (t, _) = clock_text(peek["clock"]["h24"].as_bool() == Some(true));
+    // (what is next, on the right: the clock in what is left)
+    let nw = next_w(p, peek);
+    if nw > 0.0 {
+        let n = &peek["clock"]["next"];
+        let s = |k: &str| n[k].as_str().unwrap_or("").to_string();
+        let c = crate::draw::color_of(&n["color"], crate::draw::accent());
+        let x0 = body.right() - CLOCK_PAD - nw + 18.0;
+        let cy = body.y + body.h / 2.0;
+        p.round(Rect::new(x0, cy - 16.0, 4.0, 32.0), 2.0, c);
+        p.text(&s("title"), x0 + 14.0, cy - 7.0, 13.0, Weight::Semibold, 160.0, TEXT);
+        p.text(&s("when"), x0 + 14.0, cy + 9.0, 11.0, Weight::Regular, 160.0, c);
+    }
+    let body = Rect::new(body.x, body.y, body.w - nw, body.h);
     let cx = body.x + body.w / 2.0;
     let cy = body.y + body.h / 2.0;
     let tw = p.measure(&t, BIG_TIME, Weight::Semibold, 240.0);
@@ -55,14 +78,14 @@ fn draw_two_rows(p: &Painter, peek: &Value, body: Rect) {
 /// The local time, as a clock says it.
 pub fn clock_text(h24: bool) -> (String, String) {
     let now = chrono::Local::now();
-    use chrono::{Datelike, Timelike};
+    use chrono::Timelike;
     let (h, m) = (now.hour(), now.minute());
     let time = if h24 {
         format!("{h:02}:{m:02}")
     } else {
         format!("{}:{m:02} {}", if h % 12 == 0 { 12 } else { h % 12 }, if h < 12 { "AM" } else { "PM" })
     };
-    let date = format!("{} {}", now.format("%a"), now.day());
+    let date = now.format("%a").to_string();
     (time, date)
 }
 
@@ -90,6 +113,8 @@ fn lead_w(peek: &Value) -> f32 {
         n * DEV_RING + (n - 1.0) * 5.0
     } else if peek["roll"].is_object() {
         roll_w(peek)
+    } else if peek["page"].is_object() {
+        PAGE_W
     } else if peek["clock"].is_object() && peek["image"].is_null() {
         0.0
     } else {
@@ -99,12 +124,14 @@ fn lead_w(peek: &Value) -> f32 {
 
 /// a device's ring at rest
 const DEV_RING: f32 = 24.0;
+/// a calendar's little page, at rest: how wide
+const PAGE_W: f32 = 24.0;
 /// how many drives' rings at rest at most
 const DRIVES_MAX: usize = 8;
 
 /// Its words alone: its icon is none ("").
 fn bare(peek: &Value) -> bool {
-    peek["icon"] == "" && peek["image"].is_null() && peek["live"].is_null() && peek["ring"].is_null() && peek["vessel"].is_null() && peek["bars"].is_null() && peek["pad"].is_null() && peek["roll"].is_null() && peek["signal"].is_null() && peek["devs"].is_null() && peek["drives"].is_null()
+    peek["icon"] == "" && peek["image"].is_null() && peek["live"].is_null() && peek["ring"].is_null() && peek["vessel"].is_null() && peek["bars"].is_null() && peek["pad"].is_null() && peek["roll"].is_null() && peek["signal"].is_null() && peek["devs"].is_null() && peek["drives"].is_null() && peek["page"].is_null()
 }
 
 
@@ -1020,6 +1047,30 @@ fn lead(p: &Painter, peek: &Value, x: f32, cy: f32, size: f32) -> f32 {
         }
         return size;
     }
+    // (a calendar's day as a little page: the month on its top, red; an event coming, the top takes its colour and drains as it comes)
+    if let Some(pg) = peek["page"].as_object() {
+        let (w, h) = (PAGE_W, PAGE_W * 1.08);
+        let r = Rect::new(x, cy - h / 2.0, w, h);
+        p.round(r, 6.0, crate::paint::Color(0.12, 0.12, 0.145, 1.0));
+        let top = Rect::new(r.x, r.y, w, 8.0);
+        let red = crate::paint::Color(0.91, 0.42, 0.42, 1.0);
+        let gs = |k: &str| pg.get(k).and_then(|v| v.as_str()).unwrap_or("").to_string();
+        match pg.get("part").and_then(|v| v.as_f64()) {
+            Some(part) => {
+                let c = crate::draw::color_of(pg.get("color").unwrap_or(&Value::Null), crate::draw::AMBER);
+                p.round_top(top, 6.0, c.alpha(0.35));
+                p.round_top(Rect::new(top.x, top.y, (w * part as f32).max(0.0), top.h), 6.0, c);
+            }
+            None => p.round_top(top, 6.0, red),
+        }
+        let mon = gs("mon");
+        let mw = p.measure(&mon, 5.5, Weight::Bold, w);
+        p.text(&mon, r.x + w / 2.0 - mw / 2.0, top.y + 4.2, 5.5, Weight::Bold, w, crate::paint::Color(1.0, 1.0, 1.0, 0.95));
+        let day = gs("day");
+        let dw = p.measure(&day, 11.5, Weight::Semibold, w);
+        p.text(&day, r.x + w / 2.0 - dw / 2.0, r.y + 8.0 + (h - 8.0) / 2.0, 11.5, Weight::Semibold, w, TEXT);
+        return w;
+    }
     // (each drive, its letter in a ring as full as it (red past 90%); one being read or written, blue, its arc spinning)
     if let Some(items) = peek["drives"]["items"].as_array() {
         let mut dx = x;
@@ -1494,6 +1545,10 @@ fn dock(p: &Painter, peek: &Value, body: Rect, horizontal: bool) -> Vec<(Rect, S
 /// The peek of a widget shown as its icon alone: what leads it; no words, no marks (something new, it glows instead). (A peek with
 /// nothing to lead it stays as it is.)
 pub fn icon_only(peek: &Value) -> Value {
+    // (a calendar, its icon alone: the day as a little page)
+    if peek["page"].is_object() {
+        return serde_json::json!({ "page": peek["page"] });
+    }
     // (a voice, its icon alone: its bars alone)
     if peek["voice"].is_object() {
         let mut o = peek.clone();
@@ -1717,6 +1772,12 @@ fn draw_at(p: &Painter, peek: &Value, body: Rect, horizontal: bool, dot: bool) -
     }
     if peek["dot"].as_bool() == Some(true) {
         x += GAP;
+        // (breathing, when it asks: a soft ring round it, swelling and fading)
+        if peek["dot_pulse"] == true {
+            let k = (p.t * 1.4).fract();
+            p.circle(x + 3.0, cy, 3.0 + 4.0 * k, c.alpha(0.35 * (1.0 - k)));
+            crate::draw::keep_moving();
+        }
         p.circle(x + 3.0, cy, 3.0, c);
         x += 6.0;
     }

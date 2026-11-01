@@ -68,4 +68,7 @@ windows = { version = "0.58", features = [
     "Win32_NetworkManagement_IpHelper",
     "Win32_Networking_NetworkListManager",
     "Devices_Enumeration",
+    "Networking",
+    "Networking_Connectivity",
+    "Networking_NetworkOperators",
 ] }

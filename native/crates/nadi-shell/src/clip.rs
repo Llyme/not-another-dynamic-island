@@ -28,6 +28,28 @@ pub fn paste_into(dir: &Path, name: &str) -> Option<(u32, u32)> {
     out
 }
 
+/// Put some words on the clipboard.
+pub fn copy_text(text: &str) {
+    use windows::Win32::System::Memory::{GlobalAlloc, GMEM_MOVEABLE};
+    const CF_UNICODETEXT: u32 = 13;
+    let wide: Vec<u16> = text.encode_utf16().chain(std::iter::once(0)).collect();
+    unsafe {
+        if OpenClipboard(None).is_err() {
+            return;
+        }
+        let _ = EmptyClipboard();
+        if let Ok(h) = GlobalAlloc(GMEM_MOVEABLE, wide.len() * 2) {
+            let p = GlobalLock(h) as *mut u16;
+            if !p.is_null() {
+                std::ptr::copy_nonoverlapping(wide.as_ptr(), p, wide.len());
+                let _ = GlobalUnlock(h);
+                let _ = SetClipboardData(CF_UNICODETEXT, HANDLE(h.0));
+            }
+        }
+        let _ = CloseClipboard();
+    }
+}
+
 /// What is on the clipboard as the bytes of a picture file, and whether its see-through parts are to be kept.
 fn read() -> Option<(Vec<u8>, bool)> {
     unsafe {
