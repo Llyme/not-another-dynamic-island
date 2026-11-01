@@ -12,9 +12,10 @@
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Outfit:wght@500;600;700&display=swap" rel="stylesheet">
 <style>
-/* The page is a pretend Windows screen with NADI running on it. NADI's part is drawn the way the app draws it: its widgets are one
-   liquid (a metaball, drawn on the graphics card with the app's own shader), merged into the screen's edges, sized and sprung with
-   the app's own numbers; what is in them is drawn over the liquid. */
+/* The page is a pretend Windows screen with NADI running on it, set up the way it is used: no Windows taskbar (NADI's dock, tray
+   and clock in its place), widgets in the corners and along the edges, merged into them or floating just off them. NADI's part is
+   drawn the way the app draws it: its widgets are one liquid (the app's own shader, in WebGL), sized and sprung with the app's own
+   numbers; what is in them is drawn over the liquid. */
 :root {
   color-scheme: dark;
   --acc: #5ac88c;
@@ -26,10 +27,8 @@
   --text: #f2f2f5;
   --dim: #9a9aa4;
   --track: #1b1b20;
-  --chosen: #34343b;
   --lit: #26262b;
   --tile: #161619;
-  --tb: 46px;
 }
 * { box-sizing: border-box; }
 html, body { margin: 0; height: 100%; background: #000; color: var(--text); font-family: Inter, "Segoe UI", system-ui, sans-serif; font-size: 12.5px; }
@@ -44,15 +43,13 @@ body.small #screen { touch-action: pan-y; }
 .ic svg { display: block; width: 100%; height: 100%; }
 .tab { font-variant-numeric: tabular-nums; }
 .out { font-family: Outfit, Inter, sans-serif; }
-
 #wall { position: absolute; inset: 0; background:
   radial-gradient(42% 52% at 68% 56%, #8fb6ff 0%, #5d8ff0 22%, transparent 60%),
   radial-gradient(60% 70% at 74% 62%, #2f5fd0 0%, transparent 65%),
   radial-gradient(50% 60% at 30% 90%, #3a2a8a 0%, transparent 70%),
   radial-gradient(70% 80% at 12% 6%, #142456 0%, transparent 70%),
   linear-gradient(160deg, #0b1534, #13275c 55%, #091128); }
-
-#icons { position: absolute; left: 54px; top: 54px; display: flex; flex-direction: column; gap: 6px; z-index: 2; }
+#icons { position: absolute; left: 56px; top: 30px; display: flex; flex-direction: column; gap: 6px; z-index: 2; }
 .dk { width: 84px; padding: 8px 4px 6px; border-radius: 6px; display: flex; flex-direction: column; align-items: center; gap: 6px; font-size: 11.5px; color: #fff; text-shadow: 0 1px 3px #000c; text-align: center; line-height: 1.25; }
 .dk:hover { background: #ffffff1a; }
 .dk .ib { width: 44px; height: 44px; border-radius: 11px; display: grid; place-items: center; box-shadow: 0 6px 16px #0006; color: #fff; }
@@ -73,45 +70,33 @@ body.small #screen { touch-action: pan-y; }
 .wbody::-webkit-scrollbar { width: 10px; }
 .wbody::-webkit-scrollbar-thumb { background: #ffffff22; border-radius: 5px; border: 3px solid transparent; background-clip: padding-box; }
 
-#taskbar { position: absolute; left: 0; right: 0; bottom: 0; height: var(--tb); z-index: 40; background: #1c1d24e0; border-top: 1px solid #ffffff10; backdrop-filter: blur(30px) saturate(1.4); -webkit-backdrop-filter: blur(30px) saturate(1.4); display: flex; align-items: center; justify-content: center; }
-.tk { position: relative; width: 40px; height: 40px; border-radius: 6px; display: grid; place-items: center; }
-.tk:hover { background: #ffffff12; }
-.tk .ib { width: 24px; height: 24px; border-radius: 6px; display: grid; place-items: center; color: #fff; }
-.tk .ib .ic { width: 15px; height: 15px; }
-.tk::after { content: ""; position: absolute; bottom: 2px; left: 50%; width: 0; height: 3px; border-radius: 2px; background: #9a9aa6; transform: translateX(-50%); transition: width .2s; }
-.tk.run::after { width: 6px; }
-.tk.front::after { width: 16px; background: var(--acc); }
-#tray { position: absolute; right: 8px; top: 0; bottom: 0; display: flex; align-items: center; gap: 2px; }
-#tray .tt { height: 38px; padding: 0 8px; border-radius: 6px; display: flex; align-items: center; gap: 9px; font-size: 11.5px; color: #e4e4ea; }
-#tray .tt:hover { background: #ffffff12; }
-#tray .tt .ic { width: 15px; height: 15px; }
-#clock { text-align: right; line-height: 1.35; }
-
 /* NADI: the liquid under, what is in each widget over it */
+#dim { position: absolute; inset: 0; z-index: 45; background: #05050a59; display: none; animation: fade .25s; }
+#dim.show { display: block; }
 #nadi { position: absolute; inset: 0; z-index: 50; pointer-events: none; }
 #liquid { position: absolute; left: 0; top: 0; }
 .wc { position: absolute; pointer-events: auto; overflow: hidden; }
 .wc.solid { background: #000; }
-.pk { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; gap: 8px; padding: 0 12px; white-space: nowrap; font-weight: 600; font-size: 12.5px; }
-.wc.v .pk { flex-direction: column; padding: 0; gap: 6px; }
+.wc.idle .pk { opacity: .45 !important; }
+.pk { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; white-space: nowrap; font-weight: 600; font-size: 12.5px; }
+.pz { display: flex; align-items: center; justify-content: center; gap: 8px; padding: 0 12px; }
+.v .pz { flex-direction: column; padding: 8px 0; gap: 6px; }
+.sq .pz { padding: 0; }
 .pb { position: absolute; left: 0; top: 0; padding: 16px; display: flex; flex-direction: column; gap: 12px; }
-.e-bottom .pb { top: auto; bottom: 0; }
-.e-right .pb { left: auto; right: 0; }
-#meas { position: absolute; left: -9999px; top: 0; visibility: hidden; }
-#meas.h { display: inline-flex; align-items: center; gap: 8px; padding: 0 12px; height: 32px; white-space: nowrap; font-weight: 600; font-size: 12.5px; }
-#meas.vv { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 6px; width: 40px; font-weight: 600; font-size: 12.5px; }
+.a-b .pb { top: auto; bottom: 0; }
+.a-r .pb { left: auto; right: 0; }
+#meas { position: absolute; left: -9999px; top: 0; visibility: hidden; display: inline-flex; white-space: nowrap; font-weight: 600; font-size: 12.5px; }
+#meas.v { width: 40px; }
 .dim { color: var(--dim); font-weight: 500; }
-
-/* peeks */
 .page { width: 24px; height: 26px; border-radius: 6px; background: #26262b; position: relative; overflow: hidden; flex: none; }
 .page i { position: absolute; left: 0; right: 0; top: 0; height: 8px; font-style: normal; font-size: 5.5px; font-weight: 700; color: #04130b; text-align: center; line-height: 8px; }
 .page b { position: absolute; left: 0; right: 0; bottom: 2px; text-align: center; font-size: 12px; font-weight: 700; font-family: Outfit, sans-serif; }
 .pdot { width: 6px; height: 6px; border-radius: 3px; background: var(--acc); flex: none; }
 .pdot.pulse { animation: pulse 1.6s ease-in-out infinite; }
 @keyframes pulse { 50% { transform: scale(1.5); opacity: .55; } }
-.cv { width: 24px; height: 24px; border-radius: 6px; background: #26262b; display: grid; place-items: center; color: #d6d6dc; flex: none; overflow: hidden; }
-.two { display: flex; flex-direction: column; line-height: 1.2; }
-.two small { font-size: 11px; color: var(--dim); font-weight: 500; }
+.clock2 { display: flex; flex-direction: column; align-items: center; line-height: 1.15; padding: 0 4px; }
+.clock2 b { font-size: 15px; font-weight: 600; }
+.clock2 small { font-size: 11px; color: var(--dim); font-weight: 500; }
 .viz { display: flex; gap: 2px; align-items: center; height: 14px; }
 .viz i { display: block; width: 3px; height: 6px; border-radius: 2px; background: currentColor; animation: viz .9s ease-in-out infinite alternate; }
 .viz i:nth-child(2) { animation-duration: .7s; }
@@ -119,28 +104,42 @@ body.small #screen { touch-action: pan-y; }
 .viz i:nth-child(4) { animation-duration: .8s; }
 .viz.still i { animation: none; height: 4px; opacity: .5; }
 @keyframes viz { to { height: 14px; } }
-.eyes { display: flex; gap: 9px; align-items: center; --ex: 0px; --ey: 0px; }
-.wc.v .eyes { flex-direction: column; gap: 17px; }
-.eyes i { display: block; width: 14px; height: 15px; border-radius: 8px; background: #fff; transform: translate(var(--ex), var(--ey)); transition: transform .12s, height .09s; }
-.wc.v .eyes i { width: 15px; height: 12px; }
-.eyes.blink i { height: 2px !important; }
-.eyes.happy i { height: 6px !important; border-radius: 8px 8px 2px 2px; }
 .flow { display: inline-block; width: 8px; height: 12px; overflow: hidden; -webkit-mask: linear-gradient(transparent, #000 30%, #000 70%, transparent); mask: linear-gradient(transparent, #000 30%, #000 70%, transparent); vertical-align: -1px; flex: none; }
 .flow svg { display: block; width: 8px; height: 24px; fill: none; stroke: currentColor; stroke-width: 1.7; stroke-linecap: round; stroke-linejoin: round; }
 .flow.dn svg { animation: fdn .625s linear infinite; }
 .flow.up svg { animation: fup .625s linear infinite; }
 @keyframes fdn { from { transform: translateY(-12px); } to { transform: translateY(-6px); } }
 @keyframes fup { from { transform: translateY(-6px); } to { transform: translateY(-12px); } }
-.mq { overflow: hidden; }
-.mq > span { display: inline-block; }
+.eyes { display: flex; gap: 9px; align-items: center; --ex: 0px; --ey: 0px; }
+.v .eyes { flex-direction: column; gap: 17px; }
+.eyes i { display: block; width: 14px; height: 15px; border-radius: 8px; background: #fff; transform: translate(var(--ex), var(--ey)); transition: transform .12s, height .09s; }
+.v .eyes i { width: 15px; height: 12px; }
+.eyes.blink i { height: 2px !important; }
+.eyes.happy i { height: 6px !important; border-radius: 8px 8px 2px 2px; }
+/* the dock */
+.dock { display: flex; align-items: center; gap: 10px; height: 100%; }
+.dapp { display: flex; align-items: center; gap: 6px; height: 48px; padding: 0 4px; border-radius: 14px; }
+.dapp:hover { background: #ffffff10; }
+.dapp .ti { width: 36px; height: 36px; border-radius: 10px; display: grid; place-items: center; color: #fff; flex: none; }
+.dapp .ti .ic { width: 20px; height: 20px; }
+.dapp .use { display: flex; gap: 2px; align-items: flex-end; height: 16px; }
+.dapp .use i { width: 3px; border-radius: 2px; min-height: 2px; }
+.dapp .nm { display: flex; flex-direction: column; line-height: 1.2; max-width: 96px; overflow: hidden; }
+.dapp .nm b { font-size: 12.5px; font-weight: 600; white-space: nowrap; overflow: hidden; }
+.dapp .nm small { font-size: 11px; color: var(--dim); font-weight: 500; white-space: nowrap; overflow: hidden; }
+.dapp.front { background: #ffffff0d; }
+.trayi { display: flex; align-items: center; gap: 10px; }
+.trayi .ic { width: 16px; height: 16px; }
+.meters { display: flex; flex-direction: column; gap: 3px; width: 34px; }
+.meters i { height: 3px; border-radius: 2px; background: #2c2c33; overflow: hidden; display: block; }
+.meters i b { display: block; height: 100%; border-radius: 2px; }
 
 /* panels: the app's blocks */
 .gb { height: 32px; min-width: 32px; padding: 0 10px; border-radius: 16px; display: inline-flex; align-items: center; justify-content: center; gap: 6px; font-size: 12.5px; font-weight: 600; color: #c9c9d1; }
 .gb:hover { background: var(--lit); }
-.gb .ic { width: 16px; height: 16px; }
 .card { background: var(--track); border-radius: 18px; padding: 14px 16px; display: flex; gap: 14px; align-items: center; }
 .lab { font-size: 12px; font-weight: 600; color: var(--dim); }
-.row { width: 100%; text-align: left; display: flex; align-items: center; gap: 12px; min-height: 30px; padding: 0 8px; margin: 0 -8px; width: calc(100% + 16px); border-radius: 10px; }
+.row { text-align: left; display: flex; align-items: center; gap: 12px; min-height: 30px; padding: 0 8px; margin: 0 -8px; width: calc(100% + 16px); border-radius: 10px; }
 .row.go:hover { background: var(--lit); }
 .row .tx { flex: 1; min-width: 0; font-weight: 600; font-size: 14px; white-space: nowrap; overflow: hidden; }
 .row .mk { display: flex; gap: 8px; color: var(--dim); }
@@ -153,7 +152,7 @@ body.small #screen { touch-action: pan-y; }
 .toggles .ic { width: 16px; height: 16px; }
 .bar { height: 4px; border-radius: 2px; background: #26262b; overflow: hidden; position: relative; }
 .bar > i { position: absolute; left: 0; top: 0; bottom: 0; border-radius: 2px; background: var(--c, var(--acc)); }
-.ghost { width: 30px; height: 30px; border-radius: 15px; display: grid; place-items: center; color: #b4b4bc; }
+.ghost { width: 30px; height: 30px; border-radius: 15px; display: grid; place-items: center; color: #b4b4bc; flex: none; }
 .ghost:hover { background: var(--lit); }
 .ghost .ic { width: 15px; height: 15px; }
 .dayhead { display: flex; align-items: center; }
@@ -186,7 +185,7 @@ body.small #screen { touch-action: pan-y; }
 .tl .now::before { content: ""; position: absolute; left: -3px; top: -3px; width: 8px; height: 8px; border-radius: 4px; background: var(--red); }
 .join { height: 36px; padding: 0 14px; border-radius: 18px; background: var(--acc); color: #04130b; display: inline-flex; align-items: center; gap: 7px; font-size: 14px; font-weight: 600; flex: none; }
 .join .ic { width: 12px; height: 12px; }
-.drv { display: flex; gap: 14px; align-items: center; border-radius: 12px; padding: 6px 8px; margin: -6px -8px; }
+.drv { display: flex; gap: 14px; align-items: center; border-radius: 12px; padding: 6px 8px; margin: -6px -8px; text-align: left; width: calc(100% + 16px); }
 .drv:hover { background: #ffffff08; }
 .drv .tile { width: 46px; height: 46px; border-radius: 12px; background: #26262b; position: relative; overflow: hidden; display: grid; place-items: center; flex: none; }
 .drv .tile b { position: relative; font-family: Outfit, sans-serif; font-size: 22px; font-weight: 600; }
@@ -209,7 +208,7 @@ body.small #screen { touch-action: pan-y; }
 .xfer .nm span { font-size: 12.5px; color: var(--dim); }
 .xfer .rt { font-size: 14px; font-weight: 600; }
 .done { display: flex; align-items: center; gap: 12px; height: 34px; }
-.done .ic.ok { width: 18px; height: 18px; color: var(--acc); }
+.done .ok { width: 18px; height: 18px; color: var(--acc); }
 .done .nm { flex: 1; font-size: 14px; }
 .cover { border-radius: 16px; margin: 0 auto; display: grid; place-items: center; color: #ffffffcc; }
 .songhead { display: flex; align-items: center; gap: 10px; }
@@ -226,7 +225,7 @@ body.small #screen { touch-action: pan-y; }
 .ctl .main .ic { width: 22px; height: 22px; }
 .sec { display: flex; flex-direction: column; gap: 10px; }
 .sec .hd { display: flex; align-items: center; gap: 12px; }
-.sec .ct { width: 34px; height: 34px; border-radius: 10px; background: var(--claude); color: #fff; display: grid; place-items: center; font-family: Outfit, sans-serif; font-weight: 600; font-size: 16px; flex: none; }
+.ct { width: 34px; height: 34px; border-radius: 10px; background: var(--claude); color: #fff; display: grid; place-items: center; font-family: Outfit, sans-serif; font-weight: 600; font-size: 16px; flex: none; }
 .sec .nm { flex: 1; display: flex; flex-direction: column; gap: 2px; }
 .sec .nm b { font-size: 14px; font-weight: 600; }
 .sec .nm span { font-size: 12.5px; color: var(--dim); }
@@ -237,6 +236,52 @@ body.small #screen { touch-action: pan-y; }
 .ban .btns button { flex: 1; height: 36px; border-radius: 18px; font-size: 13.5px; font-weight: 600; }
 .ban .btns .no { color: #c9c9d1; }
 .ban .btns .no:hover { background: var(--lit); }
+.note { display: flex; gap: 12px; align-items: flex-start; }
+.note .ti { width: 34px; height: 34px; border-radius: 10px; display: grid; place-items: center; color: #fff; flex: none; }
+.note .ti .ic { width: 17px; height: 17px; }
+.note .nm { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.note .nm b { font-size: 14px; font-weight: 600; }
+.note .nm span { font-size: 13px; color: var(--dim); line-height: 1.4; }
+.note .when { font-size: 11.5px; color: var(--dim); }
+.slider { width: 100%; height: 6px; border-radius: 3px; background: #26262b; position: relative; }
+.slider i { position: absolute; left: 0; top: 0; bottom: 0; border-radius: 3px; background: #f2f2f5; }
+.slider b { position: absolute; top: 50%; width: 16px; height: 16px; border-radius: 8px; background: #fff; transform: translate(-50%, -50%); }
+
+/* the widget menu (menu.rs) */
+#menu { position: absolute; z-index: 70; width: 240px; background: #000; border-radius: 20px; padding: 12px; display: none; flex-direction: column; gap: 8px; animation: grow .2s cubic-bezier(.3,1.3,.5,1); }
+#menu.show { display: flex; }
+#menu.mini { width: 170px; padding: 6px; gap: 2px; }
+@keyframes grow { from { transform: scale(.88); opacity: 0; } }
+.segs { display: flex; gap: 6px; }
+.seg { flex: 1; height: 30px; border-radius: 10px; background: #17171a; display: flex; }
+.seg button { flex: 1; margin: 3px; border-radius: 7.5px; display: grid; place-items: center; color: var(--dim); }
+.seg button:hover { background: #26262b; }
+.seg button.on { background: #38383f; color: var(--text); }
+.map { position: relative; height: 82px; margin: 0 4px; border: 1.5px solid #424249; border-radius: 9px; }
+.map button { position: absolute; }
+.map i { position: absolute; background: #4d4d54; border-radius: 2px; }
+.map button:hover i { background: #9e9ea8; }
+.map button.on i { background: var(--acc); }
+.togs { display: flex; justify-content: space-between; }
+.togs button, .mfoot button { width: 34px; height: 34px; border-radius: 9px; display: grid; place-items: center; position: relative; color: var(--text); }
+.mfoot button { height: 30px; }
+.togs button:hover, .mfoot button:hover { background: #26262b; }
+.togs button.on { color: var(--acc); }
+.togs button.on::after { content: ""; position: absolute; bottom: 1px; left: 50%; width: 3.6px; height: 3.6px; margin-left: -1.8px; border-radius: 2px; background: var(--acc); }
+.togs .ic, .mfoot .ic { width: 16px; height: 16px; }
+.rule { height: 1px; background: #26262b; }
+.mfoot { display: flex; gap: 4px; }
+.mrow { height: 32px; padding: 0 12px; border-radius: 10px; display: flex; align-items: center; gap: 10px; font-size: 12px; text-align: left; }
+.mrow:hover { background: #ffffff14; }
+.mrow .ic { width: 14px; height: 14px; }
+
+/* Edit Mode's tray (frame/edit.rs) */
+#etray { position: absolute; z-index: 55; width: 300px; background: #000; border-radius: 20px; padding: 14px; display: none; flex-wrap: wrap; gap: 8px; animation: grow .25s cubic-bezier(.3,1.3,.5,1); }
+#etray.show { display: flex; }
+#etray.over { background: #141416; }
+#etray.empty { width: 120px; height: 56px; }
+.chip { height: 28px; padding: 0 12px; border-radius: 14px; background: #ffffff24; font-size: 11.5px; font-weight: 600; display: inline-flex; align-items: center; }
+.chip.off { background: #ffffff14; color: var(--dim); }
 
 /* the launcher */
 #launch { position: absolute; z-index: 60; width: 460px; background: #000; border-radius: 26px; padding: 20px; display: flex; flex-direction: column; gap: 14px; opacity: 0; transform: translateY(14px) scale(.94); pointer-events: none; transition: opacity .16s, transform .32s cubic-bezier(.3,1.3,.5,1); }
@@ -261,12 +306,6 @@ body.small #screen { touch-action: pan-y; }
 .list .row { margin: 0; width: 100%; min-height: 44px; }
 .list .row .tx { font-size: 13.5px; }
 
-#menu { position: absolute; z-index: 70; min-width: 190px; background: #000; border-radius: 16px; padding: 6px; display: none; flex-direction: column; animation: grow .22s cubic-bezier(.3,1.3,.5,1); }
-#menu.show { display: flex; }
-@keyframes grow { from { transform: scale(.85); opacity: 0; } }
-#menu button { height: 34px; padding: 0 12px; border-radius: 11px; display: flex; align-items: center; gap: 10px; font-size: 12.5px; text-align: left; }
-#menu button:hover { background: var(--lit); }
-#menu .ic { width: 16px; height: 16px; color: var(--dim); }
 #tip { position: absolute; z-index: 100; background: #000; color: var(--text); border-radius: 12px; padding: 8px 12px; font-size: 12.5px; white-space: pre-line; max-width: 260px; line-height: 1.45; opacity: 0; transition: opacity .14s; pointer-events: none; }
 #tip.show { opacity: 1; }
 #modal { position: absolute; inset: 0; z-index: 80; display: none; place-items: center; }
@@ -286,7 +325,7 @@ body.small #screen { touch-action: pan-y; }
 #over { position: absolute; inset: 0; z-index: 90; display: none; }
 #over.show { display: block; }
 #over.black { background: #000; animation: fade .6s; }
-#over.lock { animation: fade .4s; background-size: cover; }
+#over.lock { animation: fade .4s; }
 #over .lk { position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center; padding-top: 16vh; color: #fff; text-shadow: 0 2px 20px #0006; }
 #over .lk .big { font-family: Outfit, sans-serif; font-size: 96px; font-weight: 600; line-height: 1; }
 #over .lk .sm { font-size: 18px; margin-top: 10px; }
@@ -333,7 +372,6 @@ body.small #screen { touch-action: pan-y; }
 .pretend { height: 100%; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 14px; color: var(--dim); }
 .pretend .ib { width: 64px; height: 64px; border-radius: 16px; display: grid; place-items: center; color: #fff; }
 .pretend .ib .ic { width: 30px; height: 30px; }
-
 #below { display: none; padding: 26px 20px 40px; text-align: center; }
 body.small #below { display: block; }
 #below h1 { font-family: Outfit, sans-serif; font-size: 26px; margin: 0 0 6px; }
@@ -347,8 +385,9 @@ body.small #below { display: block; }
     <div id="wall"></div>
     <div id="icons"></div>
     <div id="wins"></div>
-    <div id="taskbar"><div id="tbapps" style="display:flex;gap:4px"></div><div id="tray"></div></div>
+    <div id="dim"></div>
     <div id="nadi"><canvas id="liquid"></canvas></div>
+    <div id="etray"></div>
     <div id="launch"></div>
     <div id="menu"></div>
     <div id="modal"></div>
@@ -369,17 +408,16 @@ const REPO = "https://github.com/Llyme/not-another-dynamic-island";
 const GET = REPO + "/releases/latest";
 const $ = (s, r = document) => r.querySelector(s);
 const scr = $("#screen"), nadiEl = $("#nadi"), meas = $("#meas"), cv = $("#liquid");
-const TB = 46;
 let SW = 0, SH = 0, scale = 1, DPR = 1;
 const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
-const ACC = "#5ac88c", AMBER = "#e8b04a", CLAUDE = "#d97757", RED = "#e87a7a", TEAL = "#5ac8e6", BLUE = "#4f8ff0";
+const ACC = "#5ac88c", AMBER = "#e8b04a", CLAUDE = "#d97757", RED = "#e87a7a", TEAL = "#5ac8e6", BLUE = "#4f8ff0", PURPLE = "#b47ee6";
 
 /* the app's own numbers (layout.rs Metrics, frame.rs) */
-const DEPTH_H = 32, DEPTH_V = 40, FILLET = 10, GAP = 6;
-const PANEL_W = 360, PANEL_W_SIDE = 340, PAD = 16, RADIUS_OPEN = 24, BANNER_W = 380;
+const DEPTH_H = 32, DEPTH_V = 40, FILLET = 10, GAP = 6, FLOAT_OFF = 8, LARGE = 1.375, DOCK_DEPTH = 64;
+const PANEL_W = 360, PANEL_W_SIDE = 340, RADIUS_OPEN = 24, BANNER_W = 380;
 const STIFF = 600, DAMP = 36, SHOW_STIFF = 420, SHOW_DAMP = 42, HIDE_STIFF = 520, HIDE_DAMP = 46, SWELL_STIFF = 700, SWELL_DAMP = 34;
-const SWELL_OUT = 5, SWELL_ALONG = 6, HOVER_OPEN = 260, LEAVE_CLOSE = 380, WAVE = 0.22;
-const LIQUID = 2.5 + 0.5 * 7.5, NECK = Math.max(LIQUID * 1.6, 2), REACH = 40;
+const SWELL_OUT = 5, SWELL_ALONG = 6, HOVER_OPEN = 260, LEAVE_CLOSE = 380, WAVE = 0.22, DRAG_START = 6, SQUISH = 36, CORNER_ZONE = 90, HOLD = 450;
+const LIQUID = 2.5 + 1.0 * 7.5, NECK = Math.max(LIQUID * 1.6, 2), REACH = 40;
 
 class Spring {
   constructor(v) { this.now = v; this.to = v; this.vel = 0; }
@@ -420,8 +458,8 @@ const ICONS = {
   term: S('<rect x="2.5" y="4" width="15" height="12" rx="2.2"/><path d="M6 8.2l2.4 1.8L6 11.8M10.5 12.3H14"/>'),
   note: S('<path d="M5 2.6h6.8L15 5.8v11.6H5z"/><path d="M7.6 9.2h4.8M7.6 12.2h4.8"/>'),
   music: F('<path d="M15.5 2.6v10.2a2.6 2.6 0 1 1-1.5-2.4V5.6L8.5 6.8v8a2.6 2.6 0 1 1-1.5-2.4V4.5a.8.8 0 0 1 .6-.8l7-1.6a.8.8 0 0 1 .9.5z"/>'),
-  cal: F('<path d="M6 2.5a.7.7 0 0 1 .7.7V4h6.6v-.8a.7.7 0 1 1 1.4 0V4h.3A2 2 0 0 1 17 6v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h.3v-.8a.7.7 0 0 1 .7-.7zM4.5 8v7c0 .3.2.5.5.5h10a.5.5 0 0 0 .5-.5V8zm2 1.5h1.5V11H6.5zm3 0H11V11H9.5zm3 0H14V11h-1.5zm-6 3h1.5V14H6.5zm3 0H11V14H9.5z"/>'),
-  code: S('<path d="M7 5.5L2.8 10 7 14.5M13 5.5l4.2 4.5-4.2 4.5"/>'),
+  cal: F('<path d="M6 2.5a.7.7 0 0 1 .7.7V4h6.6v-.8a.7.7 0 1 1 1.4 0V4h.3A2 2 0 0 1 17 6v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h.3v-.8a.7.7 0 0 1 .7-.7zM4.5 8v7c0 .3.2.5.5.5h10a.5.5 0 0 0 .5-.5V8z"/>'),
+  code: S('<path d="M7 5.5L2.8 10 7 14.5M13 5.5l4.2 4.5-4.2 4.5M11.2 3.8l-2.4 12.4"/>'),
   get: S('<path d="M10 3v9.5M5.8 8.5l4.2 4.2 4.2-4.2"/><path d="M4 16.5h12"/>'),
   download: S('<path d="M10 4v8.5M6.5 9l3.5 3.5L13.5 9"/>'),
   store: S('<path d="M4.2 7h11.6l-1 10H5.2z"/><path d="M7.5 7a2.5 2.5 0 0 1 5 0"/>'),
@@ -433,21 +471,27 @@ const ICONS = {
   sun: S('<circle cx="10" cy="10" r="3.4"/><path d="M10 2.2v1.9M10 15.9v1.9M2.2 10h1.9M15.9 10h1.9M4.5 4.5l1.3 1.3M14.2 14.2l1.3 1.3M4.5 15.5l1.3-1.3M14.2 5.8l1.3-1.3"/>'),
   battery: S('<rect x="2.5" y="6" width="13" height="8" rx="2.2"/><path d="M17.6 9v2"/>'),
   spark: F('<path d="M10 1.8l1.6 5 5 1.6-5 1.6-1.6 5-1.6-5-5-1.6 5-1.6z"/><path d="M15.5 12.5l.7 2 2 .7-2 .7-.7 2-.7-2-2-.7 2-.7z"/>'),
-  volume: S('<path d="M3.8 7.8h3l4.2-3.3v11l-4.2-3.3h-3z"/><path d="M14 7.4a3.6 3.6 0 0 1 0 5.2"/>'),
+  volume: F('<path d="M10.5 3.6v12.8a.8.8 0 0 1-1.3.6L5.5 14H3.8A1.8 1.8 0 0 1 2 12.2V7.8A1.8 1.8 0 0 1 3.8 6h1.7l3.7-3a.8.8 0 0 1 1.3.6z"/><path d="M13.3 7a4 4 0 0 1 0 6M15.6 4.8a7.2 7.2 0 0 1 0 10.4" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/>'),
+  bell: F('<path d="M10 2.5a5 5 0 0 0-5 5v3.2l-1.3 2.5a.8.8 0 0 0 .7 1.2h11.2a.8.8 0 0 0 .7-1.2L15 10.7V7.5a5 5 0 0 0-5-5zM8 15.6a2 2 0 0 0 4 0z"/>'),
+  chat: F('<path d="M10 3c4.1 0 7.5 2.8 7.5 6.3s-3.4 6.2-7.5 6.2c-.9 0-1.7-.1-2.5-.3L4 16.8l.9-3A6 6 0 0 1 2.5 9.3C2.5 5.8 5.9 3 10 3z"/>'),
+  bluetooth: S('<path d="M6 6.5l8 7-4 3.5v-14l4 3.5-8 7"/>'),
+  shield: F('<path d="M10 2.2l6 2.3v4.7c0 4-2.6 7-6 8.6-3.4-1.6-6-4.6-6-8.6V4.5z"/>'),
+  cloud: F('<path d="M6 15.5a3.5 3.5 0 0 1-.4-7A4.8 4.8 0 0 1 15 7.4a3.6 3.6 0 0 1-.3 7.9z"/>'),
   arrow: S('<path d="M10 16V4.5M5.2 9.2L10 4.4l4.8 4.8"/>'),
   open: S('<path d="M11 4h5v5M16 4l-7 7"/><path d="M14 11.5V16H4V6h4.5"/>'),
-  pin: S('<path d="M8 3h4l-.6 5 2.6 2.6v1.2H6v-1.2L8.6 8z"/><path d="M10 11.8V17"/>'),
   eye: S('<path d="M2.5 10s2.7-5 7.5-5 7.5 5 7.5 5-2.7 5-7.5 5-7.5-5-7.5-5z"/><circle cx="10" cy="10" r="2.2"/>'),
+  eyeoff: S('<path d="M3 3l14 14"/><path d="M8.2 5.2A7.8 7.8 0 0 1 10 5c4.8 0 7.5 5 7.5 5a13 13 0 0 1-2.2 2.9M12 14.6a6.8 6.8 0 0 1-2 .4c-4.8 0-7.5-5-7.5-5a12.7 12.7 0 0 1 2.9-3.3"/>'),
+  desktop: S('<rect x="2.6" y="3.5" width="14.8" height="10" rx="1.8"/><path d="M7 17h6M10 13.5V17"/>'),
+  maximize: S('<rect x="3.5" y="3.5" width="13" height="13" rx="2.4"/>'),
+  winnew: S('<rect x="3" y="6" width="11" height="11" rx="2.2"/><path d="M7 3h8a2 2 0 0 1 2 2v8M9 10.5h3M10.5 9v3"/>'),
   check: S('<path d="M4.5 10.5l3.5 3.5 7.5-8"/>'),
   star: F('<path d="M10 2.5l2.2 4.6 5 .7-3.6 3.5.9 5-4.5-2.4-4.5 2.4.9-5L2.8 7.8l5-.7z"/>'),
   chevl: S('<path d="M12 5l-5 5 5 5"/>'),
   chevr: S('<path d="M8 5l5 5-5 5"/>'),
-  win: F('<rect x="3" y="3" width="6.6" height="6.6" rx=".8"/><rect x="10.4" y="3" width="6.6" height="6.6" rx=".8"/><rect x="3" y="10.4" width="6.6" height="6.6" rx=".8"/><rect x="10.4" y="10.4" width="6.6" height="6.6" rx=".8"/>'),
   pulse: S('<path d="M2.5 10h3l2-4.5 3 9 2-4.5h5"/>'),
   contrast: F('<path d="M10 2.5a7.5 7.5 0 1 0 0 15 7.5 7.5 0 0 0 0-15zm0 1.5v12a6 6 0 0 1 0-12z"/>'),
 };
 const ic = (n, sz, st = "") => `<i class="ic" style="width:${sz}px;height:${sz}px;${st}">${ICONS[n] || ""}</i>`;
-/* the app's signal: four bars, the ones not reached faint */
 const signal = (lv, sz = 16, c = "currentColor") => `<i class="ic" style="width:${sz}px;height:${sz}px;color:${c}"><svg viewBox="0 0 20 20" fill="currentColor">${[0, 1, 2, 3].map(i => `<rect x="${2.5 + i * 4.2}" y="${15.5 - (i + 1) * 3.2}" width="2.8" height="${(i + 1) * 3.2 + 1}" rx="1.2" opacity="${lv > i ? 1 : .22}"/>`).join("")}</svg></i>`;
 const flow = (up, c) => `<span class="flow ${up ? "up" : "dn"}" style="color:${c || "currentColor"}"><svg viewBox="0 0 8 24">${up ? '<path d="M1 7.5l3-3 3 3M1 13.5l3-3 3 3M1 19.5l3-3 3 3M1 25.5l3-3 3 3"/>' : '<path d="M1 4.5l3 3 3-3M1 10.5l3 3 3-3M1 16.5l3 3 3-3M1 22.5l3 3 3-3"/>'}</svg></span>`;
 const ringed = (inner, p, sz, c, track = "#2c2c33") => `<span style="position:relative;width:${sz}px;height:${sz}px;display:grid;place-items:center;flex:none"><svg width="${sz}" height="${sz}" viewBox="0 0 24 24" style="position:absolute;inset:0"><circle cx="12" cy="12" r="10" fill="none" stroke="${track}" stroke-width="2.2"/><circle cx="12" cy="12" r="10" fill="none" stroke="${c}" stroke-width="2.2" stroke-linecap="round" stroke-dasharray="${(p * 62.8).toFixed(1)} 62.8" transform="rotate(-90 12 12)"/></svg>${inner}</span>`;
@@ -458,7 +502,6 @@ const MONS = ["January", "February", "March", "April", "May", "June", "July", "A
 const clock = d => { const h = d.getHours(); return { t: (h % 12 || 12) + ":" + pad2(d.getMinutes()), ap: h < 12 ? "AM" : "PM" }; };
 const span = d => { const c = clock(d); return c.t + " " + c.ap; };
 const mmss = s => Math.floor(s / 60) + ":" + pad2(Math.floor(s % 60));
-/* (made again every second, what moves stays in step: each moving thing starts where the clock says it is) */
 function inStep(root) {
   const t = performance.now();
   for (const el of root.querySelectorAll(".flow svg, .viz i, .drv .tile svg, .pdot.pulse")) {
@@ -487,24 +530,55 @@ const music = { i: 0, t: 41, playing: true };
 const dl = { items: [{ name: "Starfield Odyssey", ic: "gamepad", size: 48e9, p: .58 }], done: [{ name: "photos-2026.zip" }], hist: Array(40).fill(0).map((_, i) => 3.4e6 + Math.sin(i / 3) * 9e5), rate: 4.2e6 };
 const NEXT_DL = [{ name: "Hollow Night", ic: "gamepad", size: 9e9 }, { name: "ubuntu-26.04.iso", ic: "globe", size: 6e9 }];
 const drives = [
-  { l: "C", name: "Windows", free: "212 GB", total: "476 GB", part: .55, r: [], c: BLUE },
-  { l: "D", name: "Games", free: "653 GB", total: "1.8 TB", part: .65, r: [], c: ACC },
-  { l: "E", name: "Elderberry", free: "52 GB", total: "64 GB", part: .19, r: [], c: ACC },
+  { l: "C", name: "Windows", free: "212 GB", total: "476 GB", part: .55, c: BLUE },
+  { l: "D", name: "Games", free: "653 GB", total: "1.8 TB", part: .65, c: ACC },
+  { l: "E", name: "Elderberry", free: "52 GB", total: "64 GB", part: .19, c: ACC },
 ];
 for (const d of drives) d.r = Array(24).fill(0);
 const net = { wifi: true, air: false, hot: false, down: 18.2e6, up: 2.1e6 };
+const vol = { master: .62, mute: false, apps: [{ name: "Music", v: .8, ic: "music", bg: "#e87a7a" }, { name: "Browser", v: .45, ic: "globe", bg: "#3d6fd6" }] };
+const meters = { cpu: [], ram: [], gpu: [] };
+for (const k in meters) meters[k] = Array(30).fill(0).map(() => .2 + Math.random() * .2);
 const claude = { waiting: false, sessions: [{ title: "Fix the thing", sub: "Editing frame.rs", st: "working", since: Date.now() - 134e3 }, { title: "Site", sub: "Finished", st: "finished", since: Date.now() - 180e3 }] };
+const inbox = { unread: 0, notes: [{ app: "Mail", ic: "mail", bg: "#2f8f86", title: "Sam", text: "Dinner tomorrow? The noodle place.", when: "12m" }, { app: "Chat", ic: "chat", bg: "#7a5ae8", title: "Design Team", text: "Review moved to the afternoon.", when: "1h" }] };
+const GAMES = [{ name: "Starfield Odyssey", a: "#3d6fd6", b: "#e8b04a", t: "12 h" }, { name: "Hollow Night", a: "#5ac88c", b: "#1b2a5c", t: "3 h" }, { name: "Neon Drift", a: "#e86aa8", b: "#7a5ae8", t: "45 min" }];
 
-/* the widgets: at rest along an edge (`v`: on a side edge, its icon alone), and opened */
+/* the widgets: at rest (`o.v`: on a side edge; `o.icon`: its icon alone), and opened */
 const W = {
+  apps: { name: "Apps", tip: () => "Apps", peek: () => ic("grid", 18), press: () => toggleLauncher() },
+  drives: {
+    name: "Drives", tip: () => drives.map(d => `${d.l}:  ${d.free} free of ${d.total}`).join("\n"),
+    peek: o => { const ring = d => ringed(`<b class="out" style="font-size:11px">${d.l}</b>`, d.part, 24, d.c); return o.icon || o.v ? ring(drives[0]) : drives.map(ring).join(""); },
+    body: () => drives.map(d => {
+      const busy = d.r[d.r.length - 1] > .05, top = Math.max(.05, ...d.r);
+      const pts = d.r.map((v, i) => `${(i / (d.r.length - 1) * 100).toFixed(1)},${(18 - v / top * 15).toFixed(1)}`).join(" ");
+      const wave = `<svg viewBox="0 0 92 46" preserveAspectRatio="none"><path d="M0 ${46 - d.part * 46} q11.5 -4 23 0 t23 0 t23 0 t23 0 V46 H0z" fill="${d.c}" opacity=".55"/></svg>`;
+      return `<button class="drv" data-act="drive"><span class="tile">${wave}<b>${d.l}</b></span><span class="info"><span class="top"><span class="tt">${d.name}</span><span class="sz"><b>${d.free}</b> of ${d.total}</span></span><span class="graph"><svg viewBox="0 0 100 20" preserveAspectRatio="none">${d.r.some(v => v > .05) ? `<polyline points="${pts}" fill="none" stroke="${BLUE}" stroke-width="1.6" vector-effect="non-scaling-stroke"/>` : `<line x1="0" y1="18" x2="100" y2="18" stroke="#3a3a42" stroke-width="1.6" vector-effect="non-scaling-stroke"/>`}</svg>${busy ? `<span>${flow(false)} ${rate(d.r[d.r.length - 1] * 1.6e8)}</span>` : ""}</span></span></button>`;
+    }).join(""),
+  },
+  games: {
+    name: "Games", tip: () => "Starfield Odyssey\nLast played yesterday",
+    peek: () => ic("gamepad", 20),
+    body: () => `<div class="lab">Installed</div>` + GAMES.map(g => `<button class="row go" data-act="game" style="min-height:52px"><span style="width:40px;height:40px;border-radius:10px;background:linear-gradient(135deg,${g.a},${g.b});flex:none"></span><span class="tx" style="display:flex;flex-direction:column;gap:2px">${g.name}<span class="dim" style="font-size:12.5px">${g.t} played</span></span>${ic("play", 14, "color:#b4b4bc")}</button>`).join(""),
+  },
+  dock: { name: "Dock", dock: true, tip: () => "Apps", peek: () => dockPeek() },
+  meters: {
+    name: "System Meters", tip: () => `CPU ${Math.round(meters.cpu.at(-1) * 100)}%\nMemory ${Math.round(meters.ram.at(-1) * 100)}%\nGraphics ${Math.round(meters.gpu.at(-1) * 100)}%`,
+    peek: o => { const b = `<span class="meters">${[["cpu", TEAL], ["ram", PURPLE], ["gpu", AMBER]].map(([k, c]) => `<i><b style="width:${(meters[k].at(-1) * 100).toFixed(0)}%;background:${c}"></b></i>`).join("")}</span>`; return o.icon ? b : `${b}<span class="tab">${Math.round(meters.cpu.at(-1) * 100)}</span>`; },
+    body: () => [["CPU", "cpu", TEAL], ["Memory", "ram", PURPLE], ["Graphics", "gpu", AMBER]].map(([n, k, c]) => {
+      const pts = meters[k].map((v, i) => `${(i / (meters[k].length - 1) * 200).toFixed(1)},${(30 - v * 28).toFixed(1)}`).join(" ");
+      return `<div style="display:flex;align-items:center;gap:12px"><div style="width:72px"><b style="font-size:14px">${n}</b><div class="dim tab" style="font-size:12.5px">${Math.round(meters[k].at(-1) * 100)}%</div></div><svg width="200" height="32" viewBox="0 0 200 32"><polygon points="0,32 ${pts} 200,32" fill="${c}" opacity=".15"/><polyline points="${pts}" fill="none" stroke="${c}" stroke-width="1.8" stroke-linejoin="round"/></svg></div>`;
+    }).join(""),
+  },
   calendar: {
+    name: "Calendar", noZoom: true,
     tip: () => { const n = nextEvent(); return n ? n.title + "\n" + soonWords(n) : "Nothing coming up"; },
-    peek: v => {
-      const d = new Date(), n = nextEvent(), left = n ? n.s - d : Infinity, within = left > 0 && left <= 3600e3, last = within && left <= 600e3;
-      const c = last ? AMBER : ACC;
+    peek: o => {
+      const d = new Date(), n = nextEvent(), left = n ? n.s - d : Infinity, within = left > 0 && left <= 3600e3, last = within && left <= 600e3, c = last ? AMBER : ACC;
       const page = `<span class="page"><i style="background:${within ? c : "#5c5c64"}">${MONS[d.getMonth()].slice(0, 3).toUpperCase()}</i><b>${d.getDate()}</b></span>`;
-      if (v) return page;
+      if (o.icon || o.v) return page;
       const ck = clock(d);
+      if (o.large) return `<span class="clock2"><b class="tab">${ck.t} ${ck.ap}</b><small>${DAYS[d.getDay()]}, ${MONS[d.getMonth()]} ${d.getDate()}</small></span>`;
       return `${page}<span class="tab">${ck.t} ${ck.ap}</span><span class="dim">${DAYS[d.getDay()].slice(0, 3)}</span>${within ? `<span class="pdot${last ? " pulse" : ""}" style="background:${c}"></span>` : ""}`;
     },
     body: () => {
@@ -515,16 +589,15 @@ const W = {
       let days = "";
       for (let i = 0; i < 7; i++) {
         const day = new Date(ws); day.setDate(ws.getDate() + i);
-        const off = Math.round((day - today0) / 864e5);
-        const n = EVENTS.filter(e => sameDay(e.s, day)).length;
+        const off = Math.round((day - today0) / 864e5), n = EVENTS.filter(e => sameDay(e.s, day)).length;
         days += `<button class="d${off === 0 ? " today" : ""}${off === cal.sel ? " on" : ""}" data-act="day" data-v="${off}"><small>${"SMTWTFS"[i]}</small><b>${day.getDate()}</b><span class="ds">${"<i></i>".repeat(Math.min(n, 3))}</span></button>`;
       }
-      let o = `<div class="dayhead"><div class="big tab">${c.t}<small>${c.ap}</small></div><div class="dr"><span>${DAYS[sel.getDay()]}</span><b>${MONS[sel.getMonth()]} ${sel.getDate()}</b></div><button class="ghost" style="margin-left:6px" data-tip="Month">${ic("cal", 14)}</button></div>`;
+      let o = `<div class="dayhead"><div class="big tab">${c.t}<small>${c.ap}</small></div><div class="dr"><span>${DAYS[sel.getDay()]}</span><b>${MONS[sel.getMonth()]} ${sel.getDate()}</b></div></div>`;
       o += `<div class="week"><button class="ghost" data-act="week" data-v="-7">${ic("chevl", 16)}</button><div class="days">${days}</div><button class="ghost" data-act="week" data-v="7">${ic("chevr", 16)}</button></div>`;
       const n = nextEvent();
       if (n && cal.sel === 0) {
         const left = n.s - d, p = clamp(left / 3600e3, 0, 1), col = left <= 600e3 ? AMBER : ACC;
-        o += `<div class="card">${ringed(`<b class="out" style="font-size:13px;color:${col}">${soonShort(left)}</b>`, p, 50, col)}<div style="flex:1;min-width:0;display:flex;flex-direction:column;gap:3px"><b style="font-size:15px">${n.title}</b><span class="dim" style="font-size:13.5px">${clock(n.s).t} to ${span(new Date(n.s.getTime() + n.m * 60000))}${n.where ? ", " + n.where : ""}</span></div>${n.link ? `<button class="join" data-act="join">${ic("play", 12)}Join</button>` : ""}</div>`;
+        o += `<div class="card">${ringed(`<b class="out" style="font-size:13px;color:${col}">${soonShort(left)}</b>`, p, 50, col)}<div style="flex:1;min-width:0;display:flex;flex-direction:column;gap:3px"><b style="font-size:15px">${n.title}</b><span class="dim" style="font-size:13.5px">${clock(n.s).t} to ${span(new Date(n.s.getTime() + n.m * 60000))}${n.where ? ", " + n.where : ""}</span></div>${n.link ? `<button class="join" data-act="nudge">${ic("play", 12)}Join</button>` : ""}</div>`;
       }
       const list = EVENTS.filter(e => sameDay(e.s, sel)).sort((a, b) => a.s - b.s);
       if (list.length) {
@@ -541,129 +614,156 @@ const W = {
     },
     opened: () => { cal.sel = 0; },
   },
-  song: {
-    tip: () => TRACKS[music.i].title + "\n" + TRACKS[music.i].artist,
-    peek: v => {
-      const t = TRACKS[music.i], viz = `<span class="viz${music.playing ? "" : " still"}" style="color:#f2f2f5"><i></i><i></i><i></i></span>`;
-      if (v) return `<span class="cv" style="background:linear-gradient(135deg,${t.a},${t.b} 60%,${t.c})"></span>`;
-      return `<span class="cv" style="background:linear-gradient(135deg,${t.a},${t.b} 60%,${t.c})"></span><span class="two"><span>${t.title}</span><small>${t.artist}</small></span>${viz}`;
-    },
+  quick: {
+    name: "Volume Mixer", tip: () => `Volume ${Math.round(vol.master * 100)}%`, w: 320,
+    peek: () => ringed(ic("volume", 11, "color:#f2f2f5"), vol.mute ? 0 : vol.master, 22, "#f2f2f5"),
     body: () => {
-      const t = TRACKS[music.i];
-      return `<div class="cover" style="width:200px;height:200px;background:linear-gradient(135deg,${t.a},${t.b} 60%,${t.c})">${ic("music", 34)}</div>
-      <div class="songhead"><div class="nm"><b>${t.title}</b><span>${t.artist}</span></div><span class="viz${music.playing ? "" : " still"}" style="color:${ACC}"><i></i><i></i><i></i><i></i></span></div>
-      <div class="seek"><div class="bar"><i style="width:${(music.t / t.len * 100).toFixed(2)}%"></i></div><div class="tm tab"><span>${mmss(music.t)}</span><span>${mmss(t.len)}</span></div></div>
-      <div class="ctl"><button class="ghost" data-act="prev" data-tip="Previous">${ic("prev", 20)}</button><button class="main" data-act="play" data-tip="${music.playing ? "Pause" : "Play"}">${ic(music.playing ? "pause" : "play", 22)}</button><button class="ghost" data-act="next" data-tip="Next">${ic("next", 20)}</button></div>`;
+      const row = (n, v, i, bg, act) => `<div style="display:flex;align-items:center;gap:12px;min-height:40px"><span class="tile36" style="width:32px;height:32px;${bg ? "background:" + bg : ""}">${ic(i, 15)}</span><div style="flex:1;display:flex;flex-direction:column;gap:7px"><span style="font-size:13.5px;font-weight:600">${n}</span><div class="slider" data-act="${act}"><i style="width:${v * 100}%"></i><b style="left:${v * 100}%"></b></div></div><span class="dim tab" style="width:30px;text-align:right">${Math.round(v * 100)}</span></div>`;
+      return row("Speakers", vol.master, "volume", null, "vol:m") + `<div class="lab">Apps</div>` + vol.apps.map((a, i) => row(a.name, a.v, a.ic, a.bg, "vol:" + i)).join("");
     },
-  },
-  claude: {
-    tip: () => claude.waiting ? "Claude needs you" : claude.sessions.some(s => s.st === "working") ? "1 working" : "No sessions",
-    peek: v => {
-      const c = claude.waiting ? AMBER : CLAUDE, working = claude.sessions.some(s => s.st === "working");
-      const i = ringed(ic("spark", 12, "color:" + c), working ? .75 : 0, 22, c, "#2c2c33");
-      return v || !claude.waiting ? i : `${i}<span style="color:${AMBER}">Needs You</span>`;
-    },
-    body: () => claude.sessions.map(s => {
-      const tone = s.st === "working" ? CLAUDE : s.st === "waiting" ? AMBER : ACC;
-      const el = Math.floor((Date.now() - s.since) / 1000);
-      const strip = s.st === "working" ? `Working for ${Math.floor(el / 60)}m ${pad2(el % 60)}s` : s.st === "waiting" ? "Waiting for you" : "Done in 6m 02s";
-      return `<div class="sec"><div class="hd"><span class="ct">C</span><div class="nm"><b>${s.title}</b><span>${s.sub}</span></div></div><div class="strip tab" style="background:${tone}1f;color:${tone}"><span>${strip}</span><span style="opacity:.8">${s.st === "finished" ? "3 min ago" : ""}</span></div></div>`;
-    }).join(""),
-  },
-  drives: {
-    tip: () => drives.map(d => `${d.l}:  ${d.free} free of ${d.total}`).join("\n"),
-    peek: v => {
-      const ring = d => ringed(`<b class="out" style="font-size:11px">${d.l}</b>`, d.part, 24, d.c);
-      return v ? ring(drives[0]) : drives.map(ring).join("");
-    },
-    body: () => drives.map(d => {
-      const busy = d.r[d.r.length - 1] > .05, top = Math.max(.05, ...d.r);
-      const pts = d.r.map((v, i) => `${(i / (d.r.length - 1) * 100).toFixed(1)},${(18 - v / top * 15).toFixed(1)}`).join(" ");
-      const wave = `<svg viewBox="0 0 92 46" preserveAspectRatio="none"><path d="M0 ${46 - d.part * 46} q11.5 -4 23 0 t23 0 t23 0 t23 0 V46 H0z" fill="${d.c}" opacity=".55"/></svg>`;
-      return `<button class="drv" data-act="drive" style="text-align:left;width:calc(100% + 16px)"><span class="tile">${wave}<b>${d.l}</b></span><span class="info"><span class="top"><span class="tt">${d.name}</span><span class="sz"><b>${d.free}</b> of ${d.total}</span></span><span class="graph"><svg viewBox="0 0 100 20" preserveAspectRatio="none">${busy || d.r.some(v => v > .05) ? `<polyline points="${pts}" fill="none" stroke="${BLUE}" stroke-width="1.6" vector-effect="non-scaling-stroke"/>` : `<line x1="0" y1="18" x2="100" y2="18" stroke="#3a3a42" stroke-width="1.6" vector-effect="non-scaling-stroke"/>`}</svg>${busy ? `<span>${flow(false)} ${rate(d.r[d.r.length - 1] * 1.6e8)}</span>` : ""}</span></span></button>`;
-    }).join(""),
   },
   net: {
-    w: 340,
-    tip: () => net.air ? "Airplane Mode" : net.wifi ? "Home" : "Offline",
-    peek: v => {
-      const i = net.air ? ic("airplane", 16) : signal(net.wifi ? 3 : 0, 16);
-      return v ? i : `${i}<span>${net.air ? "Airplane Mode" : net.wifi ? "Home" : "Offline"}</span>`;
-    },
+    name: "Network", w: 340, tip: () => net.air ? "Airplane Mode" : net.wifi ? "Home" : "Offline",
+    peek: o => { const i = net.air ? ic("airplane", 16) : signal(net.wifi ? 3 : 0, 16); return o.icon || o.v ? i : `${i}<span>${net.air ? "Airplane Mode" : net.wifi ? "Home" : "Offline"}</span>`; },
     body: () => {
       const on = net.wifi && !net.air;
       let o = `<div class="card"><span style="width:52px;height:52px;border-radius:26px;background:${on ? "#5ac88c26" : "#e87a7a24"};display:grid;place-items:center;flex:none">${net.air ? ic("airplane", 22, "color:" + RED) : signal(on ? 3 : 0, 22, on ? ACC : RED)}</span><div style="flex:1;min-width:0;display:flex;flex-direction:column;gap:3px"><b style="font-size:15.5px">${net.air ? "Airplane Mode" : on ? "Home" : "Offline"}</b><span class="dim" style="font-size:13.5px;display:flex;gap:5px;align-items:center">${net.air ? "Radios off" : on ? ic("lock", 11) + "Connected" : "Not connected"}</span></div>${on ? `<div class="tab" style="display:flex;flex-direction:column;gap:4px;font-size:13.5px;font-weight:600;text-align:right"><span style="color:${TEAL}">${flow(false)} ${rate(net.down)}</span><span style="color:#c9c9d1">${flow(true)} ${rate(net.up)}</span></div>` : ""}</div>`;
       o += `<div class="toggles"><button data-act="wifi" class="${on ? "on" : ""}" data-tip="Turn ${on ? "Off" : "On"} Wi-Fi">${ic("wifi", 16)}Wi-Fi</button><button data-act="air" class="${net.air ? "on" : ""}" data-tip="Turn ${net.air ? "Off" : "On"} Airplane">${ic("airplane", 16)}Airplane</button>${on ? `<button data-act="hot" class="${net.hot ? "on" : ""}" data-tip="Turn ${net.hot ? "Off" : "On"} Hotspot">${ic("hotspot", 16)}Hotspot</button>` : ""}</div>`;
       if (net.hot && on) o += `<button class="row go" data-act="copy" style="min-height:44px">${ic("hotspot", 16, "color:" + ACC)}<span class="tx" style="display:flex;flex-direction:column;gap:2px">PRETEND-PC<span class="dim" style="font-size:12.5px">orange-kite-42</span></span><span class="dim" id="copied">No Devices</span></button>`;
-      if (on) o += `<div class="lab">Networks</div><div style="display:flex;flex-direction:column">${[["Neighbours 5G", 2, ["lock"]], ["Coffee Corner", 1, []], ["Upstairs", 1, ["star", "lock"]]].map(([n, l, m]) => `<button class="row go" data-act="joinwifi">${signal(l, 16)}<span class="tx">${n}</span><span class="mk">${m.map(x => ic(x, 12)).join("")}</span></button>`).join("")}</div>`;
-      o += `<div><button class="ghost" data-tip="Network Settings">${ic("gear", 15)}</button></div>`;
+      if (on) o += `<div class="lab">Networks</div><div style="display:flex;flex-direction:column">${[["Neighbours 5G", 2, ["lock"]], ["Coffee Corner", 1, []], ["Upstairs", 1, ["star", "lock"]]].map(([n, l, m]) => `<button class="row go" data-act="nudge">${signal(l, 16)}<span class="tx">${n}</span><span class="mk">${m.map(x => ic(x, 12)).join("")}</span></button>`).join("")}</div>`;
       return o;
     },
   },
-  eyes: { tip: () => "Eyes", peek: () => `<span class="eyes"><i></i><i></i></span>`, poke: () => { const e = $(".eyes", st.eyes.wc); if (e) { e.classList.add("happy"); setTimeout(() => e.classList.remove("happy"), 900); } } },
-  apps: { tip: () => "Apps", peek: () => ic("grid", 18), press: () => toggleLauncher() },
+  tray: {
+    name: "Tray", tip: () => "Tray",
+    peek: o => o.icon ? ic("chevl", 14, "transform:rotate(90deg)") : `<span class="trayi">${[["gamepad", "#9fb3c8"], ["shield", "#5ac88c"], ["cloud", "#e8b04a"], ["chat", "#b47ee6"], ["bluetooth", "#4f8ff0"]].map(([i, c]) => `<span data-act="nudge">${ic(i, 16, "color:" + c)}</span>`).join("")}<span class="dim" style="font-weight:700">...</span></span>`,
+  },
+  work: {
+    name: "Work", tip: () => "3 h 12 min today\nnadi, Rust",
+    peek: () => ringed(ic("code", 11, "color:#f2f2f5"), .64, 22, ACC),
+    body: () => `<div style="display:flex;align-items:center;gap:16px">${ringed(`<b class="out" style="font-size:15px">64%</b>`, .64, 64, ACC)}<div><div class="out" style="font-size:26px;font-weight:600">3 h 12 min</div><div class="dim" style="font-size:13px">today, of a 5 h goal</div></div></div>` + [["nadi", "Rust", 2.1, ACC], ["site", "HTML", .7, AMBER], ["notes", "Markdown", .4, PURPLE]].map(([p, l, h, c]) => `<div style="display:flex;flex-direction:column;gap:6px"><div style="display:flex;justify-content:space-between"><b style="font-size:14px">${p}</b><span class="dim tab" style="font-size:12.5px">${l}, ${Math.floor(h)} h ${Math.round(h % 1 * 60)} min</span></div><div class="bar" style="--c:${c}"><i style="width:${h / 2.1 * 100}%"></i></div></div>`).join(""),
+  },
   downloads: {
-    tip: () => dl.items.length ? dl.items[0].name + "\n" + Math.round(dl.items[0].p * 100) + "%" : "No downloads",
-    peek: v => {
-      const it = dl.items[0], i = ringed(ic("download", 11, "color:#c9c9d1"), it ? it.p : 1, 22, BLUE);
-      return v ? i : `${i}<span class="tab">${rate(dl.rate)}</span>`;
-    },
+    name: "Downloads", tip: () => dl.items.length ? dl.items[0].name + "\n" + Math.round(dl.items[0].p * 100) + "%" : "No downloads",
+    peek: o => { const it = dl.items[0], i = ringed(ic("download", 11, "color:#c9c9d1"), it ? it.p : 1, 22, BLUE); return o.icon || o.v ? i : `${i}<span class="tab">${rate(dl.rate)}</span>`; },
     body: () => {
       const max = Math.max(...dl.hist) * 1.15, n = dl.hist.length, gw = 250;
       const pts = dl.hist.map((v, i) => `${(i / (n - 1) * gw).toFixed(1)},${(38 - v / max * 34).toFixed(1)}`).join(" ");
-      const ly = 38 - dl.hist[n - 1] / max * 34;
-      let o = `<div style="display:flex;align-items:flex-end;gap:12px"><svg width="${gw + 4}" height="40" viewBox="0 0 ${gw + 4} 40"><polygon points="0,40 ${pts} ${gw},40" fill="${BLUE}" opacity=".16"/><polyline points="${pts}" fill="none" stroke="${BLUE}" stroke-width="1.8" stroke-linejoin="round"/><circle cx="${gw}" cy="${ly.toFixed(1)}" r="2.6" fill="${BLUE}"/></svg><b class="tab" style="font-size:14px;white-space:nowrap">${rate(dl.rate)}</b></div>`;
+      let o = `<div style="display:flex;align-items:flex-end;gap:12px"><svg width="${gw + 4}" height="40" viewBox="0 0 ${gw + 4} 40"><polygon points="0,40 ${pts} ${gw},40" fill="${BLUE}" opacity=".16"/><polyline points="${pts}" fill="none" stroke="${BLUE}" stroke-width="1.8" stroke-linejoin="round"/><circle cx="${gw}" cy="${(38 - dl.hist[n - 1] / max * 34).toFixed(1)}" r="2.6" fill="${BLUE}"/></svg><b class="tab" style="font-size:14px;white-space:nowrap">${rate(dl.rate)}</b></div>`;
       for (const it of dl.items) {
         const left = (1 - it.p) * it.size / dl.rate;
         o += `<div class="xfer"><div class="hd"><span class="ti">${ic(it.ic, 16)}</span><span class="nm"><b>${it.name}</b><span class="tab">${rate(dl.rate)}</span></span><span class="rt tab">${left > 60 ? Math.ceil(left / 60) + " min" : Math.ceil(left) + " s"}</span></div><div class="bar" style="--c:${BLUE}"><i style="width:${(it.p * 100).toFixed(2)}%"></i></div></div>`;
       }
-      for (const d of dl.done) o += `<div class="done">${ic("check", 18).replace('class="ic"', 'class="ic ok"')}<span class="nm">${d.name}</span><button class="ghost" data-tip="Show in Folder">${ic("folder", 15)}</button><button class="ghost" data-act="clear" data-v="${d.name}" data-tip="Clear">${ic("x", 14)}</button></div>`;
+      for (const d of dl.done) o += `<div class="done">${ic("check", 18).replace('class="ic"', 'class="ic ok"')}<span class="nm">${d.name}</span><button class="ghost" data-tip="Show in Folder" data-act="nudge">${ic("folder", 15)}</button><button class="ghost" data-act="clear" data-v="${d.name}" data-tip="Clear">${ic("x", 14)}</button></div>`;
       return o;
     },
   },
+  claude: {
+    name: "Claude", tip: () => claude.waiting ? "Site needs you" : claude.sessions.some(s => s.st === "working") ? "1 working" : "No sessions",
+    peek: o => { const c = claude.waiting ? AMBER : CLAUDE, i = ringed(ic("spark", 12, "color:" + c), claude.sessions.some(s => s.st === "working") ? .75 : 0, 24, c); return o.icon || o.v ? i : `${i}<span style="color:${c}">${claude.waiting ? "Needs You" : "Working"}</span>`; },
+    body: () => claude.sessions.map(s => {
+      const tone = s.st === "working" ? CLAUDE : s.st === "waiting" ? AMBER : ACC, el = Math.floor((Date.now() - s.since) / 1000);
+      const strip = s.st === "working" ? `Working for ${Math.floor(el / 60)}m ${pad2(el % 60)}s` : s.st === "waiting" ? "Waiting for you" : "Done in 6m 02s";
+      return `<div class="sec"><div class="hd"><span class="ct">C</span><div class="nm"><b>${s.title}</b><span>${s.sub}</span></div></div><div class="strip tab" style="background:${tone}1f;color:${tone}"><span>${strip}</span><span style="opacity:.8">${s.st === "finished" ? "3 min ago" : ""}</span></div></div>`;
+    }).join(""),
+  },
+  song: {
+    name: "Now Playing", tip: () => TRACKS[music.i].title + "\n" + TRACKS[music.i].artist,
+    peek: o => {
+      const t = TRACKS[music.i], viz = `<span class="viz${music.playing ? "" : " still"}" style="color:#f2f2f5"><i></i><i></i><i></i><i></i></span>`;
+      if (o.icon || o.v) return viz;
+      return `<span style="width:24px;height:24px;border-radius:6px;flex:none;background:linear-gradient(135deg,${t.a},${t.b} 60%,${t.c})"></span><span style="display:flex;flex-direction:column;line-height:1.2"><span>${t.title}</span><small class="dim" style="font-size:11px">${t.artist}</small></span>${viz}`;
+    },
+    body: () => {
+      const t = TRACKS[music.i];
+      return `<div class="cover" style="width:200px;height:200px;background:linear-gradient(135deg,${t.a},${t.b} 60%,${t.c})">${ic("music", 34)}</div><div class="songhead"><div class="nm"><b>${t.title}</b><span>${t.artist}</span></div><span class="viz${music.playing ? "" : " still"}" style="color:${ACC}"><i></i><i></i><i></i><i></i></span></div><div class="seek"><div class="bar"><i style="width:${(music.t / t.len * 100).toFixed(2)}%"></i></div><div class="tm tab"><span>${mmss(music.t)}</span><span>${mmss(t.len)}</span></div></div><div class="ctl"><button class="ghost" data-act="prev" data-tip="Previous">${ic("prev", 20)}</button><button class="main" data-act="play" data-tip="${music.playing ? "Pause" : "Play"}">${ic(music.playing ? "pause" : "play", 22)}</button><button class="ghost" data-act="next" data-tip="Next">${ic("next", 20)}</button></div>`;
+    },
+  },
+  inbox: {
+    name: "Notifications", tip: () => inbox.unread ? inbox.unread + " new" : "No new notifications",
+    peek: () => ic("bell", 18),
+    body: () => inbox.notes.map(n => `<div class="note"><span class="ti" style="background:${n.bg}">${ic(n.ic, 17)}</span><span class="nm"><b>${n.title}</b><span>${n.text}</span></span><span class="when">${n.when}</span></div>`).join(""),
+    opened: () => { inbox.unread = 0; st.inbox.glow = null; },
+  },
   weather: {
-    tip: () => "Sunny\n24°, feels like 25°",
-    peek: v => v ? ic("sun", 18, "color:" + AMBER) : `${ic("sun", 18, "color:" + AMBER)}<span class="tab">24°</span>`,
+    name: "Weather", tip: () => "Sunny\n24°, feels like 25°",
+    peek: o => o.icon || o.v ? ic("sun", 18, "color:" + AMBER) : `${ic("sun", 18, "color:" + AMBER)}<span class="tab">24°</span>`,
     body: () => `<div style="display:flex;align-items:center;gap:14px">${ic("sun", 44, "color:" + AMBER)}<div><div class="out" style="font-size:38px;font-weight:600;line-height:1">24°</div><div class="dim" style="margin-top:4px;font-size:13.5px">Sunny, feels like 25°</div></div></div><div style="display:grid;grid-template-columns:repeat(5,1fr);gap:6px;text-align:center" class="tab">${[["Now", 24], ["1 PM", 25], ["2 PM", 26], ["3 PM", 25], ["4 PM", 23]].map(([h, t]) => `<div style="background:var(--track);border-radius:12px;padding:9px 0;display:flex;flex-direction:column;gap:6px;align-items:center"><span class="dim" style="font-size:11.5px">${h}</span>${ic("sun", 16, "color:" + AMBER)}<b style="font-size:13px">${t}°</b></div>`).join("")}</div>`,
   },
   battery: {
-    tip: () => "82%\n3 h 10 min left",
-    peek: v => { const b = `<svg width="24" height="13" viewBox="0 0 24 13"><rect x=".8" y=".8" width="19.5" height="11.4" rx="3.4" fill="none" stroke="#5c5c64" stroke-width="1.4"/><rect x="2.7" y="2.7" width="${(15.7 * .82).toFixed(1)}" height="7.6" rx="1.8" fill="${ACC}"/><rect x="21.6" y="4.3" width="1.8" height="4.4" rx=".9" fill="#5c5c64"/></svg>`; return v ? b : `${b}<span class="tab">82%</span>`; },
+    name: "Battery", tip: () => "82%\n3 h 10 min left",
+    peek: o => { const b = `<svg width="24" height="13" viewBox="0 0 24 13"><rect x=".8" y=".8" width="19.5" height="11.4" rx="3.4" fill="none" stroke="#5c5c64" stroke-width="1.4"/><rect x="2.7" y="2.7" width="${(15.7 * .82).toFixed(1)}" height="7.6" rx="1.8" fill="${ACC}"/><rect x="21.6" y="4.3" width="1.8" height="4.4" rx=".9" fill="#5c5c64"/></svg>`; return o.icon || o.v ? b : `${b}<span class="tab">82%</span>`; },
     body: () => `<div style="display:flex;align-items:center;gap:14px"><div class="out" style="font-size:38px;font-weight:600;line-height:1">82%</div><div class="dim" style="font-size:13.5px">3 h 10 min left</div></div><div class="bar" style="height:8px;border-radius:4px"><i style="width:82%"></i></div>`,
   },
+  eyes: { name: "Eyes", tip: () => "Eyes", peek: () => `<span class="eyes"><i></i><i></i></span>`, poke: () => { const e = $(".eyes", st.eyes.wc); if (e) { e.classList.add("happy"); setTimeout(() => e.classList.remove("happy"), 900); } } },
 };
 const sameDay = (a, b) => a.getFullYear() === b.getFullYear() && a.getMonth() === b.getMonth() && a.getDate() === b.getDate();
 const nextEvent = () => { const d = new Date(); return EVENTS.filter(e => e.s.getTime() + e.m * 60000 > d && e.s - d < 864e5).sort((a, b) => a.s - b.s)[0]; };
 const soonShort = ms => { if (ms <= 0) return "Now"; const m = Math.ceil(ms / 60000); return m < 60 ? m + "m" : Math.floor(m / 60) + "h"; };
 const soonWords = e => { const ms = e.s - new Date(); if (ms <= 0) return "now"; const m = Math.ceil(ms / 60000); return m < 60 ? "in " + m + " min" : "in " + Math.floor(m / 60) + " h" + (m % 60 ? " " + (m % 60) + " min" : ""); };
 
-/* the frame: the widgets on each edge, in order */
-const edges = { top: ["calendar", "song", "claude"], right: ["drives", "net"], bottom: ["apps", "downloads"], left: ["eyes"] };
-const horiz = e => e === "top" || e === "bottom";
-const st = {};
-let PH = null, drag = null, justDragged = false;
+/* the dock: pinned and open apps; the one in front with its name and what is in its window; each open one how busy it is */
+const DOCK = ["browser", "term", "files", "music", "notepad", "plugins"];
+function dockPeek() {
+  const f = frontWin();
+  return `<span class="dock">${DOCK.map(id => {
+    const a = APPS.find(x => x.id === id), w = openWins[id], use = w ? `<span class="use"><i style="height:${4 + (id.length * 3) % 12}px;background:${PURPLE}"></i><i style="height:${3 + (id.length * 5) % 10}px;background:${AMBER}"></i></span>` : "";
+    const front = f === id;
+    return `<button class="dapp${front ? " front" : ""}" data-act="dock" data-v="${id}" data-tip="${a.name}">${use}<span class="ti" style="background:${a.bg}">${ic(a.ic, 20)}</span>${front ? `<span class="nm"><b>${a.name}</b><small>${WINS[id] ? WINS[id].title : "Pretend window"}</small></span>` : ""}</button>`;
+  }).join("")}</span>`;
+}
 
-function make(id, edge) {
+/* where each widget is (its place, in order from its corner, or along its edge), and how it looks */
+const PLACES = ["top", "bottom", "left", "right", "top-left", "top-right", "bottom-left", "bottom-right"];
+const places = {
+  "bottom-left": ["apps", "drives"], bottom: ["games", "dock", "meters"], "bottom-right": ["calendar", "quick", "net", "tray"],
+  left: ["work", "downloads"], right: ["claude", "song", "inbox"], top: [], "top-left": [], "top-right": [],
+};
+const LOOK = {
+  apps: { floating: 1, large: 1 }, drives: { floating: 1, large: 1, icon: 1 }, games: { floating: 1, large: 1 }, dock: { large: 1 }, meters: { floating: 1, large: 1 },
+  calendar: { large: 1 }, quick: { floating: 1, icon: 1 }, net: { floating: 1, icon: 1 }, tray: { floating: 1 },
+  work: { floating: 1, icon: 1 }, downloads: { large: 1, icon: 1 }, claude: { large: 1, icon: 1 }, song: { large: 1, icon: 1 }, inbox: { large: 1, icon: 1 },
+  weather: {}, battery: {}, eyes: {},
+};
+/* (which can be either words or its icon alone: the others are always one or the other) */
+const CAN_ICON = { drives: 1, meters: 1, calendar: 1, quick: 0, net: 1, tray: 1, downloads: 1, claude: 1, song: 1, weather: 1, battery: 1 };
+const horizOf = p => p === "top" || p === "bottom" || p.includes("-");
+const isCorner = p => p.includes("-");
+const edgeOf = p => isCorner(p) ? p.split("-")[0] : p;
+
+const st = {};
+let PH = null, drag = null, justDragged = false, editing = false;
+
+function make(id) {
   const wc = document.createElement("div");
   wc.className = "wc";
   wc.innerHTML = '<div class="pk"></div><div class="pb"></div>';
   nadiEl.append(wc);
-  const w = st[id] = { id, wc, edge, pk: wc.firstChild, pb: wc.lastChild, peekHtml: "", bodyHtml: "", want: 60, pw: 0, ph: 0,
+  const w = st[id] = { id, wc, pk: wc.firstChild, pb: wc.lastChild, place: placeOf(id), peekHtml: "", bodyHtml: "", want: 40, depth: 32, pw: 0, ph: 0,
     rest: { x: new Spring(0), y: new Spring(0), w: new Spring(0), h: new Spring(0) }, fresh: true,
-    open: new Spring(0), shown: new Spring(0), swell: new Spring(0), pinned: false, ban: null, glow: null };
+    open: new Spring(0), shown: new Spring(0), swell: new Spring(0), pinned: false, ban: null, glow: null, flags: {} };
   bind(w);
   renderPeek(w, true);
   return w;
 }
+function placeOf(id) { for (const p in places) if (places[p].includes(id)) return p; return "off"; }
+function look(w) { return LOOK[w.id] || (LOOK[w.id] = {}); }
 function renderPeek(w, force) {
-  const v = !horiz(w.edge), html = W[w.id].peek(v);
-  if (!force && html === w.peekHtml) return false;
-  w.peekHtml = html;
-  w.pk.innerHTML = html;
+  const d = W[w.id], lk = look(w), place = w.place === "off" ? "top" : w.place;
+  const v = !horizOf(place), k = lk.large && !d.dock && !d.noZoom ? LARGE : 1;
+  const o = { v, icon: !!lk.icon, large: !!lk.large };
+  const html = d.peek(o);
+  const key = html + "|" + place + "|" + k + "|" + lk.icon;
+  if (!force && key === w.peekHtml) return false;
+  w.peekHtml = key;
+  const sq = lk.icon && !d.dock;
+  w.sq = sq; w.v = v;
+  w.pk.innerHTML = `<span class="pz" style="zoom:${k}">${html}</span>`;
   inStep(w.pk);
-  meas.className = v ? "vv" : "h";
-  meas.innerHTML = html;
-  w.want = v ? Math.max(DEPTH_V, meas.offsetHeight + 16) : Math.max(DEPTH_H, meas.offsetWidth);
+  w.depth = d.dock ? DOCK_DEPTH : Math.round((v ? (sq ? DEPTH_H : DEPTH_V) : DEPTH_H) * (lk.large ? LARGE : 1));
+  meas.className = (v ? "v" : "") + (sq ? " sq" : "");
+  meas.innerHTML = `<span class="pz" style="zoom:${k}">${html}</span>`;
+  w.want = sq ? w.depth : v ? Math.max(w.depth, meas.offsetHeight) : Math.max(w.depth, meas.offsetWidth);
   return true;
 }
 function renderBody(w) {
@@ -673,80 +773,127 @@ function renderBody(w) {
   w.bodyHtml = html;
   w.pb.innerHTML = html;
   inStep(w.pb);
-  w.pw = w.ban ? BANNER_W : d.w || (horiz(w.edge) ? PANEL_W : PANEL_W_SIDE);
+  w.pw = w.ban ? BANNER_W : d.w || (horizOf(w.place) ? PANEL_W : PANEL_W_SIDE);
   w.pb.style.width = w.pw + "px";
-  const h = w.pb.offsetHeight;
-  const changed = h !== w.ph;
+  const h = w.pb.offsetHeight, changed = h !== w.ph;
   w.ph = h;
   return changed;
 }
 const isOpen = w => w.open.to === 1;
 
-/* the layout: each edge's widgets in a row (or column) in its middle, a gap between; an open one as big as its panel, pushing the
-   others aside; its box with the fillets at its two ends */
+/* the layout (layout.rs): along each edge, its widgets in its middle; in each corner, the first in it and the others in a row
+   along its edge, outward; an open one as big as its panel, pushing the others aside. Each box has its fillets; a floating one is
+   that much further out */
+function sizes(w) {
+  const h = horizOf(w.place), o = isOpen(w), fl = look(w).floating;
+  const along = o ? (h ? w.pw : w.ph) : w.want;
+  const across = (o ? (h ? w.ph : w.pw) : w.depth) + (fl ? FLOAT_OFF : 0);
+  return { along, across };
+}
 function layout(snap) {
-  for (const e in edges) {
-    const ids = edges[e];
-    const along = ids.map(id => id === "PH" ? PH.along : isOpen(st[id]) ? (horiz(e) ? st[id].pw : st[id].ph) : st[id].want);
-    const total = along.reduce((a, b) => a + b + 2 * FILLET, 0) + GAP * Math.max(0, ids.length - 1);
-    const len = horiz(e) ? SW : SH - TB;
-    let p = Math.max(0, (len - total) / 2);
-    ids.forEach((id, i) => {
-      const slot = along[i] + 2 * FILLET;
-      if (id !== "PH") {
-        const w = st[id], o = isOpen(w);
-        const across = o ? (horiz(e) ? w.ph : w.pw) : (horiz(e) ? DEPTH_H : DEPTH_V);
+  const put = (w, b) => {
+    for (const k of ["x", "y", "w", "h"]) { w.rest[k].to = b[k]; if (snap || w.fresh) { w.rest[k].now = b[k]; w.rest[k].vel = 0; } }
+    w.fresh = false;
+  };
+  const sz = id => id === "PH" ? { along: PH.along, across: PH.across } : sizes(st[id]);
+  // (how far each corner's row reaches along its edge: the edge's own widgets keep out of it)
+  const reach = { "top-left": 0, "top-right": 0, "bottom-left": 0, "bottom-right": 0 };
+  for (const p of Object.keys(reach)) { const ids = places[p].filter(id => id === "PH" || (st[id] && !st[id].dragging)); reach[p] = ids.reduce((a, id, i) => a + sz(id).along + (i === 0 ? FILLET : 2 * FILLET) + GAP, 0); }
+  for (const p of ["top-left", "top-right", "bottom-left", "bottom-right", "top", "bottom", "left", "right"]) {
+    const ids = places[p].filter(id => id === "PH" || (st[id] && !st[id].dragging));
+    if (!ids.length) continue;
+    const e = edgeOf(p);
+    if (!isCorner(p)) {
+      const s = ids.map(sz), total = s.reduce((a, b) => a + b.along + 2 * FILLET, 0) + GAP * (ids.length - 1);
+      const len = horizOf(p) ? SW : SH;
+      let q = Math.max(0, (len - total) / 2);
+      if (horizOf(p)) { const lo = reach[p + "-left"], hi = SW - reach[p + "-right"]; q = Math.max(lo, Math.min(q, hi - total)); }
+      ids.forEach((id, i) => {
+        const slot = s[i].along + 2 * FILLET, ac = s[i].across;
+        if (id !== "PH") {
+          let b = e === "top" ? { x: q, y: 0, w: slot, h: ac } : e === "bottom" ? { x: q, y: SH - ac, w: slot, h: ac } : e === "left" ? { x: 0, y: q, w: ac, h: slot } : { x: SW - ac, y: q, w: ac, h: slot };
+          if (horizOf(p)) b.x = clamp(b.x, -FILLET, SW - b.w + FILLET); else b.y = clamp(b.y, -FILLET, SH - b.h + FILLET);
+          put(st[id], b);
+        }
+        q += slot + GAP;
+      });
+    } else {
+      const left = p.endsWith("left"), top = p.startsWith("top");
+      let q = 0;
+      ids.forEach((id, i) => {
+        const s = sz(id);
         let b;
-        if (e === "top") b = { x: p, y: 0, w: slot, h: across };
-        else if (e === "bottom") b = { x: p, y: SH - TB - across, w: slot, h: across };
-        else if (e === "left") b = { x: 0, y: p, w: across, h: slot };
-        else b = { x: SW - across, y: p, w: across, h: slot };
-        if (horiz(e)) b.x = clamp(b.x, -FILLET, SW - b.w + FILLET);
-        else b.y = clamp(b.y, -FILLET, SH - TB - b.h + FILLET);
-        for (const k of ["x", "y", "w", "h"]) { w.rest[k].to = b[k]; if (snap || w.fresh) { w.rest[k].now = b[k]; w.rest[k].vel = 0; } }
-        w.fresh = false;
-      }
-      p += slot + GAP;
-    });
+        if (i === 0) {
+          const bw = s.along + FILLET, bh = s.across + FILLET;
+          b = { x: left ? 0 : SW - bw, y: top ? 0 : SH - bh, w: bw, h: bh };
+          q = bw + GAP;
+        } else {
+          const slot = s.along + 2 * FILLET;
+          b = { x: left ? q : SW - q - slot, y: top ? 0 : SH - s.across, w: slot, h: s.across };
+          q += slot + GAP;
+        }
+        if (id !== "PH") put(st[id], b);
+      });
+    }
   }
   kick();
 }
 
-/* the shape now (frame.rs shape_now): grown out of its edge while it comes out, swollen under the mouse, round as it opens */
+/* the shape now (frame.rs shape_now): grown out of its edge as it comes out, swollen under the mouse, round as it opens; merged into
+   its edge (or corner), or floating just off it */
 function shapeNow(w) {
-  const t = clamp(w.open.now, 0, 1), e = w.edge, h = horiz(e), f = FILLET;
+  const t = clamp(w.open.now, 0, 1), p = w.place, f = FILLET, corner = isCorner(p), e = edgeOf(p), h = horizOf(p), lk = look(w);
   let b = { x: w.rest.x.now, y: w.rest.y.now, w: w.rest.w.now, h: w.rest.h.now };
-  if (w.dragging) return { b, body: b, r: Math.min(b.w, b.h) / 2, t: 0, drop: true };
+  if (w.dragging) return { b, body: b, r: Math.min(b.w, b.h) / 2, t: 0, g: 1, drop: true };
+  const left = p.endsWith("left"), top = p.startsWith("top") || p === "top";
   const g = Math.max(0, clamp(w.shown.now, -0.1, 1.25));
-  if (Math.abs(g - 1) > 0.001) {
-    const ak = g, lk = 0.5 + 0.5 * g;
-    if (e === "top") { const nw = b.w * lk, nh = b.h * ak; b = { x: b.x + (b.w - nw) / 2, y: b.y, w: nw, h: nh }; }
-    else if (e === "bottom") { const nw = b.w * lk, nh = b.h * ak; b = { x: b.x + (b.w - nw) / 2, y: b.y + b.h - nh, w: nw, h: nh }; }
-    else if (e === "left") { const nw = b.w * ak, nh = b.h * lk; b = { x: b.x, y: b.y + (b.h - nh) / 2, w: nw, h: nh }; }
-    else { const nw = b.w * ak, nh = b.h * lk; b = { x: b.x + b.w - nw, y: b.y + (b.h - nh) / 2, w: nw, h: nh }; }
-  }
+  const grow = (ak, lk2) => {
+    if (corner) { const nw = b.w * lk2, nh = b.h * ak; return { x: left ? b.x : b.x + b.w - nw, y: top ? b.y : b.y + b.h - nh, w: nw, h: nh }; }
+    if (e === "top") { const nw = b.w * lk2, nh = b.h * ak; return { x: b.x + (b.w - nw) / 2, y: b.y, w: nw, h: nh }; }
+    if (e === "bottom") { const nw = b.w * lk2, nh = b.h * ak; return { x: b.x + (b.w - nw) / 2, y: b.y + b.h - nh, w: nw, h: nh }; }
+    if (e === "left") { const nw = b.w * ak, nh = b.h * lk2; return { x: b.x, y: b.y + (b.h - nh) / 2, w: nw, h: nh }; }
+    const nw = b.w * ak, nh = b.h * lk2; return { x: b.x + b.w - nw, y: b.y + (b.h - nh) / 2, w: nw, h: nh };
+  };
+  if (Math.abs(g - 1) > 0.001) b = grow(g, 0.5 + 0.5 * g);
   const sw = clamp(w.swell.now, -0.3, 1.4) * (1 - t);
   if (Math.abs(sw) > 0.001) {
     const out = SWELL_OUT * sw, al = SWELL_ALONG * sw;
-    if (e === "top") b = { x: b.x - al / 2, y: b.y, w: b.w + al, h: b.h + out };
+    if (corner) b = { x: left ? b.x : b.x - al, y: top ? b.y : b.y - out, w: b.w + al, h: b.h + out };
+    else if (e === "top") b = { x: b.x - al / 2, y: b.y, w: b.w + al, h: b.h + out };
     else if (e === "bottom") b = { x: b.x - al / 2, y: b.y - out, w: b.w + al, h: b.h + out };
     else if (e === "left") b = { x: b.x, y: b.y - al / 2, w: b.w + out, h: b.h + al };
     else b = { x: b.x - out, y: b.y - al / 2, w: b.w + out, h: b.h + al };
   }
-  const body = h ? { x: b.x + f, y: b.y, w: Math.max(4, b.w - 2 * f), h: Math.max(0.5, b.h) } : { x: b.x, y: b.y + f, w: Math.max(0.5, b.w), h: Math.max(4, b.h - 2 * f) };
-  const depth = h ? DEPTH_H : DEPTH_V;
-  const own = Math.min(depth, h ? DEPTH_H : DEPTH_V);
-  let r = own * 0.44 + (RADIUS_OPEN - own * 0.44) * t;
-  const drop = clamp(1 - g, 0, 1);
-  const round = h ? Math.min(body.h, body.w / 2) : Math.min(body.w, body.h / 2);
-  if (drop > 0) r = r + (Math.max(round, r) - r) * drop;
-  return { b, body, r: Math.min(r, body.w / 2, body.h / 2), t, g };
+  const first = corner && places[p][0] === w.id;
+  let body;
+  if (first) body = { x: left ? b.x : b.x + f, y: top ? b.y : b.y + f, w: b.w - f, h: b.h - f };
+  else if (h) body = { x: b.x + f, y: b.y, w: b.w - 2 * f, h: b.h };
+  else body = { x: b.x, y: b.y + f, w: b.w, h: b.h - 2 * f };
+  const fl = lk.floating;
+  if (fl) {
+    const o = FLOAT_OFF;
+    if (first) body = { x: left ? body.x + o : body.x, y: top ? body.y + o : body.y, w: body.w - o, h: body.h - o };
+    else if (e === "top") body = { ...body, y: body.y + o, h: body.h - o };
+    else if (e === "bottom") body = { ...body, h: body.h - o };
+    else if (e === "left") body = { ...body, x: body.x + o, w: body.w - o };
+    else body = { ...body, w: body.w - o };
+  }
+  body.w = Math.max(0.5, body.w); body.h = Math.max(0.5, body.h);
+  let r;
+  if (fl) { const closed = Math.min(body.w, body.h) / 2; r = closed + (RADIUS_OPEN - closed) * t; }
+  else {
+    const own = Math.min(h ? DEPTH_H : DEPTH_V, h ? body.h : body.w);
+    r = own * 0.44 + (RADIUS_OPEN - own * 0.44) * t;
+    const drop = clamp(1 - g, 0, 1), round = h ? Math.min(body.h, body.w / 2) : Math.min(body.w, body.h / 2);
+    if (drop > 0) r = r + (Math.max(round, r) - r) * drop;
+  }
+  return { b, body, r: Math.min(r, body.w / 2, body.h / 2), t, g, floating: !!fl, first, corner, left, top, e };
 }
 
 /* the liquid, on the graphics card: the app's own shader (liquidgpu.rs), in WebGL */
 const gl = cv.getContext("webgl", { premultipliedAlpha: true, antialias: false, alpha: true });
-let prog = null, U = {};
-const MAXS = 32;
+let prog = null;
+const U = {}, MAXS = 40;
 if (gl) {
   const vs = `attribute vec2 a; void main(){ gl_Position = vec4(a, 0.0, 1.0); }`;
   const fs = `precision highp float;
@@ -777,10 +924,7 @@ void main(){
 }`;
   const sh = (t, s) => { const o = gl.createShader(t); gl.shaderSource(o, s); gl.compileShader(o); return gl.getShaderParameter(o, gl.COMPILE_STATUS) ? o : null; };
   const v = sh(gl.VERTEX_SHADER, vs), f = sh(gl.FRAGMENT_SHADER, fs);
-  if (v && f) {
-    prog = gl.createProgram(); gl.attachShader(prog, v); gl.attachShader(prog, f); gl.linkProgram(prog);
-    if (!gl.getProgramParameter(prog, gl.LINK_STATUS)) prog = null;
-  }
+  if (v && f) { prog = gl.createProgram(); gl.attachShader(prog, v); gl.attachShader(prog, f); gl.linkProgram(prog); if (!gl.getProgramParameter(prog, gl.LINK_STATUS)) prog = null; }
   if (prog) {
     gl.useProgram(prog);
     const buf = gl.createBuffer(); gl.bindBuffer(gl.ARRAY_BUFFER, buf);
@@ -791,31 +935,33 @@ void main(){
 }
 const hex = c => [parseInt(c.slice(1, 3), 16) / 255, parseInt(c.slice(3, 5), 16) / 255, parseInt(c.slice(5, 7), 16) / 255];
 function drawLiquid(shapes, glowC) {
-  if (!prog) return;
-  const merged = shapes.filter(s => !s.drop), drops = shapes.filter(s => s.drop);
+  const merged = shapes.filter(s => !s.drop && !s.floating), drops = shapes.filter(s => s.drop || s.floating);
+  // (each edge with merged ones on it: a slab just past it, as far along as they are, and more; a corner's one counts on both its edges)
   const spans = {};
+  const add = (e, a0, a1) => { const sp = spans[e] || (spans[e] = [a0, a1]); sp[0] = Math.min(sp[0], a0); sp[1] = Math.max(sp[1], a1); };
   for (const s of merged) {
-    const a0 = horiz(s.edge) ? s.b.x : s.b.y, a1 = a0 + (horiz(s.edge) ? s.b.w : s.b.h);
-    const sp = spans[s.edge] || (spans[s.edge] = [a0, a1]); sp[0] = Math.min(sp[0], a0); sp[1] = Math.max(sp[1], a1);
-  }
-  const slabs = [];
-  for (const e in spans) {
-    const a0 = spans[e][0] - 3 * NECK - 20, a1 = spans[e][1] + 3 * NECK + 20, bot = SH - TB;
-    slabs.push(e === "top" ? { x: a0, y: -43, w: a1 - a0, h: 40 } : e === "bottom" ? { x: a0, y: bot + 3, w: a1 - a0, h: 40 } : e === "left" ? { x: -43, y: a0, w: 40, h: a1 - a0 } : { x: SW + 3, y: a0, w: 40, h: a1 - a0 });
+    if (s.first) { add(s.top ? "top" : "bottom", s.b.x, s.b.x + s.b.w); add(s.left ? "left" : "right", s.b.y, s.b.y + s.b.h); }
+    else if (s.e === "top" || s.e === "bottom") add(s.e, s.b.x, s.b.x + s.b.w);
+    else add(s.e, s.b.y, s.b.y + s.b.h);
   }
   const arr = new Float32Array(MAXS * 8);
   let n = 0;
   const put = (bx, r, lit) => { if (n >= MAXS) return; const hx = Math.max(0, bx.w) / 2, hy = Math.max(0, bx.h) / 2; arr.set([bx.x + hx, bx.y + hy, hx, hy, Math.max(0, Math.min(r, hx, hy)), lit ? 1 : 0, 0, 0], n * 8); n++; };
   for (const s of merged) {
-    const bd = s.body, e = s.edge;
-    const ext = e === "top" ? { x: bd.x, y: bd.y - REACH, w: bd.w, h: bd.h + REACH } : e === "bottom" ? { x: bd.x, y: bd.y, w: bd.w, h: bd.h + REACH } : e === "left" ? { x: bd.x - REACH, y: bd.y, w: bd.w + REACH, h: bd.h } : { x: bd.x, y: bd.y, w: bd.w + REACH, h: bd.h };
-    // (coming out or going back: it sinks past its edge too, so it melts into it)
-    const sink = (1 - clamp(s.g, 0, 1)) * (NECK * 1.5 + 4);
-    if (e === "top") ext.y -= sink; else if (e === "bottom") ext.y += sink; else if (e === "left") ext.x -= sink; else ext.x += sink;
-    put(ext, s.r, s.lit);
+    const bd = s.body, sink = (1 - clamp(s.g, 0, 1)) * (NECK * 1.5 + 4);
+    let x0 = bd.x, y0 = bd.y, x1 = bd.x + bd.w, y1 = bd.y + bd.h;
+    if (s.first) { if (s.left) x0 -= REACH + sink; else x1 += REACH + sink; if (s.top) y0 -= REACH + sink; else y1 += REACH + sink; }
+    else if (s.e === "top") { y0 -= REACH; y0 -= sink; y1 -= sink; }
+    else if (s.e === "bottom") { y1 += REACH; y0 += sink; y1 += sink; }
+    else if (s.e === "left") { x0 -= REACH; x0 -= sink; x1 -= sink; }
+    else { x1 += REACH; x0 += sink; x1 += sink; }
+    put({ x: x0, y: y0, w: x1 - x0, h: y1 - y0 }, s.r, s.lit);
   }
   const na = n;
-  for (const sl of slabs) put(sl, 0, false);
+  for (const e in spans) {
+    const a0 = spans[e][0] - 3 * NECK - 20, a1 = spans[e][1] + 3 * NECK + 20;
+    put(e === "top" ? { x: a0, y: -43, w: a1 - a0, h: 40 } : e === "bottom" ? { x: a0, y: SH + 3, w: a1 - a0, h: 40 } : e === "left" ? { x: -43, y: a0, w: 40, h: a1 - a0 } : { x: SW + 3, y: a0, w: 40, h: a1 - a0 }, 0, false);
+  }
   const ne = n - na;
   for (const s of drops) put(s.body, s.r, s.lit);
   const nb = n - na - ne;
@@ -829,7 +975,7 @@ function drawLiquid(shapes, glowC) {
   gl.drawArrays(gl.TRIANGLES, 0, 3);
 }
 
-/* each frame while anything moves: the springs, the shapes, the liquid, what is in them */
+/* each frame while anything moves */
 let raf = 0, last = 0;
 function kick() { if (!raf) { last = performance.now(); raf = requestAnimationFrame(frame); } }
 function frame(now) {
@@ -847,45 +993,47 @@ function frame(now) {
   const shapes = [];
   let glowC = null;
   for (const id in st) {
-    const w = st[id], s = shapeNow(w), e = w.edge, h = horiz(e);
-    s.edge = e; s.drop = !!w.dragging;
-    if (w.glow) { const a = w.glow.breathe ? 0.65 + 0.35 * Math.sin(now / 1000 * 2.6) : 1; s.lit = true; glowC = { c: w.glow.c, a: a * clamp(w.shown.now, 0, 1) }; moving = true; }
+    const w = st[id];
+    if (w.place === "off" && !w.dragging) { w.wc.style.visibility = "hidden"; continue; }
+    const s = shapeNow(w);
+    if (w.glow) { const a = w.glow.breathe ? 0.65 + 0.35 * Math.sin(now / 1000 * 2.6) : 0.85; s.lit = true; glowC = { c: w.glow.c, a: a * clamp(w.shown.now, 0, 1) }; moving = true; }
     if (w.shown.now > 0.003 || w.shown.moving() || w.dragging) shapes.push(s);
-    // (what is in it: over its body, its peek fading as its panel comes)
-    const bd = s.body, wc = w.wc;
-    const cls = "wc e-" + e + (h ? "" : " v") + (prog ? "" : " solid");
+    const bd = s.body, wc = w.wc, p = w.place;
+    const cls = "wc" + (w.v ? " v" : "") + (w.sq ? " sq" : "") + (p.startsWith("bottom") ? " a-b" : "") + (p.endsWith("right") ? " a-r" : "") + (prog ? "" : " solid");
     if (wc.className !== cls) wc.className = cls;
     wc.style.left = bd.x + "px"; wc.style.top = bd.y + "px"; wc.style.width = bd.w + "px"; wc.style.height = bd.h + "px";
     const r = s.r + "px";
-    wc.style.borderRadius = w.dragging ? r : e === "top" ? `0 0 ${r} ${r}` : e === "bottom" ? `${r} ${r} 0 0` : e === "left" ? `0 ${r} ${r} 0` : `${r} 0 0 ${r}`;
-    const t = s.t;
-    w.pk.style.opacity = clamp(1 - t * 3, 0, 1) * clamp((w.shown.now - 0.6) / 0.4, 0, 1);
-    w.pb.style.opacity = clamp((t - 0.35) / 0.65, 0, 1);
-    w.pb.style.visibility = t > 0.02 ? "visible" : "hidden";
-    w.pb.style.pointerEvents = t > 0.5 ? "auto" : "none";
+    if (w.dragging || s.floating) wc.style.borderRadius = r;
+    else if (s.first) wc.style.borderRadius = s.top ? (s.left ? `0 0 ${r} 0` : `0 0 0 ${r}`) : (s.left ? `0 ${r} 0 0` : `${r} 0 0 0`);
+    else wc.style.borderRadius = s.e === "top" ? `0 0 ${r} ${r}` : s.e === "bottom" ? `${r} ${r} 0 0` : s.e === "left" ? `0 ${r} ${r} 0` : `${r} 0 0 ${r}`;
+    w.pk.style.opacity = clamp(1 - s.t * 3, 0, 1) * clamp((w.shown.now - 0.6) / 0.4, 0, 1);
+    w.pb.style.opacity = clamp((s.t - 0.35) / 0.65, 0, 1);
+    w.pb.style.visibility = s.t > 0.02 ? "visible" : "hidden";
+    w.pb.style.pointerEvents = s.t > 0.5 ? "auto" : "none";
     wc.style.visibility = w.shown.now > 0.01 || w.dragging ? "visible" : "hidden";
   }
   if (prog) drawLiquid(shapes, glowC);
   if (moving || drag) raf = requestAnimationFrame(frame);
 }
 
-/* the mouse on a widget: it swells; resting there, it opens (on a touch, a tap); leaving, it shuts a moment later, unless pressed */
+/* the mouse on a widget: it swells; resting there, it opens (a tap, on a touch screen); leaving, it shuts a moment later, unless
+   pressed. Held, or dragged: Edit Mode */
 function bind(w) {
   const wc = w.wc;
   wc.addEventListener("pointerenter", e => {
-    if (e.pointerType === "touch" || drag) return;
+    if (e.pointerType === "touch" || drag || editing) return;
     clearTimeout(w.leaveT);
     if (!isOpen(w)) { w.swell.to = 1; kick(); }
-    if ((W[w.id].body || w.ban) && !isOpen(w)) w.openT = setTimeout(() => open(w.id), HOVER_OPEN);
+    if ((W[w.id].body) && !isOpen(w)) w.openT = setTimeout(() => open(w.id), HOVER_OPEN);
   });
   wc.addEventListener("pointerleave", e => {
     if (e.pointerType === "touch") return;
     clearTimeout(w.openT);
     w.swell.to = 0; kick();
-    if (isOpen(w) && !w.pinned && !w.ban) w.leaveT = setTimeout(() => close(w.id), LEAVE_CLOSE);
+    if (isOpen(w) && !w.pinned && !w.ban && !w.flags.open) w.leaveT = setTimeout(() => close(w.id), LEAVE_CLOSE);
   });
   wc.addEventListener("click", e => {
-    if (justDragged || e.target.closest("[data-act]")) return;
+    if (justDragged || editing || e.target.closest("[data-act]")) return;
     clearTimeout(w.openT);
     const d = W[w.id];
     if (d.press) return d.press();
@@ -895,14 +1043,21 @@ function bind(w) {
     else if (!isOpen(w)) { open(w.id); w.pinned = true; }
     else w.pinned = true;
   });
-  wc.addEventListener("contextmenu", e => { e.preventDefault(); widgetMenu(w.id, e); });
-  wc.addEventListener("pointerdown", e => { if (e.button === 0 && !e.target.closest(".pb")) { const p = pt(e); drag = { id: w.id, x0: p.x, y0: p.y, on: false }; } });
+  wc.addEventListener("contextmenu", e => { e.preventDefault(); if (!editing) widgetMenu(w.id); });
+  wc.addEventListener("pointerdown", e => {
+    if (e.button !== 0 || e.target.closest(".pb")) return;
+    const p = pt(e);
+    drag = { id: w.id, x0: p.x, y0: p.y, on: false };
+    clearTimeout(holdT);
+    holdT = setTimeout(() => { if (drag && !drag.on) { enterEdit(); } }, HOLD);
+  });
 }
+let holdT = 0;
 function open(id) {
   const w = st[id];
-  if (!w || isOpen(w) || w.shown.to < 1) return;
-  for (const k in st) if (k !== id && isOpen(st[k]) && !st[k].ban) close(k);
-  hideLauncher();
+  if (!w || isOpen(w) || w.shown.to < 1 || editing) return;
+  for (const k in st) if (k !== id && isOpen(st[k]) && !st[k].ban && !st[k].flags.open) close(k);
+  hideLauncher(); hideMenu();
   W[id].opened && W[id].opened();
   w.bodyHtml = "";
   renderBody(w);
@@ -915,12 +1070,12 @@ function close(id) {
   w.open.to = 0; w.pinned = false;
   layout();
 }
-function closeAll() { for (const k in st) if (isOpen(st[k]) && !st[k].ban) close(k); }
+function closeAll() { for (const k in st) if (isOpen(st[k]) && !st[k].ban && !st[k].flags.open) close(k); }
 
-/* banners: the widget becomes one for a moment (or until answered), its neighbours making room */
+/* banners: the widget becomes one, its neighbours making room */
 function banner(id, html, glow, ms) {
   const w = st[id];
-  if (!w || w.shown.to < 1) return;
+  if (!w || w.place === "off" || w.shown.to < 1 || editing) return;
   w.ban = { html }; w.glow = glow || null;
   w.bodyHtml = ""; renderBody(w);
   w.open.to = 1; w.swell.to = 0; w.pinned = false;
@@ -928,18 +1083,18 @@ function banner(id, html, glow, ms) {
   clearTimeout(w.banT);
   if (ms) w.banT = setTimeout(() => unbanner(id), ms);
 }
-function unbanner(id) {
+function unbanner(id, keepGlow) {
   const w = st[id];
   if (!w || !w.ban) return;
-  w.ban = null; w.glow = null; w.open.to = 0;
+  w.ban = null; if (!keepGlow) w.glow = null; w.open.to = 0;
   layout();
 }
 function claudeAsk() {
-  if (!st.claude || claude.waiting) return;
+  if (!st.claude || claude.waiting || editing) { setTimeout(claudeAsk, 20000); return; }
   claude.waiting = true;
   claude.sessions[1] = { title: "Site", sub: "Edit docs/index.html?", st: "waiting", since: Date.now() };
   renderPeek(st.claude); layout();
-  banner("claude", `<div class="ban"><div class="hd"><span class="ct" style="width:40px;height:40px;border-radius:12px;background:${CLAUDE};display:grid;place-items:center;color:#fff">${ic("spark", 20)}</span><div style="flex:1;display:flex;flex-direction:column;gap:3px"><b style="font-size:15px">Site needs you</b><span class="dim" style="font-size:13px">Claude wants to edit docs/index.html</span></div></div><div class="btns"><button class="no" data-act="deny">Deny</button><button style="background:${CLAUDE};color:#1a0d05" data-act="allow">Allow</button></div></div>`, { c: AMBER, breathe: true });
+  banner("claude", `<div class="ban"><div class="hd"><span class="ct" style="width:40px;height:40px;border-radius:12px">${ic("spark", 20)}</span><div style="flex:1;display:flex;flex-direction:column;gap:3px"><b style="font-size:15px">Site needs you</b><span class="dim" style="font-size:13px">Claude wants to edit docs/index.html</span></div></div><div class="btns"><button class="no" data-act="deny">Deny</button><button style="background:${CLAUDE};color:#1a0d05" data-act="allow">Allow</button></div></div>`, { c: AMBER, breathe: true });
 }
 function claudeAnswer(ok) {
   claude.waiting = false;
@@ -949,101 +1104,209 @@ function claudeAnswer(ok) {
   if (ok) setTimeout(() => { claude.sessions[1] = { title: "Site", sub: "Finished", st: "finished", since: Date.now() }; refresh("claude"); }, 9000);
   setTimeout(claudeAsk, 45000);
 }
+function toast() {
+  if (!st.inbox || st.inbox.place === "off" || editing) return;
+  const n = { app: "Chat", ic: "chat", bg: "#7a5ae8", title: "Alex", text: "Did you see the new NADI site?", when: "now" };
+  inbox.notes.unshift(n); inbox.notes.length = Math.min(inbox.notes.length, 4); inbox.unread++;
+  banner("inbox", `<div class="note"><span class="ti" style="background:${n.bg}">${ic(n.ic, 17)}</span><span class="nm"><b>${n.title}</b><span>${n.text}</span></span></div>`, { c: ACC }, 4500);
+  setTimeout(() => { if (inbox.unread && st.inbox) st.inbox.glow = { c: ACC }; kick(); }, 4600);
+}
 
-/* dragged to another edge: a drop under the mouse; its new neighbours make room */
+/* dragging: Edit Mode, the widget carried as a drop; let go near an edge it merges into it, a little farther it floats off it, in a
+   corner's reach it is that corner's; over the tray it is hidden */
 function pt(e) { const r = scr.getBoundingClientRect(); return { x: (e.clientX - r.left) / scale, y: (e.clientY - r.top) / scale }; }
+function target(p) {
+  const near = { top: p.y, bottom: SH - p.y, left: p.x, right: SW - p.x };
+  if (inTray(p)) return { tray: true };
+  const v = near.top < CORNER_ZONE ? "top" : near.bottom < CORNER_ZONE ? "bottom" : null, hz = near.left < CORNER_ZONE ? "left" : near.right < CORNER_ZONE ? "right" : null;
+  if (v && hz) return { place: v + "-" + hz, d: Math.min(near[v], near[hz]) };
+  const e = Object.keys(near).sort((a, b) => near[a] - near[b])[0];
+  return { place: e, d: near[e] };
+}
 function moveDrag(e) {
   if (!drag) return;
-  const p = pt(e), w = st[drag.id];
+  const p = pt(e);
+  const w = drag.chip ? st[drag.id] : st[drag.id];
   if (!drag.on) {
-    if (Math.hypot(p.x - drag.x0, p.y - drag.y0) < 6) return;
+    if (Math.hypot(p.x - drag.x0, p.y - drag.y0) < DRAG_START) return;
     if (w.ban) { drag = null; return; }
+    clearTimeout(holdT);
+    if (!editing) enterEdit();
     drag.on = true;
-    clearTimeout(w.openT); hideTip();
+    hideTip(); clearTimeout(w.openT);
     if (isOpen(w)) { w.open.to = 0; w.open.now = 0; w.pinned = false; }
-    w.dragging = true; w.swell.to = 0; w.swell.now = 0;
-    edges[w.edge] = edges[w.edge].filter(k => k !== drag.id);
-    w.dw = horiz(w.edge) ? w.want : 44; w.dh = 32;
+    w.dragging = true; w.swell.to = 0; w.swell.now = 0; w.shown.now = w.shown.to = 1;
+    if (w.place !== "off") places[w.place] = places[w.place].filter(k => k !== w.id);
+    w.dw = Math.max(w.want, w.depth); w.dh = w.depth;
+    renderTray();
   }
-  w.rest.x.now = w.rest.x.to = p.x - w.dw / 2; w.rest.y.now = w.rest.y.to = p.y - w.dh / 2;
-  w.rest.w.now = w.rest.w.to = w.dw; w.rest.h.now = w.rest.h.to = w.dh;
-  for (const k of ["x", "y", "w", "h"]) w.rest[k].vel = 0;
-  const dist = { top: p.y, bottom: SH - TB - p.y, left: p.x, right: SW - p.x };
-  const e2 = Object.keys(dist).sort((a, b) => dist[a] - dist[b])[0];
-  const a = horiz(e2) ? p.x : p.y;
-  const list = edges[e2].filter(k => k !== "PH");
-  let idx = list.findIndex(k => (horiz(e2) ? st[k].rest.x.to + st[k].rest.w.to / 2 : st[k].rest.y.to + st[k].rest.h.to / 2) > a);
-  if (idx < 0) idx = list.length;
-  if (!PH || PH.edge !== e2 || PH.idx !== idx) {
-    for (const k in edges) edges[k] = edges[k].filter(x => x !== "PH");
-    list.splice(idx, 0, "PH"); edges[e2] = list;
-    PH = { edge: e2, idx, along: horiz(e2) ? Math.max(w.dw, 40) : 40 };
+  for (const [k, v] of [["x", p.x - w.dw / 2], ["y", p.y - w.dh / 2], ["w", w.dw], ["h", w.dh]]) { w.rest[k].now = w.rest[k].to = v; w.rest[k].vel = 0; }
+  const tg = target(p);
+  $("#etray").classList.toggle("over", !!tg.tray);
+  const key = tg.tray ? "tray" : tg.place;
+  let idx = 0;
+  if (!tg.tray) {
+    const list = places[tg.place].filter(k => k !== "PH");
+    if (isCorner(tg.place)) {
+      const left = tg.place.endsWith("left");
+      idx = list.findIndex(k => (left ? st[k].rest.x.to + st[k].rest.w.to / 2 > p.x : st[k].rest.x.to + st[k].rest.w.to / 2 < p.x));
+    } else {
+      const a = horizOf(tg.place) ? p.x : p.y;
+      idx = list.findIndex(k => (horizOf(tg.place) ? st[k].rest.x.to + st[k].rest.w.to / 2 : st[k].rest.y.to + st[k].rest.h.to / 2) > a);
+    }
+    if (idx < 0) idx = list.length;
+  }
+  if (!PH || PH.key !== key || PH.idx !== idx || PH.floating !== (tg.d > SQUISH)) {
+    for (const k in places) places[k] = places[k].filter(x => x !== "PH");
+    PH = { key, idx, floating: !tg.tray && tg.d > SQUISH };
+    if (!tg.tray) {
+      const h = horizOf(tg.place);
+      const depth = Math.round((h ? DEPTH_H : DEPTH_V) * (look(w).large ? LARGE : 1));
+      PH.along = look(w).icon ? depth : h ? Math.max(w.want, depth) : depth;
+      PH.across = depth + (PH.floating ? FLOAT_OFF : 0);
+      places[tg.place].splice(idx, 0, "PH");
+    }
     layout();
   }
   kick();
 }
 function endDrag() {
+  clearTimeout(holdT);
   if (!drag) return;
   const w = st[drag.id];
-  if (drag.on && PH) {
-    edges[PH.edge] = edges[PH.edge].map(x => x === "PH" ? w.id : x);
-    w.edge = PH.edge; PH = null; w.dragging = false;
+  if (drag.on) {
+    if (PH && PH.key !== "tray") {
+      places[PH.key] = places[PH.key].map(x => x === "PH" ? w.id : x);
+      w.place = PH.key;
+      look(w).floating = PH.floating ? 1 : 0;
+    } else {
+      for (const k in places) places[k] = places[k].filter(x => x !== "PH");
+      w.place = "off";
+      w.shown.now = w.shown.to = 0;
+    }
+    PH = null; w.dragging = false;
+    $("#etray").classList.remove("over");
     renderPeek(w, true);
+    w.fresh = w.place === "off";
     layout();
+    renderTray();
     justDragged = true; setTimeout(() => (justDragged = false), 0);
   }
   drag = null;
 }
-function moveTo(id, edge) {
+function moveTo(id, place) {
   const w = st[id];
   if (isOpen(w)) close(id);
-  edges[w.edge] = edges[w.edge].filter(k => k !== id);
-  edges[edge].push(id);
-  w.edge = edge; w.shown.now = 0; w.shown.to = 1;
+  if (w.place !== "off") places[w.place] = places[w.place].filter(k => k !== id);
+  places[place].push(id);
+  w.place = place; w.shown.now = 0; w.shown.to = 1; w.fresh = true;
   renderPeek(w, true);
-  w.fresh = true;
   layout();
 }
 
-/* menus */
+/* Edit Mode (frame/edit.rs): the screen dims a little, every widget out, a tray in the middle with what is not on the screen */
+const etray = $("#etray"), dimEl = $("#dim");
+function enterEdit() {
+  if (editing) return;
+  editing = true;
+  hideMenu(); hideLauncher(); hideTip();
+  for (const k in st) { const w = st[k]; if (isOpen(w) && !w.ban) { w.open.to = 0; w.pinned = false; } w.swell.to = 0; clearTimeout(w.openT); }
+  dimEl.classList.add("show");
+  renderTray();
+  layout();
+}
+function leaveEdit() {
+  if (!editing) return;
+  editing = false;
+  dimEl.classList.remove("show");
+  etray.classList.remove("show");
+}
+function renderTray() {
+  if (!editing) return;
+  const off = Object.keys(st).filter(k => st[k].place === "off" && !st[k].dragging);
+  etray.className = "show" + (off.length ? "" : " empty");
+  etray.innerHTML = off.map(k => `<span class="chip" data-chip="${k}">${W[k].name}</span>`).join("");
+  const w = etray.offsetWidth, h = etray.offsetHeight;
+  etray.style.left = (SW - w) / 2 + "px"; etray.style.top = (SH - h) / 2 + "px";
+}
+const inTray = p => editing && (() => { const r = { x: etray.offsetLeft, y: etray.offsetTop, w: etray.offsetWidth, h: etray.offsetHeight }; return p.x >= r.x - 80 && p.x <= r.x + r.w + 80 && p.y >= r.y - 80 && p.y <= r.y + r.h + 80; })();
+etray.addEventListener("pointerdown", e => {
+  const c = e.target.closest("[data-chip]");
+  if (!c) return;
+  e.stopPropagation();
+  const id = c.dataset.chip, w = st[id], p = pt(e);
+  w.place = "off";
+  drag = { id, x0: p.x - 99, y0: p.y, on: false };
+  renderPeek(w, true);
+  moveDrag(e);
+});
+dimEl.addEventListener("click", () => leaveEdit());
+
+/* the widget's menu (menu.rs): its look, where it goes (a map), its switches, Hide, Edit */
 const menu = $("#menu");
-function showMenu(e, items) {
-  const p = pt(e);
-  menu.innerHTML = items.map((it, i) => `<button data-mi="${i}">${it.icon ? ic(it.icon, 16, it.rot ? `transform:rotate(${it.rot}deg)` : "") : ""}${it.label}</button>`).join("");
-  menu._items = items;
-  menu.classList.add("show");
-  const w = menu.offsetWidth, h = menu.offsetHeight;
-  menu.style.left = clamp(p.x, 6, SW - w - 6) + "px"; menu.style.top = clamp(p.y, 6, SH - h - 6) + "px";
+const LOOKG = {
+  merged: '<svg width="20" height="14" viewBox="0 0 20 14"><rect x="1" y="1" width="18" height="2" rx="1" fill="currentColor"/><rect x="4" y="1" width="12" height="10" rx="3.5" fill="currentColor"/></svg>',
+  floating: '<svg width="20" height="14" viewBox="0 0 20 14"><rect x="1" y="0" width="18" height="2" rx="1" fill="currentColor"/><rect x="4" y="5" width="12" height="7" rx="3.5" fill="currentColor"/></svg>',
+  small: '<svg width="20" height="14" viewBox="0 0 20 14"><rect x="5" y="4" width="10" height="6" rx="3" fill="currentColor"/></svg>',
+  large: '<svg width="20" height="14" viewBox="0 0 20 14"><rect x="2" y="2" width="16" height="10" rx="4" fill="currentColor"/></svg>',
+  words: '<svg width="20" height="14" viewBox="0 0 20 14"><circle cx="4" cy="7" r="2.4" fill="currentColor"/><rect x="8" y="3.5" width="9" height="2" rx="1" fill="currentColor"/><rect x="8" y="8.5" width="6" height="2" rx="1" fill="currentColor"/></svg>',
+  icon: '<svg width="20" height="14" viewBox="0 0 20 14"><circle cx="10" cy="7" r="4" fill="currentColor"/></svg>',
+};
+function widgetMenu(id) {
+  hideTip(); hideLauncher();
+  const w = st[id], lk = look(w), f = w.flags;
+  const seg = pairs => `<div class="seg">${pairs.map(([g, name, on, act]) => `<button class="${on ? "on" : ""}" data-m="${act}" data-tip="${name}">${LOOKG[g]}</button>`).join("")}</div>`;
+  let segs = seg([["merged", "Merged", !lk.floating, "look:float:0"], ["floating", "Floating", !!lk.floating, "look:float:1"]]) + seg([["small", "Small", !lk.large, "look:large:0"], ["large", "Large", !!lk.large, "look:large:1"]]);
+  if (CAN_ICON[id]) segs += seg([["words", "Words", !lk.icon, "look:icon:0"], ["icon", "Icon Only", !!lk.icon, "look:icon:1"]]);
+  // (the screen, 208 by 82: a bar on each edge, a bracket in each corner; where it is now in colour)
+  const cx = 104, cy = 41, R = 208, B = 82;
+  const M = { "top-left": [[[6, 6, 18, 4], [6, 6, 4, 12]], [0, 0, 44, 30]], top: [[[cx - 20, 6, 40, 4]], [cx - 32, 0, 64, 26]], "top-right": [[[R - 24, 6, 18, 4], [R - 10, 6, 4, 12]], [R - 44, 0, 44, 30]],
+    left: [[[6, cy - 13, 4, 26]], [0, cy - 18, 34, 36]], right: [[[R - 10, cy - 13, 4, 26]], [R - 34, cy - 18, 34, 36]],
+    "bottom-left": [[[6, B - 10, 18, 4], [6, B - 18, 4, 12]], [0, B - 30, 44, 30]], bottom: [[[cx - 20, B - 10, 40, 4]], [cx - 32, B - 26, 64, 26]], "bottom-right": [[[R - 24, B - 10, 18, 4], [R - 10, B - 18, 4, 12]], [R - 44, B - 30, 44, 30]] };
+  const NAMES = { "top-left": "Top Left", top: "Top", "top-right": "Top Right", left: "Left", right: "Right", "bottom-left": "Bottom Left", bottom: "Bottom", "bottom-right": "Bottom Right" };
+  const map = `<div class="map">${Object.keys(M).map(p => { const [marks, h] = M[p]; return `<button class="${w.place === p ? "on" : ""}" data-m="move:${p}" data-tip="${NAMES[p]}" style="left:${h[0] - 1.5}px;top:${h[1] - 1.5}px;width:${h[2]}px;height:${h[3]}px">${marks.map(k => `<i style="left:${k[0] - h[0]}px;top:${k[1] - h[1]}px;width:${k[2]}px;height:${k[3]}px"></i>`).join("")}</button>`; }).join("")}</div>`;
+  const togs = [["desktop", "Pin to This Monitor", "pin"], ["eye", "Always Show", "always"], ["maximize", "Show Over Full Screen", "full"]];
+  if (W[id].body) togs.push(["winnew", "Always Open", "open"]);
+  togs.push(["moon", "Hide When Idle", "idle"], ["spark", "Bump When Something Happens", "bump"]);
+  menu.className = "show";
+  menu.innerHTML = `<div class="segs">${segs}</div>${map}<div class="togs">${togs.map(([i, n, k]) => `<button class="${f[k] ? "on" : ""}" data-m="flag:${k}" data-tip="${n}">${ic(i, 16)}</button>`).join("")}</div><div class="rule"></div><div class="mfoot"><button data-m="hide" data-tip="Hide">${ic("eyeoff", 16)}</button><button data-m="edit" data-tip="Edit Widgets">${ic("grid", 16)}</button></div>`;
+  menu._id = id;
+  // (beside the widget, on the side away from its edge)
+  const s = shapeNow(w).body, mw = 240, mh = menu.offsetHeight, e = edgeOf(w.place), gap = 10;
+  let x = s.x + s.w / 2 - mw / 2, y = s.y + s.h / 2 - mh / 2;
+  if (e === "bottom") y = s.y - gap - mh; else if (e === "top") y = s.y + s.h + gap;
+  if (w.place === "left") x = s.x + s.w + gap; else if (w.place === "right") x = s.x - gap - mw;
+  menu.style.left = clamp(x, 8, SW - mw - 8) + "px"; menu.style.top = clamp(y, 8, SH - mh - 8) + "px";
 }
 function hideMenu() { menu.classList.remove("show"); }
-menu.addEventListener("click", e => { const b = e.target.closest("[data-mi]"); if (!b) return; const it = menu._items[+b.dataset.mi]; hideMenu(); it.run(); });
-function widgetMenu(id, e) {
-  hideTip();
-  const names = { top: ["Top Edge", 0], right: ["Right Edge", 90], bottom: ["Bottom Edge", 180], left: ["Left Edge", 270] };
-  const items = Object.keys(names).filter(k => k !== st[id].edge).map(k => ({ icon: "arrow", rot: names[k][1], label: names[k][0], run: () => moveTo(id, k) }));
-  if (W[id].body) items.push({ icon: "pin", label: isOpen(st[id]) && st[id].pinned ? "Close" : "Keep Open", run: () => { if (isOpen(st[id]) && st[id].pinned) close(id); else { open(id); st[id].pinned = true; } } });
-  if (id === "weather" || id === "battery") items.push({ icon: "x", label: "Remove", run: () => removeWidget(id) });
-  showMenu(e, items);
-}
+menu.addEventListener("click", e => {
+  const b = e.target.closest("[data-m]"); if (!b) return;
+  const id = menu._id, w = st[id], [a, k, v] = b.dataset.m.split(":");
+  if (a === "look") { look(w)[k === "float" ? "floating" : k] = +v; renderPeek(w, true); layout(); widgetMenu(id); }
+  else if (a === "move") { hideMenu(); moveTo(id, k); }
+  else if (a === "flag") { w.flags[k] = !w.flags[k]; if (k === "open") { if (w.flags.open) { open(id); w.pinned = true; } else close(id); } widgetMenu(id); }
+  else if (a === "hide") { hideMenu(); if (isOpen(w)) close(id); places[w.place] = places[w.place].filter(x => x !== id); w.place = "off"; w.shown.to = 0; layout(); }
+  else if (a === "edit") { hideMenu(); enterEdit(); }
+});
 
-/* the launcher (launcher.rs): a search, pins, the power ones */
+/* the launcher (launcher.rs) */
 const launch = $("#launch");
 const APPS = [
-  { id: "settings", name: "Settings", ic: "gear" }, { id: "files", name: "File Explorer", ic: "folder" },
-  { id: "term", name: "Terminal", ic: "term" }, { id: "taskmgr", name: "Task Manager", ic: "pulse" },
+  { id: "settings", name: "Settings", ic: "gear" }, { id: "files", name: "File Explorer", ic: "folder", bg: "#d99a2b" },
+  { id: "term", name: "Terminal", ic: "term", bg: "#2b2d38" }, { id: "taskmgr", name: "Task Manager", ic: "pulse" },
   { id: "night", name: "Night Light", ic: "contrast" }, { id: "allwin", name: "All Windows", ic: "grid" },
   { id: "music", name: "Music", ic: "music", bg: "#e87a7a" }, { id: "notepad", name: "Read Me", ic: "note", bg: "#3d8bd6" },
   { id: "browser", name: "Browser", ic: "globe", bg: "#3d6fd6" }, { id: "plugins", name: "NADI Plugins", ic: "store", bg: "#2f8f5c" },
-  { id: "games", name: "Games", ic: "gamepad", bg: "#4a3aa8" }, { id: "photos", name: "Photos", ic: "photo", bg: "#7a5ae8" },
+  { id: "gamesapp", name: "Games", ic: "gamepad", bg: "#4a3aa8" }, { id: "photos", name: "Photos", ic: "photo", bg: "#7a5ae8" },
   { id: "mail", name: "Mail", ic: "mail", bg: "#2f8f86" }, { id: "calc", name: "Calculator", ic: "calc", bg: "#4a4d5c" },
   { id: "paint", name: "Paint", ic: "paint", bg: "#c4508a" },
 ];
-const PINS = ["settings", "files", "term", "taskmgr", "night", "allwin", "music", "notepad", "browser", "plugins", "games", "photos"];
+const PINS = ["settings", "files", "term", "taskmgr", "night", "allwin", "music", "notepad", "browser", "plugins", "gamesapp", "photos"];
 const POWER = [{ id: "lock", name: "Lock", ic: "lock" }, { id: "sleep", name: "Sleep", ic: "moon" }, { id: "restart", name: "Restart", ic: "restart", red: 1 }, { id: "shutdown", name: "Shut Down", ic: "power", red: 1 }];
 const tile = a => `<span class="tile36" style="${a.bg ? "background:" + a.bg : ""}">${ic(a.ic, 16)}</span>`;
 function toggleLauncher() { launch.classList.contains("show") ? hideLauncher() : showLauncher(); }
 function showLauncher() {
-  closeAll(); hideTip();
+  closeAll(); hideTip(); hideMenu();
   launch.innerHTML = `<div class="search">${ic("search", 15)}<input id="q" autocomplete="off" spellcheck="false"><button class="all" data-act="allapps" data-tip="All Apps">${ic("grid", 13)}</button></div><div id="lres"></div><div class="foot">${POWER.map(p => `<button class="${p.red ? "red" : ""}" data-act="power" data-v="${p.id}" data-tip="${p.name}">${ic(p.ic, 16)}</button>`).join("")}</div>`;
   showPins();
   placeLauncher();
@@ -1053,16 +1316,13 @@ function showLauncher() {
   q.addEventListener("input", () => search(q.value));
   q.addEventListener("keydown", e => { if (e.key === "Escape") hideLauncher(); if (e.key === "Enter") { const f = $("#lres [data-act]"); f && f.click(); } });
 }
-/* (out of the Apps widget, on the side away from its edge; its foot nearest it) */
 function placeLauncher() {
   const a = st.apps, lw = 460, lh = launch.offsetHeight;
-  const sh = { x: a.rest.x.to, y: a.rest.y.to, w: a.rest.w.to, h: a.rest.h.to };
-  let x = clamp(sh.x + sh.w / 2 - lw / 2, 10, SW - lw - 10), y;
-  if (a.edge === "bottom") y = sh.y - 10 - lh;
-  else if (a.edge === "top") y = sh.y + sh.h + 10;
-  else { y = clamp(sh.y + sh.h / 2 - lh / 2, 10, SH - TB - lh - 10); x = a.edge === "left" ? sh.x + sh.w + 10 : sh.x - 10 - lw; }
-  launch.style.left = x + "px"; launch.style.top = Math.max(10, y) + "px";
-  launch.style.transformOrigin = a.edge === "bottom" ? "50% 100%" : a.edge === "top" ? "50% 0" : a.edge === "left" ? "0 50%" : "100% 50%";
+  const s = { x: a.rest.x.to, y: a.rest.y.to, w: a.rest.w.to, h: a.rest.h.to }, e = edgeOf(a.place);
+  let x = clamp(s.x + s.w / 2 - lw / 2, 10, SW - lw - 10), y = e === "bottom" ? s.y - 6 - lh : e === "top" ? s.y + s.h + 6 : clamp(s.y + s.h / 2 - lh / 2, 10, SH - lh - 10);
+  if (a.place === "left") x = s.x + s.w + 6; else if (a.place === "right") x = s.x - 6 - lw;
+  launch.style.left = x + "px"; launch.style.top = clamp(y, 10, SH - lh - 10) + "px";
+  launch.style.transformOrigin = `${a.place.endsWith("left") ? "0" : a.place.endsWith("right") ? "100%" : "50%"} ${e === "bottom" ? "100%" : e === "top" ? "0" : "50%"}`;
 }
 function showPins() { $("#lres").innerHTML = `<div class="pins">${PINS.map(id => APPS.find(a => a.id === id)).map(a => `<button class="pin" data-act="app" data-v="${a.id}" data-tip="${a.name}">${tile(a)}<span>${a.name}</span></button>`).join("")}</div>`; }
 function search(q) {
@@ -1084,22 +1344,24 @@ const wins = $("#wins");
 let z = 10;
 const openWins = {};
 const WINS = {
-  music: { title: "Music", ic: "music", w: 420, h: 480, body: () => musicWin() },
-  notepad: { title: "Read Me", ic: "note", w: 440, h: 470, body: () => readme() },
-  plugins: { title: "NADI Plugins", ic: "store", w: 520, h: 520, body: () => pluginsWin() },
+  music: { title: "Music", w: 420, h: 480, body: () => musicWin() },
+  notepad: { title: "Read Me", w: 440, h: 590, body: () => readme() },
+  plugins: { title: "NADI Plugins", w: 520, h: 520, body: () => pluginsWin() },
+  browser: { title: "Pretend Pages", w: 640, h: 420, body: () => `<div class="pretend"><span class="ib" style="background:#3d6fd6">${ic("globe", 30)}</span><span>A pretend browser, on a pretend PC.</span></div>` },
 };
 function openApp(id) {
   hideLauncher();
+  if (id === "gamesapp") { open("games"); if (st.games) st.games.pinned = true; return; }
   if (openWins[id]) return focusWin(id, true);
   const a = APPS.find(x => x.id === id);
-  const def = WINS[id] || { title: a.name, ic: a.ic, w: 420, h: 300, body: () => `<div class="pretend"><span class="ib" style="background:${a.bg || "#2b2d38"}">${ic(a.ic, 30)}</span><span>A pretend app, on a pretend PC.</span></div>` };
+  const def = WINS[id] || { title: a.name, w: 420, h: 300, body: () => `<div class="pretend"><span class="ib" style="background:${a.bg || "#2b2d38"}">${ic(a.ic, 30)}</span><span>A pretend app, on a pretend PC.</span></div>` };
   const el = document.createElement("div");
   el.className = "win gone";
   const n = Object.keys(openWins).length;
-  const w = Math.min(def.w, SW - 40), h = Math.min(def.h, SH - TB - 70);
-  const x = clamp((SW - w) / 2 + (n % 4) * 28 - 40, 10, SW - w - 10), y = clamp((SH - TB - h) / 2 + (n % 4) * 24 - 20, 44, SH - TB - h - 10);
+  const w = Math.min(def.w, SW - 120), h = Math.min(def.h, SH - 140);
+  const x = clamp((SW - w) / 2 + (n % 4) * 28 - 40, 60, SW - w - 60), y = clamp((SH - h) / 2 + (n % 4) * 24 - 40, 50, SH - h - 70);
   el.style.cssText = `left:${x}px;top:${y}px;width:${w}px;height:${h}px`;
-  el.innerHTML = `<div class="wbar">${ic(def.ic, 15)}<span>${def.title}</span><span class="sp"></span><button data-w="min">${ic("minus", 13)}</button><button data-w="max">${ic("square", 12)}</button><button class="cl" data-w="close">${ic("x", 13)}</button></div><div class="wbody">${def.body()}</div>`;
+  el.innerHTML = `<div class="wbar">${ic(a.ic, 15)}<span>${def.title}</span><span class="sp"></span><button data-w="min">${ic("minus", 13)}</button><button data-w="max">${ic("square", 12)}</button><button class="cl" data-w="close">${ic("x", 13)}</button></div><div class="wbody">${def.body()}</div>`;
   wins.append(el);
   openWins[id] = { el, def, min: false };
   el.addEventListener("pointerdown", () => focusWin(id));
@@ -1107,7 +1369,7 @@ function openApp(id) {
   bar.addEventListener("pointerdown", e => {
     if (e.target.closest("button")) return;
     const p = pt(e), r = { x: el.offsetLeft, y: el.offsetTop };
-    const mv = ev => { const q = pt(ev); el.style.left = clamp(r.x + q.x - p.x, -w + 80, SW - 80) + "px"; el.style.top = clamp(r.y + q.y - p.y, 0, SH - TB - 34) + "px"; };
+    const mv = ev => { const q = pt(ev); el.style.left = clamp(r.x + q.x - p.x, -w + 80, SW - 80) + "px"; el.style.top = clamp(r.y + q.y - p.y, 0, SH - 34) + "px"; };
     const up = () => { removeEventListener("pointermove", mv); removeEventListener("pointerup", up); };
     addEventListener("pointermove", mv); addEventListener("pointerup", up);
   });
@@ -1115,24 +1377,25 @@ function openApp(id) {
   bar.addEventListener("click", e => { const b = e.target.closest("[data-w]"); if (!b) return; if (b.dataset.w === "close") closeWin(id); else if (b.dataset.w === "min") minWin(id); else maxWin(id); });
   requestAnimationFrame(() => el.classList.remove("gone"));
   focusWin(id);
-  taskbar();
 }
-function focusWin(id, restore) { const w = openWins[id]; if (!w) return; if (restore && w.min) { w.min = false; w.el.classList.remove("gone"); } w.el.style.zIndex = ++z; taskbar(); }
-function minWin(id) { const w = openWins[id]; w.min = true; w.el.classList.add("gone"); taskbar(); }
+function focusWin(id, restore) { const w = openWins[id]; if (!w) return; if (restore && w.min) { w.min = false; w.el.classList.remove("gone"); } w.el.style.zIndex = ++z; dockChanged(); }
+function minWin(id) { const w = openWins[id]; w.min = true; w.el.classList.add("gone"); dockChanged(); }
 function maxWin(id) {
   const w = openWins[id], el = w.el;
   if (w.max) { el.style.cssText = w.max; w.max = null; }
-  else { w.max = el.style.cssText; el.style.left = "0px"; el.style.top = "0px"; el.style.width = SW + "px"; el.style.height = SH - TB + "px"; el.style.zIndex = ++z; }
+  else { w.max = el.style.cssText; el.style.left = "0px"; el.style.top = "0px"; el.style.width = SW + "px"; el.style.height = SH + "px"; el.style.zIndex = ++z; }
 }
-function closeWin(id) { const w = openWins[id]; if (!w) return; w.el.classList.add("gone"); delete openWins[id]; setTimeout(() => w.el.remove(), 250); taskbar(); }
+function closeWin(id) { const w = openWins[id]; if (!w) return; w.el.classList.add("gone"); delete openWins[id]; setTimeout(() => w.el.remove(), 250); dockChanged(); }
 function frontWin() { let best = null, bz = -1; for (const k in openWins) { const w = openWins[k]; if (!w.min && +w.el.style.zIndex > bz) { bz = +w.el.style.zIndex; best = k; } } return best; }
 function rerenderWin(id) { const w = openWins[id]; if (w) { $(".wbody", w.el).innerHTML = w.def.body(); inStep(w.el); } }
+function dockChanged() { if (st.dock && renderPeek(st.dock)) layout(); }
 function readme() {
   const li = (i, t) => `<li>${ic(i, 16)}<span>${t}</span></li>`;
-  return `<div class="readme"><h1>NADI</h1><div class="sub">Not Another Dynamic Island. Widgets that live on the edges of your Windows screen, like the ones around this window. This is a pretend PC: everything on it works.</div><ul>
+  return `<div class="readme"><h1>NADI</h1><div class="sub">Not Another Dynamic Island. Widgets that live on the edges of your Windows screen, merged into them or floating just off them, like the ones round this window. This is a pretend PC: everything on it works.</div><ul>
   ${li("eye", "Hover over a widget to open it. Press it to keep it open.")}
-  ${li("arrow", "Drag a widget to another edge, or right-click it.")}
-  ${li("grid", "Press Apps for the launcher: pins, search, power.")}
+  ${li("grid", "Hold or drag a widget to move it: to an edge, a corner, or the tray to hide it.")}
+  ${li("arrow", "Right-click a widget: merged or floating, large or small, where it goes.")}
+  ${li("desktop", "It can take the taskbar's place: a dock, a tray, a clock, and Apps for the launcher.")}
   ${li("spark", "Claude Code sessions show up, and ask for you when they need you.")}
   ${li("store", "Plugins add more. They are small Luau scripts, run sandboxed.")}
   </ul><div class="dim" style="margin-bottom:10px">Windows 10 and 11. Alpha. Under 1% of the CPU at rest.</div><div class="get"><a class="sb acc" href="${GET}" data-act="go" data-v="${GET}">${ic("get", 15)}Get NADI</a><a class="sb gh2" href="${REPO}" data-act="go" data-v="${REPO}">${ic("code", 15)}GitHub</a></div></div>`;
@@ -1142,56 +1405,26 @@ function musicWin() {
   return `<div class="player"><div class="cover" style="width:170px;height:170px;background:linear-gradient(135deg,${t.a},${t.b} 60%,${t.c})">${ic("music", 30)}</div><div style="text-align:center"><div class="out" style="font-size:19px;font-weight:600">${t.title}</div><div class="dim" style="margin-top:3px">${t.artist}</div></div><div class="seek"><div class="bar"><i id="mbar" style="width:${(music.t / t.len * 100).toFixed(2)}%"></i></div><div class="tm tab"><span id="mtime">${mmss(music.t)}</span><span>${mmss(t.len)}</span></div></div><div class="ctl"><button class="ghost" data-act="prev">${ic("prev", 20)}</button><button class="main" data-act="play">${ic(music.playing ? "pause" : "play", 22)}</button><button class="ghost" data-act="next">${ic("next", 20)}</button></div><div class="trk">${TRACKS.map((x, i) => `<button class="row go${i === music.i ? " now" : ""}" data-act="track" data-v="${i}"><span class="tx">${x.title}<span>${x.artist}</span></span><span class="dim tab">${mmss(x.len)}</span></button>`).join("")}</div></div>`;
 }
 const PLUGINS = [
-  { id: "now-playing", name: "Now Playing", d: "What is playing, with play, skip and seek, and bars that dance with the sound.", ic: "music", bg: "#e87a7a", on: true },
-  { id: "ics-calendar", name: "Calendar", d: "The events of a calendar link (Google, Outlook, iCloud), the time, and a month to look through.", ic: "cal", bg: "#2f8f5c", on: true },
-  { id: "claude", name: "Claude", d: "Your Claude Code sessions as they run, and a banner when one needs you.", ic: "spark", bg: "#b8643a", on: true },
-  { id: "downloads", name: "Downloads", d: "What your browsers, Steam and qBittorrent are downloading right now.", ic: "get", bg: "#2f7fa8", on: true },
-  { id: "eyes", name: "Eyes", d: "Two eyes that blink, look at your cursor, and glance around when it rests.", ic: "eye", bg: "#4a4d5c", on: true },
-  { id: "weather", name: "Weather", d: "The weather where you are, from open-meteo.com.", ic: "sun", bg: "#c48a1e", add: true },
-  { id: "battery", name: "Battery", d: "How full the battery is, as a liquid that fills, and a banner when it runs low.", ic: "battery", bg: "#2f8f5c", add: true },
-  { id: "work", name: "Work", d: "Time coded, as WakaTime counts it, kept on this PC: by project, language and file.", ic: "code", bg: "#3d6fd6" },
+  { id: "now-playing", w: "song", name: "Now Playing", d: "What is playing, with play, skip and seek, and bars that dance with the sound.", ic: "music", bg: "#e87a7a" },
+  { id: "ics-calendar", w: "calendar", name: "Calendar", d: "The events of a calendar link (Google, Outlook, iCloud), the time, and a month to look through.", ic: "cal", bg: "#2f8f5c" },
+  { id: "claude", w: "claude", name: "Claude", d: "Your Claude Code sessions as they run, and a banner when one needs you.", ic: "spark", bg: "#b8643a" },
+  { id: "downloads", w: "downloads", name: "Downloads", d: "What your browsers, Steam and qBittorrent are downloading right now.", ic: "get", bg: "#2f7fa8" },
+  { id: "toasts", w: "inbox", name: "Notification Mirror", d: "The notifications of other apps as banners; pressing one opens the app.", ic: "bell", bg: "#4a4d5c" },
+  { id: "system-meters", w: "meters", name: "System Meters", d: "How busy the CPU, the memory and the graphics card are.", ic: "pulse", bg: "#4a4d5c" },
+  { id: "work", w: "work", name: "Work", d: "Time coded, as WakaTime counts it, kept on this PC: by project, language and file.", ic: "code", bg: "#3d6fd6" },
+  { id: "steam", w: "games", name: "Steam", d: "Your installed games, the last played first: press one to play it.", ic: "gamepad", bg: "#4a3aa8" },
+  { id: "weather", w: "weather", name: "Weather", d: "The weather where you are, from open-meteo.com.", ic: "sun", bg: "#c48a1e" },
+  { id: "battery", w: "battery", name: "Battery", d: "How full the battery is, as a liquid that fills, and a banner when it runs low.", ic: "battery", bg: "#2f8f5c" },
+  { id: "eyes", w: "eyes", name: "Eyes", d: "Two eyes that blink, look at your cursor, and glance around when it rests.", ic: "eye", bg: "#4a4d5c" },
   { id: "page-reader", name: "NADI Chrome", d: "What you are reading, as a card made for its kind: walkthroughs and recipes step by step.", ic: "globe", bg: "#3d6fd6" },
-  { id: "games", name: "Games", d: "The game you play, with its wiki a search away, and how full your controller is.", ic: "gamepad", bg: "#4a3aa8" },
   { id: "speech", name: "Speech", d: "Writes down what is said, by you and in what the computer plays, and tells the voices apart.", ic: "volume", bg: "#7a5ae8" },
-  { id: "picture", name: "Picture", d: "Pictures you paste into it, a map or a guide, to zoom and pan; popped out, over a game.", ic: "photo", bg: "#c4508a" },
 ];
 function pluginsWin() {
   return `<div style="padding:6px 6px 10px">${PLUGINS.map(p => {
-    const added = p.on || st[p.id];
-    const btn = added ? `<span class="added">${ic("check", 16)}</span>` : p.add ? `<button class="sb acc" data-act="addplug" data-v="${p.id}">Add</button>` : "";
+    const shown = p.w && st[p.w] && st[p.w].place !== "off";
+    const btn = shown ? `<span class="added">${ic("check", 16)}</span>` : p.w ? `<button class="sb acc" data-act="addplug" data-v="${p.w}">Add</button>` : "";
     return `<div class="plug"><span class="ib" style="background:${p.bg}">${ic(p.ic, 18)}</span><div class="tx"><div class="tt">${p.name}</div><div class="ts">${p.d}</div></div>${btn}</div>`;
   }).join("")}<div class="dim" style="padding:8px 14px;font-size:12px">On the real thing, plugins install from GitHub, in Settings.</div></div>`;
-}
-function addWidget(id) {
-  if (st[id]) return;
-  const edge = id === "battery" ? "bottom" : "top";
-  edges[edge].push(id);
-  const w = make(id, edge);
-  layout();
-  w.shown.to = 1; kick();
-  rerenderWin("plugins");
-}
-function removeWidget(id) {
-  const w = st[id]; if (!w) return;
-  if (isOpen(w)) close(id);
-  w.shown.to = 0; kick();
-  setTimeout(() => { edges[w.edge] = edges[w.edge].filter(k => k !== id); w.wc.remove(); delete st[id]; layout(); rerenderWin("plugins"); }, 450);
-}
-
-/* the taskbar */
-const TBAPPS = ["start", "music", "notepad", "files", "browser", "plugins"];
-const TBC = { music: "#e87a7a", notepad: "#3d8bd6", files: "#d99a2b", browser: "#3d6fd6", plugins: "#2f8f5c" };
-function taskbar() {
-  const f = frontWin();
-  $("#tbapps").innerHTML = TBAPPS.map(id => {
-    if (id === "start") return `<button class="tk" data-act="start" data-tip="Apps"><span class="ib" style="color:#4cc2ff">${ic("win", 18)}</span></button>`;
-    const a = APPS.find(x => x.id === id);
-    return `<button class="tk${openWins[id] ? " run" : ""}${f === id ? " front" : ""}" data-act="tb" data-v="${id}" data-tip="${a.name}"><span class="ib" style="background:${TBC[id]}">${ic(a.ic, 15)}</span></button>`;
-  }).join("");
-}
-function tray() {
-  const d = new Date();
-  $("#tray").innerHTML = `<button class="tt" data-act="openw" data-v="net" data-tip="${net.air ? "Airplane Mode" : net.wifi ? "Home" : "Offline"}">${net.air ? ic("airplane", 15) : ic("wifi", 15)}${ic("volume", 15)}</button><button class="tt" data-act="openw" data-v="calendar"><span id="clock" class="tab">${span(d)}<br>${d.getMonth() + 1}/${d.getDate()}/${d.getFullYear()}</span></button>`;
 }
 
 /* desktop icons */
@@ -1204,48 +1437,6 @@ const DESK = [
 ];
 $("#icons").innerHTML = DESK.map((d, i) => `<button class="dk" data-act="desk" data-v="${i}"><span class="ib" style="background:${d.bg};color:${d.fg || "#fff"}">${ic(d.ic, 22)}</span>${d.label}</button>`).join("");
 
-/* what is pressed */
-function refresh(id) {
-  const w = st[id];
-  if (!w) return;
-  let re = renderPeek(w);
-  if (isOpen(w) && !w.ban && renderBody(w)) re = true;
-  if (re) layout();
-}
-function act(a, el) {
-  const v = el.dataset.v;
-  switch (a) {
-    case "play": music.playing = !music.playing; syncMusic(); break;
-    case "next": music.i = (music.i + 1) % TRACKS.length; music.t = 0; syncMusic(); break;
-    case "prev": if (music.t > 4) music.t = 0; else { music.i = (music.i + TRACKS.length - 1) % TRACKS.length; music.t = 0; } syncMusic(); break;
-    case "track": music.i = +v; music.t = 0; music.playing = true; syncMusic(); break;
-    case "day": cal.sel = +v; refresh("calendar"); break;
-    case "week": cal.sel += +v; refresh("calendar"); break;
-    case "join": nudge(el); break;
-    case "wifi": net.wifi = net.air ? true : !net.wifi; net.air = false; if (!net.wifi) net.hot = false; syncNet(); break;
-    case "air": net.air = !net.air; if (net.air) net.hot = false; syncNet(); break;
-    case "hot": net.hot = !net.hot; syncNet(); break;
-    case "copy": { const c = $("#copied"); if (c) { c.textContent = "Copied"; setTimeout(() => refresh("net"), 1200); } break; }
-    case "joinwifi": nudge(el); break;
-    case "drive": openApp("files"); break;
-    case "clear": dl.done = dl.done.filter(d => d.name !== v); refresh("downloads"); break;
-    case "allow": claudeAnswer(true); break;
-    case "deny": claudeAnswer(false); break;
-    case "app": openApp(v); break;
-    case "allapps": allApps(); break;
-    case "power": hideLauncher(); power(v); break;
-    case "start": toggleLauncher(); break;
-    case "tb": { const w = openWins[v]; if (!w) openApp(v); else if (w.min || frontWin() !== v) focusWin(v, true); else minWin(v); break; }
-    case "openw": if (st[v]) { open(v); st[v].pinned = true; } break;
-    case "desk": DESK[+v].run(); break;
-    case "addplug": addWidget(v); break;
-    case "go": go(v); break;
-  }
-}
-function nudge(el) { el.animate([{ transform: "scale(.95)" }, { transform: "none" }], { duration: 260, easing: "cubic-bezier(.3,1.4,.5,1)" }); }
-function syncMusic() { refresh("song"); rerenderWin("music"); }
-function syncNet() { refresh("net"); tray(); }
-scr.addEventListener("click", e => { const b = e.target.closest("[data-act]"); if (b && scr.contains(b)) { e.preventDefault(); e.stopPropagation(); act(b.dataset.act, b); } });
 /* a link out: a new tab; where new tabs are not allowed (a preview, a frame), this one goes there instead */
 function go(url) {
   let w = null;
@@ -1254,12 +1445,57 @@ function go(url) {
   try { window.top.location.href = url; } catch (e) { location.href = url; }
 }
 
+/* what is pressed */
+function refresh(id) {
+  const w = st[id];
+  if (!w || w.place === "off") return;
+  let re = renderPeek(w);
+  if (isOpen(w) && !w.ban && renderBody(w)) re = true;
+  if (re) layout();
+}
+function act(a, el, e) {
+  const v = el.dataset.v;
+  switch (a) {
+    case "play": music.playing = !music.playing; syncMusic(); break;
+    case "next": music.i = (music.i + 1) % TRACKS.length; music.t = 0; syncMusic(); break;
+    case "prev": if (music.t > 4) music.t = 0; else { music.i = (music.i + TRACKS.length - 1) % TRACKS.length; music.t = 0; } syncMusic(); break;
+    case "track": music.i = +v; music.t = 0; music.playing = true; syncMusic(); break;
+    case "day": cal.sel = +v; refresh("calendar"); break;
+    case "week": cal.sel += +v; refresh("calendar"); break;
+    case "nudge": case "game": nudge(el); break;
+    case "wifi": net.wifi = net.air ? true : !net.wifi; net.air = false; if (!net.wifi) net.hot = false; refresh("net"); break;
+    case "air": net.air = !net.air; if (net.air) net.hot = false; refresh("net"); break;
+    case "hot": net.hot = !net.hot; refresh("net"); break;
+    case "copy": { const c = $("#copied"); if (c) { c.textContent = "Copied"; setTimeout(() => refresh("net"), 1200); } break; }
+    case "drive": openApp("files"); break;
+    case "clear": dl.done = dl.done.filter(d => d.name !== v); refresh("downloads"); break;
+    case "allow": claudeAnswer(true); break;
+    case "deny": claudeAnswer(false); break;
+    case "app": openApp(v); break;
+    case "dock": { const w = openWins[v]; if (!w) openApp(v); else if (w.min || frontWin() !== v) focusWin(v, true); else minWin(v); break; }
+    case "allapps": allApps(); break;
+    case "power": hideLauncher(); power(v); break;
+    case "desk": DESK[+v].run(); break;
+    case "addplug": moveTo(v, v === "battery" ? "bottom-right" : v === "eyes" ? "top" : "top"); rerenderWin("plugins"); break;
+    case "go": go(v); break;
+    default:
+      if (a.startsWith("vol:") && e) {
+        const r = el.getBoundingClientRect(), f = clamp((e.clientX - r.left) / r.width, 0, 1), k = a.slice(4);
+        if (k === "m") vol.master = f; else vol.apps[+k].v = f;
+        refresh("quick");
+      }
+  }
+}
+function nudge(el) { el.animate([{ transform: "scale(.95)" }, { transform: "none" }], { duration: 260, easing: "cubic-bezier(.3,1.4,.5,1)" }); }
+function syncMusic() { refresh("song"); rerenderWin("music"); }
+scr.addEventListener("click", e => { const b = e.target.closest("[data-act]"); if (b && scr.contains(b)) { e.preventDefault(); e.stopPropagation(); act(b.dataset.act, b, e); } });
+
 /* power: lock, sleep, restart, shut down (asked first) */
 const modal = $("#modal"), over = $("#over");
 function ask(title, text, label, icn, run) {
-  modal.innerHTML = `<div class="dim2"></div><div class="card2"><div class="mi">${ic(icn, 22)}</div><div class="mt">${title}</div><div class="ms">${text}</div><div class="mb"><button data-m="no">Cancel</button><button class="red" data-m="yes">${label}</button></div></div>`;
+  modal.innerHTML = `<div class="dim2"></div><div class="card2"><div class="mi">${ic(icn, 22)}</div><div class="mt">${title}</div><div class="ms">${text}</div><div class="mb"><button data-m2="no">Cancel</button><button class="red" data-m2="yes">${label}</button></div></div>`;
   modal.classList.add("show");
-  modal.onclick = e => { const b = e.target.closest("[data-m]"); if (!b && e.target.closest(".card2")) return; modal.classList.remove("show"); if (b && b.dataset.m === "yes") run(); };
+  modal.onclick = e => { const b = e.target.closest("[data-m2]"); if (!b && e.target.closest(".card2")) return; modal.classList.remove("show"); if (b && b.dataset.m2 === "yes") run(); };
 }
 function power(kind) {
   over.style.backgroundImage = "";
@@ -1286,9 +1522,8 @@ function goDark(back) {
     if (back) setTimeout(wake, 1600); else over.onclick = e => { if (e.target.closest("button")) wake(); };
   }, 400);
 }
-/* coming out: a wave, nearest the middle first (WAVE: the longest wait) */
 function comeOut() {
-  const ids = Object.keys(st);
+  const ids = Object.keys(st).filter(k => st[k].place !== "off");
   ids.forEach((k, i) => setTimeout(() => { st[k].shown.to = 1; kick(); }, 120 + i / Math.max(1, ids.length - 1) * WAVE * 1000 * 2.5));
 }
 
@@ -1297,7 +1532,7 @@ const tip = $("#tip");
 let tipT = 0, tipFor = null;
 function tipText(el) {
   if (el.dataset.tip) return el.dataset.tip;
-  for (const k in st) if (st[k].wc === el && !isOpen(st[k])) return W[k].tip();
+  for (const k in st) if (st[k].wc === el && !isOpen(st[k]) && !editing) return W[k].tip();
   return "";
 }
 scr.addEventListener("pointerover", e => {
@@ -1314,9 +1549,9 @@ scr.addEventListener("pointerover", e => {
     const x = (r.left - sr.left) / scale, y = (r.top - sr.top) / scale, w = r.width / scale, h = r.height / scale;
     const tw = tip.offsetWidth, th = tip.offsetHeight;
     let tx = clamp(x + w / 2 - tw / 2, 6, SW - tw - 6), ty = y + h + 10;
-    if (ty + th > SH - TB - 4) ty = y - th - 10;
-    if (x < 4 && h > w) { tx = x + w + 10; ty = clamp(y + h / 2 - th / 2, 6, SH - th - 6); }
-    if (x + w > SW - 4 && h > w) { tx = x - tw - 10; ty = clamp(y + h / 2 - th / 2, 6, SH - th - 6); }
+    if (ty + th > SH - 4) ty = y - th - 10;
+    if (x < 4 && h >= w) { tx = x + w + 10; ty = clamp(y + h / 2 - th / 2, 6, SH - th - 6); }
+    if (x + w > SW - 4 && h >= w) { tx = x - tw - 10; ty = clamp(y + h / 2 - th / 2, 6, SH - th - 6); }
     tip.style.left = tx + "px"; tip.style.top = ty + "px";
     tip.classList.add("show");
   }, 500);
@@ -1324,7 +1559,6 @@ scr.addEventListener("pointerover", e => {
 scr.addEventListener("pointerout", e => { if (!e.relatedTarget || !tipFor || !tipFor.contains(e.relatedTarget)) hideTip(); });
 function hideTip() { clearTimeout(tipT); tipFor = null; tip.classList.remove("show"); }
 
-/* the pointer: the eyes follow it; drags; a press elsewhere shuts what a press opened */
 addEventListener("pointermove", e => {
   moveDrag(e);
   const p = pt(e), sr = scr.getBoundingClientRect();
@@ -1340,19 +1574,21 @@ addEventListener("pointerup", endDrag);
 scr.addEventListener("pointerdown", e => {
   hideTip();
   if (!e.target.closest("#menu")) hideMenu();
-  if (!e.target.closest(".wc")) for (const k in st) if (isOpen(st[k]) && st[k].pinned) close(k);
-  if (!e.target.closest("#launch, [data-act=start], .wc")) hideLauncher();
+  if (!e.target.closest(".wc")) for (const k in st) if (isOpen(st[k]) && st[k].pinned && !st[k].flags.open) close(k);
+  if (!e.target.closest("#launch, .wc")) hideLauncher();
 });
 scr.addEventListener("contextmenu", e => {
   e.preventDefault();
-  if (e.target.closest(".wc, .win, #taskbar, #launch")) return;
-  showMenu(e, [
-    { icon: "get", label: "Get NADI", run: () => go(GET) },
-    { icon: "code", label: "GitHub", run: () => go(REPO) },
-    { icon: "note", label: "Read Me", run: () => openApp("notepad") },
-  ]);
+  if (e.target.closest(".wc, .win, #launch, #menu")) return;
+  // (elsewhere: the short menu)
+  hideTip(); hideLauncher();
+  const p = pt(e);
+  menu.className = "show mini";
+  menu.innerHTML = [["grid", "Edit Widgets", "edit"], ["get", "Get NADI", "get"], ["code", "GitHub", "gh"]].map(([i, l, k]) => `<button class="mrow" data-mini="${k}">${ic(i, 14)}${l}</button>`).join("");
+  menu.style.left = clamp(p.x, 8, SW - 178) + "px"; menu.style.top = clamp(p.y, 8, SH - menu.offsetHeight - 8) + "px";
 });
-addEventListener("keydown", e => { if (e.key === "Escape") { hideLauncher(); hideMenu(); closeAll(); modal.classList.remove("show"); } });
+menu.addEventListener("click", e => { const b = e.target.closest("[data-mini]"); if (!b) return; hideMenu(); const k = b.dataset.mini; if (k === "edit") enterEdit(); else if (k === "get") go(GET); else go(REPO); });
+addEventListener("keydown", e => { if (e.key === "Escape") { if (editing) leaveEdit(); hideLauncher(); hideMenu(); closeAll(); modal.classList.remove("show"); } });
 setInterval(() => { for (const eyes of nadiEl.querySelectorAll(".eyes")) { eyes.classList.add("blink"); setTimeout(() => eyes.classList.remove("blink"), 120); } }, 4300);
 
 /* time goes on: once a second */
@@ -1374,10 +1610,10 @@ function tick() {
     }
   }
   for (const d of drives) { d.r.push(Math.random() < (d.l === "C" ? .45 : .08) ? Math.random() : Math.random() * .03); d.r.shift(); }
+  for (const k in meters) { meters[k].push(clamp(meters[k].at(-1) + (Math.random() - .5) * .12, .05, .95)); meters[k].shift(); }
   net.down = clamp(net.down + (Math.random() - .5) * 4e6, 6e6, 32e6);
   net.up = clamp(net.up + (Math.random() - .5) * 6e5, 8e5, 4e6);
-  for (const k in st) refresh(k);
-  const c = $("#clock"); if (c) { const d = new Date(); c.innerHTML = `${span(d)}<br>${d.getMonth() + 1}/${d.getDate()}/${d.getFullYear()}`; }
+  if (!editing && !drag) for (const k in st) refresh(k);
 }
 
 /* the screen: the window's own size; on a phone, a 1280 by 760 one shrunk to fit */
@@ -1389,28 +1625,26 @@ function fit() {
   else { SW = innerWidth; SH = innerHeight; scale = 1; scr.style.transform = "none"; wrap.style.height = SH + "px"; }
   scr.style.width = SW + "px"; scr.style.height = SH + "px";
   DPR = Math.min(2, (window.devicePixelRatio || 1) * scale);
-  // (the liquid stops at the taskbar: nothing of it drawn over it)
-  cv.width = Math.round(SW * DPR); cv.height = Math.round((SH - TB) * DPR);
-  cv.style.width = SW + "px"; cv.style.height = SH - TB + "px";
-  if (!prog) for (const k in st) st[k].wc.classList.add("solid");
+  cv.width = Math.round(SW * DPR); cv.height = Math.round(SH * DPR);
+  cv.style.width = SW + "px"; cv.style.height = SH + "px";
   layout(true);
+  if (editing) renderTray();
 }
 addEventListener("resize", fit);
 
-/* start */
-for (const e in edges) for (const id of edges[e]) make(id, e);
-taskbar(); tray();
+/* start: the widgets come out of their edges, in a wave */
+for (const id of Object.keys(W)) make(id);
 fit();
-if (!prog) for (const k in st) st[k].wc.classList.add("solid");
 if (document.fonts) document.fonts.ready.then(() => { for (const k in st) renderPeek(st[k], true); layout(); });
 openApp("notepad");
 openApp("music");
-{ const w = openWins.notepad.el; w.style.left = Math.max(150, SW * .12) + "px"; w.style.top = Math.max(70, SH * .13) + "px"; }
-{ const w = openWins.music.el; w.style.left = clamp(SW * .56, 600, SW - 480) + "px"; w.style.top = Math.max(90, SH * .2) + "px"; }
+{ const w = openWins.notepad.el; w.style.left = Math.max(170, SW * .12) + "px"; w.style.top = Math.max(60, SH * .1) + "px"; }
+{ const w = openWins.music.el; w.style.left = clamp(SW * .56, 620, SW - 500) + "px"; w.style.top = Math.max(80, SH * .16) + "px"; }
 focusWin("notepad");
 setTimeout(comeOut, 400);
 setInterval(tick, 1000);
 setTimeout(claudeAsk, 14000);
+setTimeout(toast, 30000);
 </script>
 </body>
 </html>
