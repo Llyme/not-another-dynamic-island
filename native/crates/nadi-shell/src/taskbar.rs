@@ -87,23 +87,102 @@ pub fn hide(reserve: f32) {
     if list.iter().all(|h| unsafe { !IsWindowVisible(*h).as_bool() }) {
         return;
     }
-    let _ = std::fs::write(mark(), b"1");
+    note("hidden");
+    // (the taskbar made to hide itself first: then Explorer gives the screen back by itself and keeps it so. Setting the work area
+    // ourselves made Explorer take it back and show its taskbar again, every second, each time telling every window on the PC. Its
+    // state as it was is kept in the mark, and put back when it comes back, here, at the next start, or by the watchdog)
+    let first = !std::fs::read_to_string(mark()).is_ok_and(|t| t.starts_with("state="));
+    if let Some(bar) = list.first() {
+        let was = state(*bar);
+        if first {
+            let _ = std::fs::write(mark(), format!("state={was}"));
+        }
+        if was & ABS_AUTOHIDE == 0 {
+            set_state(*bar, was | ABS_AUTOHIDE);
+            note("made to hide itself");
+        }
+    } else if first {
+        let _ = std::fs::write(mark(), b"1");
+    }
     unsafe {
         for h in &list {
             let _ = ShowWindow(*h, SW_HIDE);
         }
-        // every monitor's work area: the whole monitor
-        for m in crate::overlay::monitors() {
+    }
+    // (the dock's room at the bottom: the work area set only when it is not so, now and then at most, off this thread: setting it
+    // waits on every window on the PC)
+    let want: Vec<RECT> = crate::overlay::monitors()
+        .iter()
+        .filter_map(|m| {
             let mut r = m.rect;
             r.bottom -= (reserve * m.scale).round() as i32;
+            (m.work != r).then_some(r)
+        })
+        .collect();
+    if want.is_empty() {
+        return;
+    }
+    let now = std::time::Instant::now();
+    let last = WORK_SET.with(|c| c.get());
+    if last.is_some_and(|t| now.duration_since(t).as_secs() < 30) {
+        return;
+    }
+    WORK_SET.with(|c| c.set(Some(now)));
+    note("work area set");
+    std::thread::spawn(move || unsafe {
+        for mut r in want {
             let _ = SystemParametersInfoW(SPI_SETWORKAREA, 0, Some(&mut r as *mut RECT as *mut _), SPIF_SENDCHANGE);
         }
+    });
+}
+
+thread_local! {
+    /// when the work area was last set (not again and again)
+    static WORK_SET: std::cell::Cell<Option<std::time::Instant>> = const { std::cell::Cell::new(None) };
+}
+
+const ABM_GETSTATE: u32 = 4;
+const ABM_SETSTATE: u32 = 10;
+const ABS_AUTOHIDE: u32 = 1;
+
+/// The taskbar's state (hides itself, always on top), as Explorer has it.
+fn state(bar: HWND) -> u32 {
+    unsafe {
+        let mut d = windows::Win32::UI::Shell::APPBARDATA { cbSize: std::mem::size_of::<windows::Win32::UI::Shell::APPBARDATA>() as u32, hWnd: bar, ..Default::default() };
+        windows::Win32::UI::Shell::SHAppBarMessage(ABM_GETSTATE, &mut d) as u32
+    }
+}
+
+fn set_state(bar: HWND, st: u32) {
+    unsafe {
+        let mut d = windows::Win32::UI::Shell::APPBARDATA { cbSize: std::mem::size_of::<windows::Win32::UI::Shell::APPBARDATA>() as u32, hWnd: bar, lParam: LPARAM(st as isize), ..Default::default() };
+        windows::Win32::UI::Shell::SHAppBarMessage(ABM_SETSTATE, &mut d);
+    }
+}
+
+/// (for finding out what goes on: each time it is hidden again, and each time the work area is set, a line in taskbar.log; kept small)
+fn note(what: &str) {
+    let Some(dir) = nadi_core::paths::data_dir() else { return };
+    let f = dir.join("taskbar.log");
+    if std::fs::metadata(&f).is_ok_and(|m| m.len() > 64 * 1024) {
+        let _ = std::fs::remove_file(&f);
+    }
+    use std::io::Write;
+    if let Ok(mut o) = std::fs::OpenOptions::new().create(true).append(true).open(&f) {
+        let _ = writeln!(o, "{} {what}", chrono::Local::now().format("%H:%M:%S%.3f"));
     }
 }
 
 /// Show it, and give the work areas back (each monitor's, less the taskbar on it, on whichever edge it stands).
 pub fn restore() {
     let list = bars();
+    // (its state as it was before NADI hid it: back to staying, if it stayed)
+    if let (Some(bar), Some(was)) = (list.first(), std::fs::read_to_string(mark()).ok().and_then(|t| t.trim().strip_prefix("state=").and_then(|v| v.parse::<u32>().ok()))) {
+        if was & ABS_AUTOHIDE == 0 && state(*bar) & ABS_AUTOHIDE != 0 {
+            set_state(*bar, was);
+            note("made to stay again");
+        }
+    }
     unsafe {
         for h in &list {
             let _ = ShowWindow(*h, SW_SHOWNA);
