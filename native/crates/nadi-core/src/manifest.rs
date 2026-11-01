@@ -15,6 +15,8 @@ pub struct Permissions {
     pub audio: bool,
     /// how full the battery is, the charger, the time left, the wear
     pub battery: bool,
+    /// ... and how much of it each app used (NADI's own count)
+    pub app_power: bool,
     /// the island listens for it, to draw the sound as bars on its widgets (it is told nothing of the sound)
     pub viz: bool,
     /// which programs have a window, which is in front
@@ -277,10 +279,11 @@ pub fn permission_words(p: &Permissions) -> Vec<(String, String, String)> {
     for h in &p.net {
         out.push(("network".into(), h.clone(), "Reach this address on the internet.".into()));
     }
-    let flags: [(bool, &str, &str); 25] = [
+    let flags: [(bool, &str, &str); 26] = [
         (p.audio, "audio", "Hear what is playing, as a level and bands. Never the sound itself."),
         (p.viz, "sound bars", "Show what is playing as bars that move with the sound."),
         (p.battery, "battery", "See how full the battery is, the charger, the time left and the wear."),
+        (p.app_power, "app power", "See how much of the battery each app used."),
         (p.processes, "processes", "See which programs have a window, and which one is in front."),
         (p.titles, "titles", "See the titles of the windows."),
         (p.calendar, "calendar", "See the events of your calendar."),

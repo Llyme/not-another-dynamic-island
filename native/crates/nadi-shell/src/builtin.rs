@@ -249,6 +249,8 @@ pub struct DockApp {
     pub image: String,
     pub pinned: bool,
     pub windows: Vec<AppWindow>,
+    /// what is opened for it (and what it is pinned as): the program, or a shortcut pinned as itself
+    pub open: String,
 }
 
 /// What a press asks of the frame (beyond what is done here).
@@ -377,10 +379,20 @@ impl Builtins {
     pub fn dock_apps(&self, cfg: &Config) -> Vec<DockApp> {
         let mut out: Vec<DockApp> = Vec::new();
         for p in &cfg.pinned {
-            let key = p.id.to_lowercase();
+            // (a shortcut: its windows are its program's; opened, the shortcut, with what it starts with)
+            let key = if p.id.to_lowercase().ends_with(".lnk") { crate::explorer::shortcut_program_kept(&p.id).unwrap_or_else(|| p.id.clone()).to_lowercase() } else { p.id.to_lowercase() };
             let windows: Vec<AppWindow> = self.windows.iter().filter(|w| w.exe == key).cloned().collect();
-            let image = if p.id.contains(":\\") { format!("exe:{}", p.id) } else { format!("app:{}", p.id) };
-            out.push(DockApp { key, name: p.name.clone(), image, pinned: true, windows });
+            // (a program: its icon; a file or a folder pinned from File Explorer: the icon Explorer shows for it)
+            let image = if !p.icon.is_empty() {
+                format!("img:{}", p.icon)
+            } else if p.id.to_lowercase().ends_with(".exe") {
+                format!("exe:{}", p.id)
+            } else if p.id.contains(":\\") {
+                format!("shell:{}", p.id)
+            } else {
+                format!("app:{}", p.id)
+            };
+            out.push(DockApp { key, name: p.name.clone(), image, pinned: true, windows, open: p.id.clone() });
         }
         for k in &self.order {
             if out.iter().any(|a| &a.key == k) {
@@ -390,7 +402,7 @@ impl Builtins {
             if windows.is_empty() {
                 continue;
             }
-            out.push(DockApp { key: k.clone(), name: winlist::app_name(k), image: format!("exe:{k}"), pinned: false, windows });
+            out.push(DockApp { key: k.clone(), name: winlist::app_name(k), image: format!("exe:{k}"), pinned: false, windows, open: k.clone() });
         }
         out
     }
@@ -411,12 +423,20 @@ impl Builtins {
                 let running = !a.windows.is_empty();
                 let in_apps = cfg.launcher_pins.as_ref().is_some_and(|l| l.iter().any(|p| p.kind == "app" && p.id.eq_ignore_ascii_case(&a.key)));
                 let mut menu = vec![
-                    json!({ "icon": "window-new", "label": "New Window", "action": format!("launch:{}", a.key) }),
-                    json!({ "icon": if a.pinned { "unpin" } else { "pin" }, "label": if a.pinned { "Unpin" } else { "Pin" }, "action": format!("pin:{}", a.key) }),
+                    json!({ "icon": "window-new", "label": if running { "New Window" } else { "Open" }, "action": format!("launch:{}", a.open) }),
+                    json!({ "icon": if a.pinned { "unpin" } else { "pin" }, "label": if a.pinned { "Unpin" } else { "Pin" }, "action": format!("pin:{}", a.open) }),
                     json!({ "icon": "grid", "label": if in_apps { "Unpin from Apps" } else { "Pin to Apps" }, "action": format!("apppin:{}", a.key) }),
                 ];
                 if std::path::Path::new(&a.key).is_file() {
                     menu.push(json!({ "icon": "folder", "label": "Reveal in File Explorer", "action": format!("reveal:{}", a.key) }));
+                }
+                // (pinned: its name and its picture made one's own)
+                if a.pinned {
+                    menu.push(json!({ "icon": "pen", "label": "Rename", "action": format!("pinrename:dock:{}", a.open) }));
+                    menu.push(json!({ "icon": "image", "label": "Change Icon", "action": format!("pinicon:dock:{}", a.open) }));
+                    if a.image.starts_with("img:") {
+                        menu.push(json!({ "icon": "reset", "label": "Reset Icon", "action": format!("pinreset:dock:{}", a.open) }));
+                    }
                 }
                 // (what its window works on: its folder, or its document, when it can be found)
                 if let Some(w) = a.windows.iter().find(|w| w.front).or(a.windows.first()) {
@@ -424,7 +444,10 @@ impl Builtins {
                         menu.push(item);
                     }
                 }
-                menu.push(json!({ "icon": "x", "label": if a.windows.len() > 1 { "Close All" } else { "Close" }, "action": format!("closeall:{}", a.key), "hold": true, "tone": "no" }));
+                // (only an open one can be closed)
+                if running {
+                    menu.push(json!({ "icon": "x", "label": if a.windows.len() > 1 { "Close All" } else { "Close" }, "action": format!("closeall:{}", a.key), "hold": true, "tone": "no" }));
+                }
                 let front_i = {
                     let mut hw: Vec<isize> = a.windows.iter().map(|w| w.hwnd).collect();
                     hw.sort();
@@ -467,11 +490,19 @@ impl Builtins {
                 let in_apps = cfg.launcher_pins.as_ref().is_some_and(|l| l.iter().any(|p| p.kind == "app" && p.id.eq_ignore_ascii_case(&a.key)));
                 let mut menu = vec![
                     json!({ "icon": "x", "label": "Close", "action": format!("close:{}", w.hwnd) }),
-                    json!({ "icon": if a.pinned { "unpin" } else { "pin" }, "label": if a.pinned { "Unpin" } else { "Pin" }, "action": format!("pin:{}", a.key) }),
+                    json!({ "icon": if a.pinned { "unpin" } else { "pin" }, "label": if a.pinned { "Unpin" } else { "Pin" }, "action": format!("pin:{}", a.open) }),
                     json!({ "icon": "grid", "label": if in_apps { "Unpin from Apps" } else { "Pin to Apps" }, "action": format!("apppin:{}", a.key) }),
                 ];
                 if std::path::Path::new(&a.key).is_file() {
                     menu.push(json!({ "icon": "folder", "label": "Reveal in File Explorer", "action": format!("reveal:{}", a.key) }));
+                }
+                // (pinned: its name and its picture made one's own)
+                if a.pinned {
+                    menu.push(json!({ "icon": "pen", "label": "Rename", "action": format!("pinrename:dock:{}", a.open) }));
+                    menu.push(json!({ "icon": "image", "label": "Change Icon", "action": format!("pinicon:dock:{}", a.open) }));
+                    if a.image.starts_with("img:") {
+                        menu.push(json!({ "icon": "reset", "label": "Reset Icon", "action": format!("pinreset:dock:{}", a.open) }));
+                    }
                 }
                 if let Some(item) = context_item(w) {
                     menu.push(item);
@@ -601,7 +632,7 @@ impl Builtins {
                 self.flashing.remove(&w.hwnd);
             }
             match a.windows.len() {
-                0 => apps::launch(&a.key),
+                0 => apps::launch(&a.open),
                 // one: in front, it goes down; else it comes up
                 1 if a.windows[0].front => winlist::minimize(a.windows[0].hwnd),
                 1 => winlist::activate(a.windows[0].hwnd),
@@ -838,15 +869,15 @@ impl Builtins {
             if let Some(i) = pins.iter().position(|p| p.kind == "app" && p.id.eq_ignore_ascii_case(k)) {
                 pins.remove(i);
             } else if let Some(a) = find(k) {
-                pins.push(crate::config::AppPin { kind: "app".into(), id: a.key.clone(), name: a.name.clone(), folder: String::new() });
+                pins.push(crate::config::AppPin { kind: "app".into(), id: a.key.clone(), name: a.name.clone(), folder: String::new(), icon: String::new() });
             }
             return (Effect::Changed, true);
         }
         if let Some(k) = action.strip_prefix("pin:") {
-            if let Some(i) = cfg.pinned.iter().position(|p| p.id.to_lowercase() == k) {
+            if let Some(i) = cfg.pinned.iter().position(|p| p.id.eq_ignore_ascii_case(k)) {
                 cfg.pinned.remove(i);
             } else if let Some(a) = find(k) {
-                cfg.pinned.push(Pin { name: a.name.clone(), id: a.key.clone() });
+                cfg.pinned.push(Pin { name: a.name.clone(), id: a.key.clone(), icon: String::new() });
             }
             return (Effect::Changed, true);
         }

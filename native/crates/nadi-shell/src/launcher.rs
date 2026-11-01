@@ -54,6 +54,8 @@ enum Hit {
     Letter(char),
     /// the folder's name, at its top: pressed, it is renamed
     Rename,
+    /// the pins here (or the folder's) put in order of their names, as a game sorts its bag
+    Sort,
     /// a pin of the foot's (its place there)
     FootPin(usize),
 }
@@ -89,7 +91,7 @@ enum Sys {
 /// Press keys together (the first held while the rest are pressed), as if typed.
 pub fn combo(keys: &[u16]) {
     let mut seq = Vec::new();
-    let k = |vk: u16, up: bool| INPUT { r#type: INPUT_KEYBOARD, Anonymous: INPUT_0 { ki: KEYBDINPUT { wVk: VIRTUAL_KEY(vk), wScan: 0, dwFlags: if up { KEYEVENTF_KEYUP } else { KEYBD_EVENT_FLAGS(0) }, time: 0, dwExtraInfo: 0 } } };
+    let k = |vk: u16, up: bool| INPUT { r#type: INPUT_KEYBOARD, Anonymous: INPUT_0 { ki: KEYBDINPUT { wVk: VIRTUAL_KEY(vk), wScan: 0, dwFlags: if up { KEYEVENTF_KEYUP } else { KEYBD_EVENT_FLAGS(0) }, time: 0, dwExtraInfo: crate::keyhook::TAG } } };
     for vk in keys {
         seq.push(k(*vk, false));
     }
@@ -314,6 +316,10 @@ enum CtxAct {
     UnpinFoot(usize),
     ToFoot(usize),
     FromFoot(usize),
+    /// a pin's name or picture made one's own (asked of the frame)
+    PinName(usize),
+    PinIcon(usize),
+    PinIconReset(usize),
 }
 
 #[derive(Clone, Debug)]
@@ -335,7 +341,7 @@ const FOOT: f32 = 34.0;
 pub fn default_foot() -> Vec<AppPin> {
     [("lock", "Lock"), ("sleep", "Sleep"), ("restart", "Restart"), ("shutdown", "Shut Down")]
         .iter()
-        .map(|(id, name)| AppPin { kind: "sys".into(), id: id.to_string(), name: name.to_string(), folder: String::new() })
+        .map(|(id, name)| AppPin { kind: "sys".into(), id: id.to_string(), name: name.to_string(), folder: String::new(), icon: String::new() })
         .collect()
 }
 
@@ -343,7 +349,7 @@ pub fn default_foot() -> Vec<AppPin> {
 pub fn default_pins() -> Vec<AppPin> {
     [("settings", "Settings"), ("files", "File Explorer"), ("terminal", "Terminal"), ("tasks", "Task Manager"), ("nightlight", "Night Light"), ("windows", "All Windows")]
         .iter()
-        .map(|(id, name)| AppPin { kind: "sys".into(), id: id.to_string(), name: name.to_string(), folder: String::new() })
+        .map(|(id, name)| AppPin { kind: "sys".into(), id: id.to_string(), name: name.to_string(), folder: String::new(), icon: String::new() })
         .collect()
 }
 
@@ -369,6 +375,10 @@ fn sys_of(id: &str) -> Option<Sys> {
 
 /// A pin's picture's name (none: a pictogram instead), and its pictogram.
 fn pin_look(p: &AppPin) -> (String, &'static str) {
+    // (a picture of one's own)
+    if !p.icon.is_empty() {
+        return (format!("img:{}", p.icon), "grid");
+    }
     match p.kind.as_str() {
         "app" => (app_image(&p.id), "grid"),
         "file" => (format!("shell:{}", p.id), "file"),
@@ -393,7 +403,9 @@ fn run_pin(p: &AppPin) {
 
 fn shell_open(what: &str, verb: &str) {
     unsafe {
-        let _ = windows::Win32::UI::Shell::ShellExecuteW(None, &HSTRING::from(verb), &HSTRING::from(what), None, None, SW_SHOWNORMAL);
+        // (a program: started in its own folder)
+        let dir = crate::apps::program_dir(what);
+        let _ = windows::Win32::UI::Shell::ShellExecuteW(None, &HSTRING::from(verb), &HSTRING::from(what), None, dir.as_ref().map_or(windows::core::PCWSTR::null(), |d| windows::core::PCWSTR(d.as_ptr())), SW_SHOWNORMAL);
     }
 }
 
@@ -451,6 +463,8 @@ pub struct Launcher {
     pinned: Vec<App>,
     /// its own pins, and, when they changed, to be kept
     pins: Vec<AppPin>,
+    /// a pin's name or picture to be made one's own: what the frame is asked to do
+    pin_req: Option<String>,
     foot: Vec<AppPin>,
     pins_out: Option<(Vec<AppPin>, Vec<AppPin>)>,
     /// where the foot's row is (a pin let go below it goes there)
@@ -607,6 +621,7 @@ impl Launcher {
                 apps: Vec::new(),
                 pinned: Vec::new(),
                 pins: default_pins(),
+                pin_req: None,
                 foot: default_foot(),
                 pins_out: None,
                 foot_y: f32::MAX,
@@ -697,6 +712,11 @@ impl Launcher {
         self.tip = 0.0;
         self.tip_v = 0.0;
         crate::radios::refresh();
+    }
+
+    /// A pin's name or picture to be made one's own (an action of the frame's: "pinrename:apps:kind|id", ...).
+    pub fn take_pin_req(&mut self) -> Option<String> {
+        self.pin_req.take()
     }
 
     /// A question to ask before doing what was pressed (once), and where it was pressed (physical px, on the screen).
@@ -1065,6 +1085,32 @@ impl Launcher {
                         found.push((sc.saturating_sub(1), Hit::Setting(name, uri)));
                     }
                 }
+                // (the pins: what is pinned by its own name (a file, a shortcut, an app renamed), and the folders by theirs; one found
+                // already as itself is not found twice)
+                for (k, pin) in self.pins.iter().enumerate() {
+                    let sc = apps::score(&pin.name, &q);
+                    if sc == 0 {
+                        continue;
+                    }
+                    let twice = match pin.kind.as_str() {
+                        "app" => self.apps.iter().any(|a| a.id.eq_ignore_ascii_case(&pin.id) && a.name == pin.name),
+                        "setting" => SETTINGS.iter().any(|(_, uri)| *uri == pin.id),
+                        "sys" => true,
+                        _ => false,
+                    };
+                    if !twice {
+                        found.push((sc + 2, Hit::Pin(k)));
+                    }
+                }
+                let mut folders: Vec<&str> = self.pins.iter().map(|p| p.folder.as_str()).filter(|f| !f.is_empty()).collect();
+                folders.sort_unstable();
+                folders.dedup();
+                for f in folders {
+                    let sc = apps::score(f, &q);
+                    if sc > 0 {
+                        found.push((sc + 2, Hit::Folder(f.to_string())));
+                    }
+                }
                 for (x, _, name) in TOOLS {
                     // (one that is an app too, or a page of Settings: found as that, not twice)
                     if self.apps.iter().any(|a| a.name.eq_ignore_ascii_case(name)) || SETTINGS.iter().any(|(n, _)| n.eq_ignore_ascii_case(name)) {
@@ -1091,6 +1137,9 @@ impl Launcher {
                 View::Home => {
                     // (every app: a ghost button in the field, at its right; the pins under it)
                     out.push((Hit::AllApps, Look::Small, Rect::new(PAD + inner - 36.0, PAD + (FIELD - 30.0) / 2.0, 30.0, 30.0)));
+                    if self.sortable() {
+                        out.push((Hit::Sort, Look::Small, Rect::new(PAD + inner - 70.0, PAD + (FIELD - 30.0) / 2.0, 30.0, 30.0)));
+                    }
                     y -= 4.0;
                     // (the pins: as many rows as they need, the launcher growing with them; past its tallest, they scroll)
                     let entries = self.entries();
@@ -1149,17 +1198,29 @@ impl Launcher {
                 }
                 View::Folder(name) => {
                     out.push((Hit::Back, Look::Small, Rect::new(PAD, y - 4.0, 30.0, 30.0)));
-                    out.push((Hit::Rename, Look::Small, Rect::new(PAD + 36.0, y - 4.0, inner - 36.0, 30.0)));
+                    let sortable = self.sortable();
+                    out.push((Hit::Rename, Look::Small, Rect::new(PAD + 36.0, y - 4.0, inner - 36.0 - if sortable { 36.0 } else { 0.0 }, 30.0)));
+                    if sortable {
+                        out.push((Hit::Sort, Look::Small, Rect::new(PAD + inner - 30.0, y - 4.0, 30.0, 30.0)));
+                    }
                     deco.push((Deco::Title(self.naming.clone().unwrap_or(name.clone())), Rect::new(PAD + 46.0, y, inner - 56.0, 22.0)));
                     y += 34.0;
                     let cw = inner / TILE_COLS as f32;
-                    self.grid = (PAD, y, cw);
                     let list: Vec<usize> = self.pins.iter().enumerate().filter(|(_, p)| p.folder == name).map(|(i, _)| i).collect();
+                    // (as many rows as they need, the launcher growing with them; past its tallest, they scroll)
+                    let full = list.len().div_ceil(TILE_COLS).max(1) as f32 * TILE_H;
+                    let vis = full.min((H_MAX - PAD - y).max(TILE_H));
+                    self.scroll_max = (full - vis).max(0.0);
+                    self.scroll = self.scroll.clamp(0.0, self.scroll_max);
+                    self.grid = (PAD, y - self.scroll, cw);
                     for (k, i) in list.iter().enumerate() {
-                        let (c, r) = (k % TILE_COLS, k / TILE_COLS);
-                        out.push((Hit::Pin(*i), Look::Tile, Rect::new(PAD + c as f32 * cw, y + r as f32 * TILE_H, cw, TILE_H)));
+                        let r = self.grid_rect(k);
+                        if r.y + r.h / 2.0 >= y && r.y + r.h / 2.0 <= y + vis {
+                            out.push((Hit::Pin(*i), Look::Tile, r));
+                        }
                     }
-                    y += list.len().div_ceil(TILE_COLS).max(1) as f32 * TILE_H;
+                    self.clip = (self.scroll_max > 0.0).then_some((y, y + vis, Look::Tile));
+                    y += vis;
                 }
                 View::All => {
                     // (back, then the letters there are, to jump to)
@@ -1351,6 +1412,42 @@ impl Launcher {
         self.picked.take()
     }
 
+    /// Can the pins shown be sorted (the field empty, the pins or a folder of them open, two or more there)?
+    fn sortable(&self) -> bool {
+        if !self.query.is_empty() {
+            return false;
+        }
+        match &self.view {
+            View::Home => self.pins.len() >= 2,
+            View::Folder(f) => self.pins.iter().filter(|p| &p.folder == f).count() >= 2,
+            View::All => false,
+        }
+    }
+
+    /// Sorted, as a game sorts its bag: the pins in order of their names, each folder by its own name (what is in it left as it
+    /// is); a folder open, what is in it.
+    fn sort_here(&mut self) {
+        match self.view.clone() {
+            View::Folder(f) => {
+                let at: Vec<usize> = (0..self.pins.len()).filter(|i| self.pins[*i].folder == f).collect();
+                let mut inside: Vec<AppPin> = at.iter().map(|i| self.pins[*i].clone()).collect();
+                inside.sort_by_key(|p| p.name.to_lowercase());
+                for (k, i) in at.iter().enumerate() {
+                    self.pins[*i] = inside[k].clone();
+                }
+            }
+            _ => self.pins.sort_by_key(|p| if p.folder.is_empty() { p.name.to_lowercase() } else { p.folder.to_lowercase() }),
+        }
+        self.pins_changed();
+    }
+
+    /// Pins changed elsewhere (File Explorer's menu): taken in as they are, while it is open.
+    pub fn set_pins(&mut self, pinned: Vec<App>, pins: Vec<AppPin>) {
+        self.pinned = pinned;
+        self.pins = pins;
+        self.search();
+    }
+
     fn pins_changed(&mut self) {
         // (a folder with one pin left: no folder)
         let mut counts: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
@@ -1405,8 +1502,15 @@ impl Launcher {
             }
             Some(Hit::Folder(name)) => {
                 self.view = View::Folder(name);
+                // (found by its name: the search put away; its pins from their top)
+                self.query.clear();
+                self.scroll = 0.0;
                 self.sel = 0;
                 self.search();
+                return;
+            }
+            Some(Hit::Sort) => {
+                self.sort_here();
                 return;
             }
             Some(Hit::AllApps) => {
@@ -1497,7 +1601,7 @@ impl Launcher {
         let mut rows: Vec<(&'static str, String, CtxAct)> = Vec::new();
         let pin_toggle = |rows: &mut Vec<(&'static str, String, CtxAct)>, kind: &str, id: &str, name: &str| match self.pinned_at(kind, id) {
             Some(k) => rows.push(("unpin", "Unpin".into(), CtxAct::Unpin(k))),
-            None => rows.push(("pin", "Pin".into(), CtxAct::PinIt(AppPin { kind: kind.into(), id: id.into(), name: name.into(), folder: String::new() }))),
+            None => rows.push(("pin", "Pin".into(), CtxAct::PinIt(AppPin { kind: kind.into(), id: id.into(), name: name.into(), folder: String::new(), icon: String::new() }))),
         };
         let app_more = |rows: &mut Vec<(&'static str, String, CtxAct)>, id: &str, name: &str| {
             if !self.pinned.iter().any(|p| p.id.eq_ignore_ascii_case(id)) {
@@ -1519,8 +1623,17 @@ impl Launcher {
                     rows.push(("left", "Take Out of the Folder".into(), CtxAct::OutOfFolder(*k)));
                 }
                 rows.push(("minus", "Move to the Foot".into(), CtxAct::ToFoot(*k)));
-                if p.kind == "app" {
+                rows.push(("pen", "Rename".into(), CtxAct::PinName(*k)));
+                rows.push(("image", "Change Icon".into(), CtxAct::PinIcon(*k)));
+                if !p.icon.is_empty() {
+                    rows.push(("reset", "Reset Icon".into(), CtxAct::PinIconReset(*k)));
+                }
+                // (a program or a shortcut pinned from File Explorer: as an app; another file, where it is)
+                let low = p.id.to_lowercase();
+                if p.kind == "app" || (p.kind == "file" && (low.ends_with(".lnk") || low.ends_with(".exe"))) {
                     app_more(&mut rows, &p.id, &p.name);
+                } else if p.kind == "file" && std::path::Path::new(&p.id).exists() {
+                    rows.push(("folder", "Open File Location".into(), CtxAct::Location(p.id.clone())));
                 }
             }
             Some(Hit::FootPin(k)) => {
@@ -1546,7 +1659,7 @@ impl Launcher {
                     pin_toggle(&mut rows, "sys", id, name);
                     match self.foot.iter().position(|p| p.kind == "sys" && p.id == id) {
                         Some(k) => rows.push(("unpin", "Take Off the Foot".into(), CtxAct::UnpinFoot(k))),
-                        None => rows.push(("minus", "Pin to the Foot".into(), CtxAct::PinFoot(AppPin { kind: "sys".into(), id: id.into(), name: name.into(), folder: String::new() }))),
+                        None => rows.push(("minus", "Pin to the Foot".into(), CtxAct::PinFoot(AppPin { kind: "sys".into(), id: id.into(), name: name.into(), folder: String::new(), icon: String::new() }))),
                     }
                 }
             }
@@ -1609,6 +1722,16 @@ impl Launcher {
                     self.pins_changed();
                 }
             }
+            CtxAct::PinName(k) | CtxAct::PinIcon(k) | CtxAct::PinIconReset(k) => {
+                if let Some(p) = self.pins.get(k) {
+                    let what = match act {
+                        CtxAct::PinName(_) => "pinrename",
+                        CtxAct::PinIcon(_) => "pinicon",
+                        _ => "pinreset",
+                    };
+                    self.pin_req = Some(format!("{what}:apps:{}|{}", p.kind, p.id));
+                }
+            }
             CtxAct::Rename(name) => {
                 self.view = View::Folder(name.clone());
                 self.naming = Some(name);
@@ -1627,7 +1750,9 @@ impl Launcher {
                 self.picked = Some(a);
             }
             CtxAct::Location(path) => {
-                nadi_core::win::reveal_file(&path);
+                // (a shortcut: where what it leads to is, as File Explorer's own "Open file location")
+                let at = if path.to_lowercase().ends_with(".lnk") { crate::explorer::shortcut_target(&path).unwrap_or(path) } else { path };
+                nadi_core::win::reveal_file(&at);
                 self.hide();
             }
             CtxAct::Admin(path) => {
@@ -1867,9 +1992,15 @@ impl Launcher {
             WM_MOUSEWHEEL => {
                 let d = ((wp.0 >> 16) & 0xffff) as i16 as f32 / 120.0;
                 self.ctx = None;
-                if self.query.is_empty() && matches!(self.view, View::All | View::Home) && self.scroll_max > 0.0 {
+                if self.query.is_empty() && self.scroll_max > 0.0 {
                     let step = if self.view == View::All { ROW * 1.5 } else { TILE_H * 0.75 };
+                    let before = self.scroll;
                     self.scroll = (self.scroll - d * step).clamp(0.0, self.scroll_max);
+                    // (the pins move with the scroll at once: none springs after it from where it was)
+                    let dy = self.scroll - before;
+                    for a in self.anim.values_mut() {
+                        a[1] -= dy;
+                    }
                     self.search();
                 }
                 Some(LRESULT(0))
@@ -2310,6 +2441,10 @@ fn paint_item(p: &Painter, hit: &Hit, look: Look, r: &Rect, ring: Option<f32>, p
             p.icon("grid", r.x + r.w / 2.0 - 7.0, r.y + r.h / 2.0 - 7.0, 14.0, draw::DIM);
             return;
         }
+        Hit::Sort => {
+            p.icon("sort", r.x + r.w / 2.0 - 7.0, r.y + r.h / 2.0 - 7.0, 14.0, draw::DIM);
+            return;
+        }
         Hit::Back => {
             p.icon("left", r.x + r.w / 2.0 - 7.0, r.y + r.h / 2.0 - 7.0, 14.0, draw::DIM);
             return;
@@ -2355,6 +2490,28 @@ fn paint_item(p: &Painter, hit: &Hit, look: Look, r: &Rect, ring: Option<f32>, p
         let nw = p.measure(&name, 10.5, Weight::Regular, r.w - 6.0);
         p.text(&name, r.x + r.w / 2.0 - nw / 2.0, r.y + 60.0, 10.5, Weight::Regular, r.w - 6.0, crate::paint::Color(0.84, 0.84, 0.86, 1.0));
         return;
+    }
+    // (a pin, or a folder of them, found by its name: a row)
+    if look == Look::Row {
+        let found = match hit {
+            Hit::Pin(k) => pins.get(*k).map(|pin| {
+                let (image, icon) = pin_look(pin);
+                (image, icon, pin.name.clone())
+            }),
+            Hit::Folder(name) => Some((String::new(), "folder", name.clone())),
+            _ => None,
+        };
+        if let Some((image, icon, name)) = found {
+            let z = 28.0;
+            let pr = Rect::new(r.x + 8.0, r.y + (ROW - z) / 2.0, z, z);
+            if image.is_empty() || !p.picture(&image, pr, 7.0) {
+                p.round(pr, 7.0, draw::FAINT);
+                p.icon(icon, pr.x + 7.0, pr.y + 7.0, 14.0, draw::TEXT);
+            }
+            p.text(&name, r.x + 8.0 + z + 12.0, r.y + ROW / 2.0, 13.0, Weight::Semibold, r.w - z - 56.0, draw::TEXT);
+            p.icon("pin", r.right() - 24.0, r.y + ROW / 2.0 - 7.0, 14.0, draw::accent());
+            return;
+        }
     }
     let (image, name, side) = match hit {
         Hit::App(a) => (app_image(&a.id), a.name.clone(), if pins.iter().any(|p| p.kind == "app" && p.id.eq_ignore_ascii_case(&a.id)) { "\u{1}pin".to_string() } else { String::new() }),
@@ -2402,7 +2559,7 @@ pub fn preview(g: &Gfx, pc: &Arc<Pc>, query: &str) -> windows::core::Result<(u32
     l.pinned = l.apps.iter().take(3).cloned().collect();
     let mut pins = default_pins();
     for a in l.apps.iter().take(8) {
-        pins.push(AppPin { kind: "app".into(), id: a.id.clone(), name: a.name.clone(), folder: String::new() });
+        pins.push(AppPin { kind: "app".into(), id: a.id.clone(), name: a.name.clone(), folder: String::new(), icon: String::new() });
     }
     for p in pins.iter_mut().skip(10).take(3) {
         p.folder = "Games".into();

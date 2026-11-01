@@ -44,9 +44,9 @@ const BANNER_W: f32 = 380.0;
 /// how far a floating piece stands off its edge
 pub const FLOAT_OFF: f32 = 8.0;
 /// how tall the dock stands
-const DOCK_DEPTH: f32 = 56.0;
+const DOCK_DEPTH: f32 = 50.0;
 /// how tall the dock stands at its largest, with an app on its stage
-const DOCK_LARGE: f32 = 68.0;
+const DOCK_LARGE: f32 = 63.0;
 /// a press must be held this long, without moving more than `DRAG_START`, to pick its widget up
 const HOLD: Duration = Duration::from_millis(450);
 const DRAG_START: f32 = 6.0;
@@ -197,6 +197,8 @@ struct Menu {
     /// each one's name, as its tip says it (a widget's menu)
     names: Vec<&'static str>,
     hover: Option<usize>,
+    /// words in it too long for their room, scrolling: drawn again each frame
+    marquee: bool,
     /// how far it is out (springing: it pops out of the side toward its widget, and back in as it goes)
     grow: Spring,
     /// going (it shrinks away, then it is gone)
@@ -447,6 +449,21 @@ pub struct Frame {
     glass_hidden: bool,
     /// the widgets glowing, put over the ones beside them
     glow_raised: HashSet<String>,
+    /// since when the mouse has been in an edge's reach, while the widgets wait to come (the setting's wait)
+    edge_since: std::cell::Cell<Option<Instant>>,
+    /// while the edge reach is being set: its band shown on the screen (which screen, the piece, when last moved)
+    reach_shown: Option<(usize, Piece, Instant)>,
+    /// what NADI costs (the Settings window's Performance page): its samples; all the frame has spent (ms); what each widget's
+    /// drawing has cost (times, ms); and whether the page is watching, over how many seconds
+    perf: crate::perf::Perf,
+    pub busy_ms: f64,
+    render_cost: HashMap<String, (u64, f64)>,
+    perf_on: bool,
+    perf_range: usize,
+    /// the Recycle Bin as last read, and whether files are being dragged now (from File Explorer: an empty bin comes out to take
+    /// them)
+    bin: crate::recycle::State,
+    files_dragging: bool,
     /// a picture being dragged (screen, widget, picture, where the mouse was, whether it moved), and the last one let go of unmoved
     /// (a second press soon after fits it again)
     pan: Option<(usize, String, String, f32, f32, bool)>,
@@ -560,6 +577,8 @@ pub struct Frame {
 
 /// A long job of the settings, done.
 pub enum Job {
+    /// a picture chosen for a pin (where it is pinned, which, the picture's path; none: put away)
+    Icon(String, String, Option<String>),
     Synced(String, Result<Value, String>),
     Got(String, Result<nadi_core::repo::Installed, String>),
 }
@@ -576,10 +595,18 @@ fn s_of<'v>(v: &'v Value, k: &str) -> &'v str {
 
 impl Frame {
     pub fn new(g: Gfx, pc: Arc<Pc>, tx: Sender<Command>, msg_hwnd: HWND) -> Frame {
-        let (config, config_when) = config::load();
+        let (mut config, config_when) = config::load();
+        if keep_shortcuts(&mut config) {
+            config::save(&config);
+        }
         crate::draw::set_accent(&config.theme);
         crate::draw::set_accent2(&config.theme2);
         crate::keyhook::set_desk_keys(config.desk_keys);
+        // (File Explorer's menu, pointing at this NADI where it is now)
+        if config.explorer_menu {
+            let (l, d) = explorer_paths(&config);
+            crate::explorer::set(true, &l, &d);
+        }
         let mut f = Frame {
             g,
             pc,
@@ -622,6 +649,15 @@ impl Frame {
             card_press: None,
             glass_hidden: false,
             glow_raised: HashSet::new(),
+            edge_since: std::cell::Cell::new(None),
+            reach_shown: None,
+            perf: crate::perf::Perf::new(),
+            busy_ms: 0.0,
+            render_cost: HashMap::new(),
+            perf_on: false,
+            perf_range: 60,
+            bin: crate::recycle::State::default(),
+            files_dragging: false,
             pan: None,
             view_click: None,
             lifted: HashSet::new(),
@@ -696,6 +732,8 @@ impl Frame {
         f.sync_builtins(true);
         crate::sysw::start();
         crate::net::start();
+        crate::recycle::start();
+        crate::drop::set_notify(f.msg_hwnd);
         crate::radios::refresh();
         f.sync_sys();
         f.sync_tray();
@@ -735,7 +773,34 @@ impl Frame {
         }
         ups.push(Update::Widget { plugin: crate::builtin::PLUGIN.into(), widget: crate::net::NET.into(), content: crate::net::widget(&self.bi.net, self.bi.radios, self.net_speed, self.bi.net_ask.as_deref()) });
         ups.push(Update::Widget { plugin: crate::builtin::PLUGIN.into(), widget: crate::sysw::DEVICES.into(), content: crate::sysw::devices(&self.bi.sys, &self.bi.net.paired, self.bi.radios.bluetooth) });
+        ups.push(Update::Widget { plugin: crate::builtin::PLUGIN.into(), widget: crate::recycle::BIN.into(), content: self.bin_widget() });
         self.apply(ups);
+    }
+
+    /// The Recycle Bin's widget as it is now: idle when empty, unless files are being dragged; its lid up while a drag is over it.
+    fn bin_widget(&self) -> Value {
+        let k = key(crate::builtin::PLUGIN, crate::recycle::BIN);
+        crate::recycle::widget(&self.bin, self.files_dragging, crate::drop::hover().as_deref() == Some(k.as_str()), self.large(&k))
+    }
+
+    /// The Recycle Bin's widget drawn again (it changed, a drag came or went).
+    fn sync_bin(&mut self) {
+        let content = self.bin_widget();
+        self.apply(vec![Update::Widget { plugin: crate::builtin::PLUGIN.into(), widget: crate::recycle::BIN.into(), content }]);
+    }
+
+    /// A drag came over a widget that takes files, or left it.
+    pub fn drop_hover_changed(&mut self) {
+        self.sync_bin();
+    }
+
+    /// Files let go on a widget that takes them: its action told their paths.
+    pub fn dropped(&mut self) {
+        for (k, paths) in crate::drop::take() {
+            let Some((plugin, _)) = k.split_once('/') else { continue };
+            let Some(action) = self.widgets.get(&k).and_then(|w| w.content["drop"].as_str().map(str::to_string)) else { continue };
+            self.act(plugin.to_string(), action, json!({ "paths": paths }));
+        }
     }
 
     /// Is a widget to be seen anywhere (shown, or showing, or open)? One hidden at its edge is not.
@@ -920,7 +985,7 @@ impl Frame {
             let reach = |e: Edge| -> f32 {
                 let deepest = sc.items.values().filter(|i| i.slot.place.horizontal() == matches!(e, Edge::Top | Edge::Bottom) && edge_of(i.slot.place).contains(&e)).map(|i| if i.slot.place.horizontal() { i.slot.h } else { i.slot.w }).fold(0.0f32, f32::max);
                 let out = sc.items.values().any(|i| edge_of(i.slot.place).contains(&e) && i.shown.now > 0.5);
-                if out { deepest + 14.0 } else { 6.0 }
+                if out { deepest + 14.0 } else { self.config.edge_reach.clamp(2.0, 64.0) }
             };
             let at = |e: Edge| on_screen && match e {
                 Edge::Top => cy <= a.y + reach(Edge::Top),
@@ -936,8 +1001,31 @@ impl Frame {
             let maxed = !launcher_here && ((self.config.auto_hide != "never" && sc.full) || (self.config.auto_hide == "maximized" && sc.maxed));
             let (all, mode) = if all && maxed { (false, "edges".to_string()) } else { (all, mode.clone()) };
             let all = all || (launcher_here && self.config.launcher_reveal);
-            // (out of the way, and a key is to be held: the edges bring nothing out without it)
-            let edges_at = if maxed && !held { Vec::new() } else { edges_at };
+            // (out of the way, and a key is to be held: the edges bring nothing out without it. Once they are out, the key is no
+            // longer needed: they stay while the mouse is at an edge or on them, as on the desktop, until they have gone again)
+            // (only those that come and go count: a window popped out, a panel kept open, one always shown stay out whatever, and
+            // would keep the rest from ever needing the key or getting out of the way)
+            let out_now = sc.items.iter().any(|(k, i)| i.shown.to > 0.5 && !is_pop(k) && !self.always_open(k) && !self.always_shown(k) && i.open.to < 0.5);
+            let edges_at = if maxed && !held && !out_now { Vec::new() } else { edges_at };
+            // (the setting's wait: the mouse rests in an edge's reach so long before they come; once out, no wait)
+            let wait = self.config.edge_wait.min(1000) as u128;
+            let edges_at = if on_screen && wait > 0 && !out_now {
+                if edges_at.is_empty() {
+                    self.edge_since.set(None);
+                    edges_at
+                } else {
+                    let since = self.edge_since.get().unwrap_or_else(Instant::now);
+                    self.edge_since.set(Some(since));
+                    if since.elapsed().as_millis() < wait {
+                        moved_any = true;
+                        Vec::new()
+                    } else {
+                        edges_at
+                    }
+                }
+            } else {
+                edges_at
+            };
             let keys: Vec<String> = sc.items.keys().cloned().collect();
             let always: HashSet<String> = keys.iter().filter(|k| self.always_shown(k)).cloned().collect();
             // (a menu open on this screen: every widget on it stays out while it is, over a full-screen app too)
@@ -958,7 +1046,9 @@ impl Frame {
                 let it = &sc.items[&k];
                 // (a panel kept open for good still comes and goes with the others; only one opened now keeps its widget out)
                 let bumping = self.bumps.get(&k).is_some_and(|t| Instant::now() < *t);
-                let busy = bumping || (it.open.to == 1.0 && !self.always_open(&k)) || it.pinned || it.drag_place.is_some() || hovered || menu_here || editing || (always.contains(&k) && !sc.full) || self.over_full(&k);
+                // (files being dragged: the Recycle Bin out, to take them, for as long as they are)
+                let takes_drag = self.files_dragging && k == key(crate::builtin::PLUGIN, crate::recycle::BIN);
+                let busy = bumping || takes_drag || (it.open.to == 1.0 && !self.always_open(&k)) || it.pinned || it.drag_place.is_some() || hovered || menu_here || editing || (always.contains(&k) && !sc.full) || self.over_full(&k);
                 let want = all
                     || busy
                     || attention
@@ -1148,6 +1238,65 @@ impl Frame {
             let _ = self.tx.send(Command::Action { plugin, action, args });
             return;
         }
+        // (the Recycle Bin's: put back, deleted for good, emptied, opened, files dropped on it thrown away)
+        if action.starts_with("bin_") {
+            let parse = args["parse"].as_str().unwrap_or("").to_string();
+            match action.as_str() {
+                "bin_back" if !parse.is_empty() => crate::recycle::put_back(parse),
+                "bin_forget" if !parse.is_empty() => crate::recycle::forget(parse),
+                "bin_empty" => crate::recycle::empty(),
+                "bin_open" => crate::recycle::open(),
+                "bin_drop" => {
+                    let paths: Vec<String> = args["paths"].as_array().into_iter().flatten().filter_map(|p| p.as_str().map(str::to_string)).collect();
+                    if !paths.is_empty() {
+                        crate::recycle::throw_away(paths);
+                    }
+                }
+                _ => {}
+            }
+            return;
+        }
+        // (a pin (the dock's, or the launcher's) renamed, or given a picture of one's own)
+        if let Some(rest) = ["pinrename:", "pinrenamed:", "pinicon:", "pinreset:"].iter().find(|p| action.starts_with(**p)).map(|p| (p.trim_end_matches(':'), &action[p.len()..])) {
+            let (what, rest) = rest;
+            let Some((at, ident)) = rest.split_once(':') else { return };
+            let (at, ident) = (at.to_string(), ident.to_string());
+            match what {
+                "pinrename" => {
+                    let now = self.pin_name(&at, &ident).unwrap_or_default();
+                    let spec = json!({ "title": "Rename", "field": { "value": now, "hint": now }, "buttons": [{ "label": "Cancel" }, { "label": "Rename", "action": format!("pinrenamed:{at}:{ident}") }] });
+                    self.ask(spec, crate::builtin::PLUGIN.into(), None);
+                }
+                "pinrenamed" => {
+                    let name = args["text"].as_str().unwrap_or("").trim().to_string();
+                    if !name.is_empty() {
+                        self.edit_pin(&at, &ident, |n, _| *n = name);
+                    }
+                }
+                "pinicon" => {
+                    // (the launcher put away: Windows' own box comes over everything else)
+                    if self.launcher.as_ref().is_some_and(|l| l.shown) {
+                        self.toggle_launcher();
+                    }
+                    let (jobs, notify) = (self.jobs.clone(), self.msg_hwnd.0 as isize);
+                    std::thread::spawn(move || {
+                        let _ = unsafe { windows::Win32::System::Com::CoInitializeEx(None, windows::Win32::System::Com::COINIT_APARTMENTTHREADED) };
+                        let picked = crate::explorer::pick_picture();
+                        jobs.lock().unwrap().push(Job::Icon(at, ident, picked));
+                        unsafe {
+                            let _ = PostMessageW(HWND(notify as *mut _), WM_JOB, WPARAM(0), LPARAM(0));
+                        }
+                    });
+                }
+                _ => {
+                    self.edit_pin(&at, &ident, |_, icon| {
+                        crate::explorer::drop_picture(icon);
+                        icon.clear();
+                    });
+                }
+            }
+            return;
+        }
         let mut cfg = self.config.clone();
         let (effect, keep) = self.bi.press(&mut cfg, &action, &args);
         let desk = action.starts_with("desk");
@@ -1295,10 +1444,87 @@ impl Frame {
         add(crate::builtin::PLUGIN, "NADI", crate::sysw::DESKS, "Desktops");
         add(crate::builtin::PLUGIN, "NADI", crate::net::NET, "Network");
         add(crate::builtin::PLUGIN, "NADI", crate::sysw::DEVICES, "Bluetooth");
+        add(crate::builtin::PLUGIN, "NADI", crate::recycle::BIN, "Recycle Bin");
         out
     }
 
     /// Tell the settings page everything it draws.
+    /// A pin's name now: the dock's (`at` "dock", by its program) or the launcher's ("apps", by "kind|id").
+    fn pin_name(&self, at: &str, ident: &str) -> Option<String> {
+        if at == "dock" {
+            return self.config.pinned.iter().find(|p| p.id.eq_ignore_ascii_case(ident)).map(|p| p.name.clone());
+        }
+        let (kind, id) = ident.split_once('|')?;
+        self.config.launcher_pins.as_ref()?.iter().find(|p| p.kind == kind && p.id.eq_ignore_ascii_case(id)).map(|p| p.name.clone())
+    }
+
+    /// A pin's name and picture changed (and kept); the launcher, open, and the dock show it so.
+    fn edit_pin(&mut self, at: &str, ident: &str, f: impl FnOnce(&mut String, &mut String)) {
+        let (at, ident) = (at.to_string(), ident.to_string());
+        self.change_config(|c| {
+            if at == "dock" {
+                if let Some(p) = c.pinned.iter_mut().find(|p| p.id.eq_ignore_ascii_case(&ident)) {
+                    f(&mut p.name, &mut p.icon);
+                }
+            } else if let Some((kind, id)) = ident.split_once('|') {
+                if let Some(p) = c.launcher_pins.as_mut().and_then(|l| l.iter_mut().find(|p| p.kind == kind && p.id.eq_ignore_ascii_case(id))) {
+                    f(&mut p.name, &mut p.icon);
+                }
+            }
+        });
+        let pinned: Vec<crate::apps::App> = self.config.pinned.iter().map(|p| crate::apps::App { name: p.name.clone(), id: p.id.clone() }).collect();
+        let pins = self.config.launcher_pins.clone().unwrap_or_else(crate::launcher::default_pins);
+        if let Some(l) = self.launcher.as_mut().filter(|l| l.shown) {
+            l.set_pins(pinned, pins);
+        }
+        self.sync_builtins(true);
+    }
+
+    /// What NADI costs, to the Performance page: the graphs over its range, and each plugin and widget over the last minute.
+    fn push_perf(&self, plugins: &BTreeMap<String, (f64, f64, u64)>) {
+        let Some(s) = &self.settings else { return };
+        let series = self.perf.series(self.perf_range);
+        let now = self.perf.samples.back().copied().unwrap_or([0.0; 3]);
+        let (pm, wm) = self.perf.minute(plugins, &self.render_cost);
+        let name_of = |id: &str| self.plugins.iter().find(|p| p.id == id).map(|p| p.name.clone());
+        let total = |v: &Value| v["gather"].as_f64().unwrap_or(0.0) + v["run"].as_f64().unwrap_or(0.0);
+        let mut prows: Vec<Value> = pm
+            .iter()
+            .filter_map(|(id, (g, r, n))| {
+                // (a sensor gathered for the plugins: by its own name)
+                let (name, shared) = match id.strip_prefix("~ ") {
+                    Some(x) => (x.chars().take(1).flat_map(char::to_uppercase).chain(x.chars().skip(1)).collect::<String>(), true),
+                    None => (name_of(id)?, false),
+                };
+                Some(json!({ "id": id, "name": name, "shared": shared, "gather": (g * 10.0).round() / 10.0, "run": (r * 10.0).round() / 10.0, "events": n, "hot": (g + r) / 60000.0 > 0.05 }))
+            })
+            .filter(|v| total(v) > 0.05 || v["events"].as_u64().unwrap_or(0) > 0)
+            .collect();
+        prows.sort_by(|a, b| total(b).total_cmp(&total(a)));
+        let widget_name = |k: &str| -> Option<(String, String)> {
+            let (pl, id) = k.split_once('/')?;
+            let p = self.plugins.iter().find(|p| p.id == pl)?;
+            let w = p.widgets.iter().find(|w| w.id == id)?;
+            Some((if w.name.is_empty() { p.name.clone() } else { w.name.clone() }, pl.to_string()))
+        };
+        let mut wrows: Vec<Value> = wm
+            .iter()
+            .filter(|(k, (n, _))| *n > 0 && !is_pop(k))
+            .filter_map(|(k, (n, ms))| widget_name(k).map(|(name, plugin)| json!({ "key": k, "name": name, "plugin": plugin, "times": n, "ms": (ms * 10.0).round() / 10.0 })))
+            .collect();
+        wrows.sort_by(|a, b| b["ms"].as_f64().unwrap_or(0.0).total_cmp(&a["ms"].as_f64().unwrap_or(0.0)));
+        let r = |v: f32, k: f32| (v * k).round() / k;
+        let msg = json!({
+            "type": "perf",
+            "range": self.perf_range,
+            "series": series.iter().map(|v| [r(v[0], 100.0), r(v[1], 10.0), r(v[2], 10.0)]).collect::<Vec<_>>(),
+            "now": [r(now[0], 100.0), r(now[1], 1.0), r(now[2], 10.0)],
+            "plugins": prows,
+            "widgets": wrows,
+        });
+        s.post(&msg.to_string());
+    }
+
     pub fn push_settings(&self) {
         let Some(s) = &self.settings else { return };
         let busy: serde_json::Map<String, Value> = self.repo_busy.iter().map(|r| (r.clone(), json!(true))).collect();
@@ -1319,11 +1545,15 @@ impl Frame {
 
     /// What the settings page said.
     pub fn settings_messages(&mut self) {
+        // (only the edge reach's band moved: the page is not drawn again, which would let go of the slider being dragged)
+        let mut quiet = true;
         for text in crate::settings::take_messages() {
             let Ok(m) = serde_json::from_str::<Value>(&text) else { continue };
+            quiet &= m["cmd"] == "reach_preview" || m["cmd"] == "perf";
             let st = |k: &str| m[k].as_str().unwrap_or("").to_string();
             match m["cmd"].as_str().unwrap_or("") {
                 "ready" => {
+                    self.perf_on = false;
                     // (the first time: what the main repository has, looked at; after that, each one looked at again once its list is an
                     // hour old, so a new release shows without pressing Refresh)
                     // (the official repository is always in the list, never taken out: looked at whenever it is not there)
@@ -1344,6 +1574,17 @@ impl Frame {
                 }
                 "exit" => unsafe { PostQuitMessage(0) },
                 "goto_done" => self.settings_goto = None,
+                // (the edge reach being dragged in the settings: its band on the screen itself, as it is moved)
+                "reach_preview" => self.show_reach(m["px"].as_f64().unwrap_or(0.0) as f32),
+                // (the Performance page open or shut, and over how long)
+                "perf" => {
+                    self.perf_on = m["on"] == true;
+                    self.perf_range = m["range"].as_u64().unwrap_or(60).clamp(60, 3600) as usize;
+                    if self.perf_on {
+                        let plugins = self.pc.plugin_cost.lock().unwrap().clone();
+                        self.push_perf(&plugins);
+                    }
+                }
                 "autostart" => {
                     crate::autostart::set(m["on"].as_bool() == Some(true));
                     self.push_settings();
@@ -1426,7 +1667,9 @@ impl Frame {
                 _ => {}
             }
         }
-        self.push_settings();
+        if !quiet {
+            self.push_settings();
+        }
     }
 
     fn repo_job_sync(&mut self, repo: String) {
@@ -1450,6 +1693,15 @@ impl Frame {
         let done: Vec<Job> = std::mem::take(&mut *self.jobs.lock().unwrap());
         for j in done {
             match j {
+                Job::Icon(at, ident, Some(path)) => {
+                    if let Some(kept) = crate::explorer::keep_picture(&path) {
+                        self.edit_pin(&at, &ident, |_, icon| {
+                            crate::explorer::drop_picture(icon);
+                            *icon = kept;
+                        });
+                    }
+                }
+                Job::Icon(_, _, None) => {}
                 Job::Synced(repo, r) => {
                     self.repo_busy.remove(&repo);
                     match r {
@@ -1491,6 +1743,10 @@ impl Frame {
             }
         }
         // (it asks before doing something (restart, shut down): in a modal, out of where it was pressed)
+        // (a pin's name or picture to be made one's own)
+        if let Some(req) = self.launcher.as_mut().and_then(|l| l.take_pin_req()) {
+            self.act(crate::builtin::PLUGIN.into(), req, json!({}));
+        }
         if let Some((spec, at)) = self.launcher.as_mut().and_then(|l| l.take_ask()) {
             self.ask(spec, crate::builtin::PLUGIN.into(), Some(at));
         }
@@ -1505,7 +1761,7 @@ impl Frame {
         if let Some(a) = self.launcher.as_mut().and_then(|l| l.take_picked()) {
             self.change_config(|c| {
                 if !c.pinned.iter().any(|p| p.id.eq_ignore_ascii_case(&a.id)) {
-                    c.pinned.push(config::Pin { name: a.name.clone(), id: a.id.clone() });
+                    c.pinned.push(config::Pin { name: a.name.clone(), id: a.id.clone(), icon: String::new() });
                 }
             });
             self.sync_builtins(true);
@@ -1959,18 +2215,23 @@ impl Frame {
                 }
             }
         }
-        // (the dock, where a click opens widgets: its grip, on the edge away from the screen's)
-        if peek["dock"].is_object() && self.click_to_open() {
+        // (the dock: its band on the side away from the screen's edge, its apps' marks in it; where a click opens widgets, the band is
+        // its grip too, lit while the mouse is on it)
+        if peek["dock"].is_object() || peek["dock_front"].is_object() {
             let place = self.screens.iter().find_map(|sc| sc.items.get(k)).map(|it| it.slot.place);
             let at = match place {
                 Some(Place::Edge(Edge::Bottom) | Place::Corner(Corner::BottomLeft | Corner::BottomRight)) => Some("top"),
                 Some(Place::Edge(Edge::Top) | Place::Corner(Corner::TopLeft | Corner::TopRight)) => Some("bottom"),
-                _ => None,
+                Some(Place::Edge(Edge::Left)) => Some("right"),
+                Some(Place::Edge(Edge::Right)) => Some("left"),
+                None => None,
             };
-            if let Some(at) = at {
-                // (shown only while the mouse is on the dock)
-                peek["dock"]["grip"] = json!(self.hover.as_ref().is_some_and(|(_, h)| h == k));
-                peek["dock"]["grip_at"] = json!(at);
+            if let (Some(at), true) = (at, peek["dock_front"].is_object()) {
+                peek["dock_front"]["inner"] = json!(at);
+            } else if let Some(at) = at {
+                peek["dock"]["inner"] = json!(at);
+                // (the grip: while the mouse is on the dock)
+                peek["dock"]["grip"] = json!(self.click_to_open() && self.hover.as_ref().is_some_and(|(_, h)| h == k));
             }
         }
         // (its colour from a picture: a cover's)
@@ -2026,6 +2287,7 @@ impl Frame {
                 crate::sysw::LANG => ("bottom-right".to_string(), 12),
                 crate::net::NET => ("bottom-right".to_string(), 14),
                 crate::sysw::DEVICES => ("bottom-right".to_string(), 13),
+                crate::recycle::BIN => ("bottom-right".to_string(), 16),
                 _ => ("bottom-right".to_string(), 0),
             }
         } else {
@@ -3176,9 +3438,13 @@ impl Frame {
         }
         let t0 = Instant::now();
         self.render_inner(si, k);
+        let ms = t0.elapsed().as_secs_f64() * 1000.0;
         let e = self.prof.entry(format!("render {k}")).or_default();
         e.0 += 1;
-        e.1 += t0.elapsed().as_secs_f64() * 1000.0;
+        e.1 += ms;
+        let e = self.render_cost.entry(k.to_string()).or_default();
+        e.0 += 1;
+        e.1 += ms;
     }
 
     fn render_inner(&mut self, si: usize, k: &str) {
@@ -3355,7 +3621,7 @@ impl Frame {
         let _ = crate::draw::take_marquee();
         // (the mouse on its open panel: where, in the panel's own space, for its ghost buttons)
         let hover_at = (t > 0.5 && self.hover.as_ref().is_some_and(|(hs, hk)| *hs == si && hk == k) && self.mouse.0 == si).then(|| (self.mouse.1 - b.x, self.mouse.2 - b.y - top));
-        let _ = self.g.draw_surface(&surface, |dc| {
+        let drawn = self.g.draw_surface(&surface, |dc| {
             let mut under = |p: &Painter, body: Rect| {
                 if lit {
                     let c = (body.x + body.w / 2.0, body.y + body.h / 2.0);
@@ -3511,6 +3777,13 @@ impl Frame {
         let (pictures, buttons): (Vec<(Rect, String)>, Vec<(Rect, String)>) = buttons.into_iter().partition(|(_, a)| a.starts_with("thumb:"));
         it.buttons = buttons;
         it.alive = alive;
+        // (not drawn: its surface lost or broken (a graphics card switched, a display changed); it was left blank. A new surface, and
+        // drawn again on the next tick, as hiding and showing it again would)
+        if let Err(e) = &drawn {
+            note_render_error(k, e);
+            it.piece.alloc = (0, 0);
+            it.alive = true;
+        }
         // (being typed into: its box goes where its field is now)
         if let Some(ib) = self.input.as_mut().filter(|i| i.shown && i.key == k) {
             if let Some(h) = it.hits.iter().find(|h| matches!(&h.press, Press::Field(a, ..) if *a == ib.action)) {
@@ -3636,6 +3909,7 @@ impl Frame {
 
     /// The mouse reaches the windows only over the pieces.
     fn hit_regions(&self) {
+        let mut targets: Vec<(i32, i32, i32, i32, String)> = Vec::new();
         for (si, sc) in self.screens.iter().enumerate() {
             let s = sc.s;
             let mut boxes: Vec<RECT> = Vec::new();
@@ -3647,6 +3921,11 @@ impl Frame {
                     continue;
                 }
                 if let Ok((_, b)) = self.shape_now(si, it) {
+                    // (one that takes files dropped on it)
+                    if self.widgets.get(k).is_some_and(|w| w.content["drop"].is_string()) {
+                        let m = sc.ov.monitor.rect;
+                        targets.push((m.left + (b.x * s) as i32, m.top + (b.y * s) as i32, m.left + ((b.x + b.w) * s).ceil() as i32, m.top + ((b.y + b.h) * s).ceil() as i32, k.clone()));
+                    }
                     // (being pulled: where it is drawn now too, and its neck, or the frame's window cuts it off)
                     let b = if self.tear_pull > 0.5 && self.tear.as_ref().is_some_and(|(ts, tk, ..)| *ts == si && tk == k) {
                         let (ox, oy) = self.tear_off;
@@ -3684,6 +3963,7 @@ impl Frame {
             }
             sc.ov.set_hit(&boxes);
         }
+        crate::drop::set_targets(targets);
     }
 
     // ----------------------------------------------------------------------------------------------------------- banners
@@ -4104,6 +4384,14 @@ impl Frame {
         let e = self.prof.entry("tick".into()).or_default();
         e.0 += 1;
         e.1 += t0.elapsed().as_secs_f64() * 1000.0;
+        self.busy_ms += t0.elapsed().as_secs_f64() * 1000.0;
+        // (once a second: what NADI costs, sampled; the Performance page told while it is open)
+        if self.perf.due() {
+            let plugins = self.pc.plugin_cost.lock().unwrap().clone();
+            if self.perf.sample(self.busy_ms, &plugins, &self.render_cost) && self.perf_on {
+                self.push_perf(&plugins);
+            }
+        }
         self.profile_on_request();
     }
 
@@ -4185,6 +4473,21 @@ impl Frame {
                     self.render(si, &k);
                 }
             }
+        }
+        // the Recycle Bin, when it changed
+        if let Some(b) = crate::recycle::take() {
+            self.bin = b;
+            self.sync_bin();
+        }
+        // files being dragged (File Explorer's picture of what is dragged is out, the button held): the bin comes out to take them
+        // (begun when File Explorer's picture of what is dragged shows; it lasts while the button is held: over the frame's windows
+        // that picture is hidden, and the bin must not go then)
+        let held = unsafe { GetAsyncKeyState(VK_LBUTTON.0 as i32) < 0 };
+        let begun = held && unsafe { FindWindowW(windows::core::w!("SysDragImage"), None).is_ok_and(|h| !h.0.is_null() && IsWindowVisible(h).as_bool()) };
+        let dragging = held && (self.files_dragging || begun || crate::drop::hover().is_some());
+        if dragging != self.files_dragging {
+            self.files_dragging = dragging;
+            self.sync_bin();
         }
         let sys = crate::sysw::take();
         let net = crate::net::take().or_else(|| crate::net::status_changed().then(|| self.bi.net.clone()));
@@ -4391,9 +4694,9 @@ impl Frame {
         }
         self.step_tip(dt);
         self.step_hold();
-        // (the menu follows its widget as it moves)
+        // (the menu follows its widget as it moves; words in it that scroll, scroll)
         if let Some(m) = &self.menu {
-            let moving = m.key.as_ref().and_then(|k| self.screens.get(m.si).and_then(|sc| sc.items.get(k))).is_some_and(|it| it.rest.moving() || it.shown.moving());
+            let moving = m.marquee || m.key.as_ref().and_then(|k| self.screens.get(m.si).and_then(|sc| sc.items.get(k))).is_some_and(|it| it.rest.moving() || it.shown.moving());
             if moving {
                 self.render_menu();
                 relayer = true;
@@ -4579,6 +4882,12 @@ impl Frame {
                 self.set_config(c);
                 self.config_when = w;
             }
+            // (the edge reach's band: gone a moment after the slider was last moved)
+            if self.reach_shown.as_ref().is_some_and(|(_, _, t)| t.elapsed() >= Duration::from_millis(1500)) {
+                self.show_reach(0.0);
+            }
+            // (pinned from File Explorer's menu)
+            self.take_pins();
             // the taskbar: kept hidden while it is wanted hidden (Explorer shows it again now and then), unless it peeks for its icons
             if self.config.taskbar == "hide" {
                 crate::taskbar::peek_done();
@@ -4652,6 +4961,11 @@ impl Frame {
 
     pub fn set_config(&mut self, c: Config) {
         let screens = c.scale != self.config.scale;
+        // (File Explorer's menu: on or off, and "Unpin from" for what is pinned now)
+        if c.explorer_menu || self.config.explorer_menu {
+            let (l, d) = explorer_paths(&c);
+            crate::explorer::set(c.explorer_menu, &l, &d);
+        }
         // (how liquid may have changed: each screen's liquid drawn again)
         for sc in &mut self.screens {
             sc.liquid_shapes.clear();
@@ -4686,10 +5000,145 @@ impl Frame {
         }
     }
 
+    /// A file, a shortcut or a folder pinned from File Explorer: to the dock, or to the Apps launcher. A program (or a shortcut to one)
+    /// is pinned as the app; anything else opens as the PC opens it.
+    /// What File Explorer's menu left to pin (or unpin): done.
+    pub fn take_pins(&mut self) {
+        let left = crate::explorer::take();
+        if left.is_empty() {
+            return;
+        }
+        for (to, path) in left {
+            self.pin_path(&to, &path);
+        }
+        // (the launcher open: its pins as they are now)
+        let pinned: Vec<crate::apps::App> = self.config.pinned.iter().map(|p| crate::apps::App { name: p.name.clone(), id: p.id.clone() }).collect();
+        let pins = self.config.launcher_pins.clone().unwrap_or_else(crate::launcher::default_pins);
+        if let Some(l) = self.launcher.as_mut().filter(|l| l.shown) {
+            l.set_pins(pinned, pins);
+            l.render(&self.g, &self.pc);
+            self.commit();
+        }
+    }
+
+    /// Pin (`dock`, `apps`) or unpin (`undock`, `unapps`) what is at `path`: a program, or a shortcut to one, as that program; else
+    /// the file or folder itself.
+    fn pin_path(&mut self, to: &str, path: &str) {
+        let p = std::path::Path::new(path);
+        if !p.exists() {
+            return;
+        }
+        let program = if path.to_lowercase().ends_with(".exe") { Some(path.to_string()) } else { crate::explorer::shortcut_program(path) };
+        let name = match &program {
+            Some(e) => nadi_core::sensors::exeinfo::lookup(e).name.unwrap_or_else(|| std::path::Path::new(e).file_stem().map(|s| s.to_string_lossy().to_string()).unwrap_or_default()),
+            None if p.is_dir() || path.to_lowercase().ends_with(".lnk") || path.to_lowercase().ends_with(".url") => p.file_stem().map(|s| s.to_string_lossy().to_string()).unwrap_or_default(),
+            None => p.file_name().map(|s| s.to_string_lossy().to_string()).unwrap_or_default(),
+        };
+        let path = path.to_string();
+        let lnk = path.to_lowercase().ends_with(".lnk");
+        // (a shortcut: the name of the one pinned)
+        let name = if lnk { p.file_stem().map(|s| s.to_string_lossy().to_string()).unwrap_or(name) } else { name };
+        // (unpinned: what it was pinned as, gone)
+        if to == "undock" || to == "unapps" {
+            let ids: Vec<String> = [program.clone(), Some(path.clone())].into_iter().flatten().chain(crate::explorer::sources().into_iter().filter(|(_, s, _)| s.eq_ignore_ascii_case(&path)).map(|(_, _, i)| i)).collect();
+            let is = |id: &str| ids.iter().any(|i| i.eq_ignore_ascii_case(id));
+            self.change_config(|c| {
+                if to == "undock" {
+                    c.pinned.retain(|x| !is(&x.id));
+                } else if let Some(pins) = c.launcher_pins.as_mut() {
+                    pins.retain(|x| !((x.kind == "app" || x.kind == "file") && is(&x.id)));
+                }
+            });
+            return;
+        }
+        // (a shortcut pinned as itself, as NADI's own copy of it: it works on when the one pinned is deleted or moved; the one pinned
+        // remembered, so File Explorer's menu offers to unpin it)
+        let kept = if lnk { crate::explorer::keep_shortcut(&path) } else { None };
+        if let Some(k) = &kept {
+            crate::explorer::remember(if to == "dock" { "dock" } else { "apps" }, &path, k);
+        }
+        let lnk_id = kept.clone().unwrap_or(path.clone());
+        self.change_config(|c| {
+            if to == "dock" {
+                // (a shortcut as itself: what it starts with kept, its own name)
+                let id = if lnk { lnk_id.clone() } else { program.clone().unwrap_or(path.clone()) };
+                let name = name.clone();
+                if !c.pinned.iter().any(|x| x.id.eq_ignore_ascii_case(&id)) {
+                    c.pinned.push(crate::config::Pin { name, id, icon: String::new() });
+                }
+            } else {
+                let pins = c.launcher_pins.get_or_insert_with(crate::launcher::default_pins);
+                // (a shortcut pinned as itself: what it starts with (its arguments, its folder) and its own name kept; a program, as
+                // the app)
+                let (kind, id, name) = match &program {
+                    Some(e) if !lnk => ("app", e.clone(), name.clone()),
+                    _ => ("file", if lnk { lnk_id.clone() } else { path.clone() }, name.clone()),
+                };
+                if !pins.iter().any(|x| x.kind == kind && x.id.eq_ignore_ascii_case(&id)) {
+                    pins.push(crate::config::AppPin { kind: kind.into(), id, name, folder: String::new(), icon: String::new() });
+                }
+            }
+        });
+    }
+
+    /// The edge reach's band on the screen (the one in front), as thick as it is being set: a soft frame of the theme's colour, its
+    /// inner edge a line. 0: gone. It goes by itself a moment after the slider was last moved.
+    fn show_reach(&mut self, px: f32) {
+        if px <= 0.0 {
+            if let Some((si, p, _)) = self.reach_shown.take() {
+                if let Some(sc) = self.screens.get(si) {
+                    sc.ov.remove_top(&p);
+                }
+            }
+            self.commit();
+            return;
+        }
+        let si = self.active.min(self.screens.len().saturating_sub(1));
+        let Some(sc) = self.screens.get(si) else { return };
+        let s = sc.s;
+        let m = sc.ov.monitor.rect;
+        let (pw, ph) = ((m.right - m.left) as u32, (m.bottom - m.top) as u32);
+        if self.reach_shown.as_ref().map_or(true, |(rs, _, _)| *rs != si) {
+            if let Some((os, p, _)) = self.reach_shown.take() {
+                if let Some(o) = self.screens.get(os) {
+                    o.ov.remove_top(&p);
+                }
+            }
+            // (on the glass over the frame's window: seen across the screen, the mouse going through it)
+            let Ok(p) = sc.ov.top_piece(&self.g, pw, ph) else { return };
+            self.reach_shown = Some((si, p, Instant::now()));
+        }
+        let a = sc.area;
+        let k = px.clamp(2.0, 64.0);
+        let surface = {
+            let Some((_, piece, at)) = self.reach_shown.as_mut() else { return };
+            *at = Instant::now();
+            piece.surface.clone()
+        };
+        let painter = self.painter(s);
+        let c = crate::draw::accent();
+        let _ = self.g.draw_surface(&surface, |_| {
+            let band = c.alpha(0.22);
+            painter.round(Rect::new(a.x, a.y, a.w, k), 0.0, band);
+            painter.round(Rect::new(a.x, a.y + a.h - k, a.w, k), 0.0, band);
+            painter.round(Rect::new(a.x, a.y + k, k, a.h - 2.0 * k), 0.0, band);
+            painter.round(Rect::new(a.x + a.w - k, a.y + k, k, a.h - 2.0 * k), 0.0, band);
+            painter.outline(Rect::new(a.x + k, a.y + k, a.w - 2.0 * k, a.h - 2.0 * k), 8.0, 2.0, c.alpha(0.9));
+        });
+        drop(painter);
+        if let Some((_, piece, _)) = self.reach_shown.as_mut() {
+            let _ = piece.place(0, 0);
+        }
+        self.commit();
+    }
+
     /// The config, changed here (a menu, the settings) and kept.
     fn change_config(&mut self, f: impl FnOnce(&mut Config)) {
         let mut c = self.config.clone();
         f(&mut c);
+        if c.pinned != self.config.pinned || c.launcher_pins != self.config.launcher_pins || c.launcher_foot != self.config.launcher_foot {
+            crate::explorer::prune_kept(&kept_paths(&c));
+        }
         config::save(&c);
         self.config_when = std::fs::metadata(config::path()).and_then(|m| m.modified()).ok();
         self.set_config(c);
@@ -4739,8 +5188,8 @@ impl Frame {
         let banner_moves = launcher_moves || self.banner.as_ref().is_some_and(|b| b.slide.moving() || b.home.is_some_and(|h| h.moving()) || b.typing || b.marquee || b.glowing || (b.say["pill"]["rows"].is_array() && b.since.elapsed().as_secs_f32() < 2.0));
         let rolling = self.rolls.borrow().values().any(|r| r.2.elapsed().as_secs_f32() < ROLL_FOR + 0.1);
         let rolling = rolling || self.dock_front.as_ref().is_some_and(|f| f.2.elapsed().as_secs_f32() < DOCK_FRONT_S + 0.05);
-        let moving = banner_moves || rolling || self.scrollbar_moves().is_some() || self.hold.is_some() || self.tip.as_ref().is_some_and(|t| t.grow.moving() || t.moving) || self.menu.as_ref().is_some_and(|m| m.grow.moving()) || self.ghost.as_ref().is_some_and(|g| g.rest.moving()) || self.screens.iter().any(|s| s.items.values().any(|i| i.open.moving() || i.rest.moving() || i.swell.moving())) || self.pops.values().any(|m| m.anim.is_some() || (m.strip_a > 0.0 && m.strip_a < 1.0)) || self.tear.is_some();
-        let alive = self.screens.iter().any(|s| s.items.values().any(|i| (i.alive && i.shown.now > 0.01) || i.shown.moving())) || self.hover.is_some() || self.press.is_some() || self.drag.is_some();
+        let moving = banner_moves || rolling || self.scrollbar_moves().is_some() || self.hold.is_some() || self.tip.as_ref().is_some_and(|t| t.grow.moving() || t.moving) || self.menu.as_ref().is_some_and(|m| m.grow.moving() || m.marquee) || self.ghost.as_ref().is_some_and(|g| g.rest.moving()) || self.screens.iter().any(|s| s.items.values().any(|i| i.open.moving() || i.rest.moving() || i.swell.moving())) || self.pops.values().any(|m| m.anim.is_some() || (m.strip_a > 0.0 && m.strip_a < 1.0)) || self.tear.is_some();
+        let alive = self.files_dragging || self.screens.iter().any(|s| s.items.values().any(|i| (i.alive && i.shown.now > 0.01) || i.shown.moving())) || self.hover.is_some() || self.press.is_some() || self.drag.is_some();
         // (widgets that show as the mouse comes: the mouse is looked at often)
         let watching = self.menu.is_some() || self.edit.is_some() || !self.pops.is_empty() || (self.click_to_open() && self.screens.iter().any(|s| s.items.values().any(|i| i.open.to == 1.0))) || !(self.config.reveal.is_empty() || self.config.reveal == "all") || self.screens.iter().any(|s| s.full || (s.maxed && self.config.auto_hide == "maximized"));
         let ms = if moving { 16 } else if alive { 33 } else if watching { 50 } else { 250 };
@@ -5065,9 +5514,12 @@ impl Frame {
             want = want.min(m.corner_max);
         }
         let base = if w.content["peek"]["dock"].is_object() {
-            let staged = self.large(k) && w.content["peek"]["dock"]["items"].as_array().is_some_and(|a| a.iter().any(|i| i["front"] == true));
+            // (its card for the app in front only along a top or bottom edge: on a side edge it is its icons alone)
+            let staged = look.horizontal() && self.large(k) && w.content["peek"]["dock"]["items"].as_array().is_some_and(|a| a.iter().any(|i| i["front"] == true));
             if staged {
                 DOCK_LARGE
+            } else if !look.horizontal() && self.large(k) && !self.icon_alone(k) {
+                peek::DOCK_SIDE_LARGE
             } else {
                 DOCK_DEPTH
             }
@@ -5106,10 +5558,14 @@ impl Frame {
             return (sq, sq);
         }
         // (its icon alone: square, as long as it is deep; the same size on every edge, a side's too)
-        if self.icon_alone(k) && !(pk["dock"].is_object() || pk["face"].is_string()) {
+        if self.icon_alone(k) && !pk["face"].is_string() {
             let base = if self.large(k) { (m.depth_h * peek::LARGE).round() } else { m.depth_h };
             return (base, base);
         }
+        let want = match self.screens.get(si) {
+            Some(sc) if pk["dock"].is_object() && !look.horizontal() => want.min(sc.area.h * 0.9),
+            _ => want,
+        };
         (want, base)
     }
 
@@ -5967,7 +6423,7 @@ impl Frame {
         };
         let s = self.screens[si].s;
         let Ok(piece) = self.screens[si].ov.piece(&self.g, (w * s).ceil() as u32 + 4, (h * s).ceil() as u32 + 4) else { return };
-        self.menu = Some(Menu { si, key: k, items: None, piece, at: Bx { x, y, w, h }, point: (x, y), hits: Vec::new(), names: Vec::new(), hover: None, grow: Spring { now: 0.0, to: 1.0, vel: 0.0 }, closing: false, pivot: (w / 2.0, 0.0) });
+        self.menu = Some(Menu { si, key: k, items: None, piece, at: Bx { x, y, w, h }, point: (x, y), hits: Vec::new(), names: Vec::new(), hover: None, marquee: false, grow: Spring { now: 0.0, to: 1.0, vel: 0.0 }, closing: false, pivot: (w / 2.0, 0.0) });
         self.render_menu();
         self.hit_regions();
         self.commit();
@@ -5980,7 +6436,7 @@ impl Frame {
         let (w, h) = crate::menu::items_size(items.len());
         let s = self.screens[si].s;
         let Ok(piece) = self.screens[si].ov.piece(&self.g, (w * s).ceil() as u32 + 4, (h * s).ceil() as u32 + 4) else { return };
-        self.menu = Some(Menu { si, key: None, items: Some((plugin, items)), piece, at: Bx { x, y, w, h }, point: (x, y), hits: Vec::new(), names: Vec::new(), hover: None, grow: Spring { now: 0.0, to: 1.0, vel: 0.0 }, closing: false, pivot: (w / 2.0, h) });
+        self.menu = Some(Menu { si, key: None, items: Some((plugin, items)), piece, at: Bx { x, y, w, h }, point: (x, y), hits: Vec::new(), names: Vec::new(), hover: None, marquee: false, grow: Spring { now: 0.0, to: 1.0, vel: 0.0 }, closing: false, pivot: (w / 2.0, h) });
         self.render_menu();
         self.hit_regions();
         self.commit();
@@ -6096,6 +6552,7 @@ impl Frame {
         let mut hits = Vec::new();
         let mut names: Vec<&'static str> = Vec::new();
         let g = &self.g;
+        let _ = crate::draw::take_marquee();
         let _ = self.g.draw_surface(&surface, |dc| unsafe {
             // (scaled about its pivot as it springs out, a little past whole, and faded in)
             let k = (0.55 + 0.45 * g_now).max(0.05);
@@ -6121,6 +6578,7 @@ impl Frame {
         m.at = b;
         m.hits = hits;
         m.names = names;
+        m.marquee = crate::draw::take_marquee();
         self.refresh_thumbs();
     }
 
@@ -6173,10 +6631,15 @@ impl Frame {
         if x < b.x || x >= b.x + b.w {
             return false;
         }
+        if y < b.y || y >= b.y + b.h {
+            return false;
+        }
+        let band = crate::peek::DOCK_BAND;
         match it.slot.place {
-            Place::Edge(Edge::Bottom) | Place::Corner(Corner::BottomLeft | Corner::BottomRight) => y < b.y + 11.0,
-            Place::Edge(Edge::Top) | Place::Corner(Corner::TopLeft | Corner::TopRight) => y > b.y + b.h - 11.0,
-            _ => false,
+            Place::Edge(Edge::Bottom) | Place::Corner(Corner::BottomLeft | Corner::BottomRight) => y < b.y + band,
+            Place::Edge(Edge::Top) | Place::Corner(Corner::TopLeft | Corner::TopRight) => y > b.y + b.h - band,
+            Place::Edge(Edge::Left) => x > b.x + b.w - band,
+            Place::Edge(Edge::Right) => x < b.x + band,
         }
     }
 
@@ -6872,6 +7335,19 @@ fn peek_shape(p: &Value) -> String {
 }
 
 /// Gone back into its edge, and staying there (not held, not open, not a window): nothing of it is drawn.
+/// (for finding out: a widget that could not be drawn, a line in render.log; kept small)
+fn note_render_error(k: &str, e: &windows::core::Error) {
+    let Some(dir) = nadi_core::paths::data_dir() else { return };
+    let f = dir.join("render.log");
+    if std::fs::metadata(&f).is_ok_and(|m| m.len() > 64 * 1024) {
+        let _ = std::fs::remove_file(&f);
+    }
+    use std::io::Write;
+    if let Ok(mut o) = std::fs::OpenOptions::new().create(true).append(true).open(&f) {
+        let _ = writeln!(o, "{} {k}: {e}", chrono::Local::now().format("%Y-%m-%d %H:%M:%S"));
+    }
+}
+
 fn tucked(it: &Item, k: &str) -> bool {
     it.shown.now <= 0.005 && it.shown.to <= 0.0 && it.drag_place.is_none() && it.open.now < 0.01 && !is_pop(k)
 }
@@ -6985,6 +7461,56 @@ fn sound_bars(loud: f32, t: f32) -> [f32; 4] {
 const METER_STILL: f32 = 0.04;
 
 /// How big the liquid's necks are (the round where shapes run together, logical px), for a blur of `px`.
+/// Every path the pins name (what they are, their pictures): NADI's own copies among them are kept.
+fn kept_paths(c: &Config) -> Vec<String> {
+    let mut out: Vec<String> = c.pinned.iter().flat_map(|p| [p.id.clone(), p.icon.clone()]).collect();
+    for l in [&c.launcher_pins, &c.launcher_foot].into_iter().flatten() {
+        out.extend(l.iter().flat_map(|p| [p.id.clone(), p.icon.clone()]));
+    }
+    out.retain(|p| !p.is_empty());
+    out
+}
+
+/// Shortcuts pinned before NADI kept its own copies: copied now (the pin then works on when the one pinned is gone). Changed?
+fn keep_shortcuts(c: &mut Config) -> bool {
+    let mut changed = false;
+    let mut keep = |to: &str, id: &mut String| {
+        if id.to_lowercase().ends_with(".lnk") && std::path::Path::new(id.as_str()).is_file() {
+            if let Some(k) = crate::explorer::keep_shortcut(id).filter(|k| !k.eq_ignore_ascii_case(id)) {
+                crate::explorer::remember(to, id, &k);
+                *id = k;
+                changed = true;
+            }
+        }
+    };
+    for p in &mut c.pinned {
+        keep("dock", &mut p.id);
+    }
+    for p in c.launcher_pins.iter_mut().flatten().filter(|p| p.kind == "file") {
+        keep("apps", &mut p.id);
+    }
+    changed
+}
+
+/// What File Explorer's menu offers to unpin: the paths pinned to the launcher, and to the dock (a program's, a file's, a folder's;
+/// and the shortcuts pinned as their programs).
+fn explorer_paths(c: &Config) -> (Vec<String>, Vec<String>) {
+    let is_path = |id: &str| id.len() > 2 && id.as_bytes()[1] == b':';
+    let sources = crate::explorer::sources();
+    let with_sources = |to: &str, ids: Vec<String>| -> Vec<String> {
+        let mut out = ids.clone();
+        for (t, src, id) in &sources {
+            if t == to && ids.iter().any(|i| i.eq_ignore_ascii_case(id)) && !out.iter().any(|o| o.eq_ignore_ascii_case(src)) {
+                out.push(src.clone());
+            }
+        }
+        out
+    };
+    let launcher: Vec<String> = c.launcher_pins.as_ref().map(|l| l.iter().filter(|p| (p.kind == "app" || p.kind == "file") && is_path(&p.id)).map(|p| p.id.clone()).collect()).unwrap_or_default();
+    let dock: Vec<String> = c.pinned.iter().filter(|p| is_path(&p.id)).map(|p| p.id.clone()).collect();
+    (with_sources("apps", launcher), with_sources("dock", dock))
+}
+
 pub fn liquid_neck(px: f32) -> f32 {
     (px * 1.6).max(2.0)
 }

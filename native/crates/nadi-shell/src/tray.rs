@@ -9,6 +9,8 @@ use windows::Win32::UI::WindowsAndMessaging::*;
 
 pub const WM_WAKE: u32 = WM_APP + 1;
 pub const WM_TRAY: u32 = WM_APP + 2;
+/// something was left to pin from File Explorer's menu
+pub const WM_PINS: u32 = WM_APP + 12;
 
 unsafe extern "system" fn proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> LRESULT {
     if msg == WM_DESTROY {

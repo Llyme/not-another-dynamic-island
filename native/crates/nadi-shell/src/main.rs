@@ -17,6 +17,9 @@ mod draw;
 mod events;
 mod eyes;
 mod frame;
+mod drop;
+mod recycle;
+mod perf;
 mod gfx;
 mod keyhook;
 mod launcher;
@@ -49,6 +52,7 @@ mod volume;
 mod winlist;
 mod sysw;
 mod audiodev;
+mod explorer;
 mod hotspot;
 mod net;
 
@@ -71,6 +75,8 @@ fn run() -> windows::core::Result<()> {
         let m = windows::Win32::System::Threading::CreateMutexW(None, true, &name)?;
         if GetLastError() == ERROR_ALREADY_EXISTS {
             let _ = CloseHandle(m);
+            // (started from File Explorer's menu: the NADI running takes what was left for it now)
+            explorer::nudge();
             return Ok(());
         }
     }
@@ -135,6 +141,9 @@ fn run() -> windows::core::Result<()> {
                 keyhook::WM_DESK_KEY => fr.desk_key(wp.0),
                 m if m == shell_hook => fr.shell_event(wp.0, lp.0),
                 settings::WM_SETTINGS => fr.settings_messages(),
+                drop::WM_DROP_HOVER => fr.drop_hover_changed(),
+                drop::WM_DROPPED => fr.dropped(),
+                tray::WM_PINS => fr.take_pins(),
                 frame::WM_JOB => fr.jobs_done(),
                 trayhost::WM_TRAY_CHANGED => fr.tray_changed(),
                 // (the taskbar moved or changed size: the frame keeps clear of it)
@@ -153,6 +162,7 @@ fn run() -> windows::core::Result<()> {
             })();
             if !what.is_empty() {
                 fr.prof_add(what, t_msg);
+                fr.busy_ms += t_msg.elapsed().as_secs_f64() * 1000.0;
             }
             return r;
         }
@@ -290,6 +300,8 @@ fn main() {
     unsafe {
         let _ = SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
         let _ = CoInitializeEx(None, COINIT_APARTMENTTHREADED);
+        // (drag and drop: files dropped on a widget)
+        let _ = windows::Win32::System::Ole::OleInitialize(None);
     }
     let args: Vec<String> = std::env::args().collect();
     let r = match args.get(1).map(String::as_str) {
@@ -320,6 +332,42 @@ fn main() {
             let (w, h, px) = menu::preview(&g, &pc)?;
             gfx::save_png(std::path::Path::new(args.get(2).map(String::as_str).unwrap_or("menu.png")), w, h, &px).map_err(|e| windows::core::Error::new(windows::Win32::Foundation::E_FAIL, e.to_string()))
         })(),
+        // (File Explorer's menu: what to pin is left for the NADI that runs, and this one ends; none running: this one starts)
+        Some(to @ ("--pin-dock" | "--pin-apps" | "--unpin-dock" | "--unpin-apps")) => {
+            if let Some(path) = args.get(2) {
+                // (several chosen: all of them, as File Explorer (or the desktop) has them chosen)
+                let what = to.trim_start_matches("--").trim_start_matches("pin-").replace("unpin-", "un");
+                for p in explorer::selection_with(path) {
+                    explorer::leave(&what, &p);
+                }
+            }
+            run()
+        }
+        // (for checking: what is chosen where this path is)
+        Some("--selection") => {
+            println!("desktop: {:?}", explorer::desktop_selection());
+            for p in explorer::selection_with(args.get(2).map(String::as_str).unwrap_or("")) {
+                println!("{p}");
+            }
+            Ok(())
+        }
+        // (for checking: what is in the Recycle Bin; one of them restored)
+        Some("--bin-list") => {
+            unsafe {
+                let _ = CoInitializeEx(None, COINIT_APARTMENTTHREADED);
+            }
+            for it in recycle::check_list() {
+                println!("{}|{}|{}", it.name, it.from, it.parse);
+            }
+            Ok(())
+        }
+        Some("--bin-restore") => {
+            unsafe {
+                let _ = CoInitializeEx(None, COINIT_APARTMENTTHREADED);
+            }
+            println!("{:?}", recycle::check_put_back(args.get(2).map(String::as_str).unwrap_or("")));
+            Ok(())
+        }
         Some("--preview") => preview::preview(std::path::Path::new(args.get(2).map(String::as_str).unwrap_or("preview.png")), args.get(3).map(std::path::Path::new)),
         _ => run(),
     };

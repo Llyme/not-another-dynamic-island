@@ -1435,10 +1435,10 @@ impl<'a, 'b> Ctx<'a, 'b> {
                 cy + 11.0 - y
             }
             "meter" => {
-                // (its label; then, fainter, what more it says)
-                let lw = self.text(s(b, "label"), x, y + 7.0, 11.0, Weight::Regular, w * 0.5, DIM);
+                // (its label; then, quieter but readable, what more it says)
+                let lw = self.text(s(b, "label"), x, y + 7.0, 11.5, Weight::Semibold, w * 0.5, TEXT);
                 if !s(b, "sub").is_empty() {
-                    self.text(s(b, "sub"), x + lw + 8.0, y + 7.0, 10.5, Weight::Regular, w * 0.5 - lw, SOFT);
+                    self.text(s(b, "sub"), x + lw + 8.0, y + 7.0, 11.0, Weight::Regular, w * 0.5 - lw, DIM);
                 }
                 let t = s(b, "text");
                 let tw = self.p.measure(t, 11.0, Weight::Semibold, w * 0.5);
@@ -2259,6 +2259,163 @@ impl<'a, 'b> Ctx<'a, 'b> {
                 (rows.len() as f32 * 32.0 - 4.0).max(0.0)
             }
             // (how fast, over time: a line, softly filled under it, its newest point a dot; how fast now at its end)
+            // (the battery's tank: a box of liquid at the charge, its surface waving (bubbles rising while it charges); over it the
+            // number, what it means, and a few small numbers at its foot. The words are dark where the liquid is, white above it)
+            "tank" => {
+                let h = b["height"].as_f64().unwrap_or(150.0) as f32;
+                if self.draw {
+                    let r = Rect::new(x, y, w, h);
+                    let c = color_of(&b["color"], GREEN);
+                    let part = b["part"].as_f64().unwrap_or(0.0) as f32;
+                    let shown = if part > 0.0 { 0.06 + part.clamp(0.0, 1.0) * 0.94 } else { 0.0 };
+                    let (ph, amp) = (self.p.t * 0.22, 4.5);
+                    self.p.round(r, 18.0, TRACK);
+                    self.p.wave_fill(r, 18.0, shown, ph, amp, c);
+                    if b["charging"] == true {
+                        for i in 0..6 {
+                            let k = (self.p.t * 0.35 + i as f32 / 6.0).fract();
+                            let bx = x + w * (0.18 + 0.13 * i as f32);
+                            let depth = h * shown;
+                            let by = y + h - 6.0 - k * (depth - 10.0).max(8.0);
+                            let a = (1.0 - k) * (k * 5.0).min(1.0) * 0.45;
+                            self.p.circle(bx, by, 2.0 + (i % 3) as f32 * 0.6, crate::paint::Color(1.0, 1.0, 1.0, a));
+                        }
+                    }
+                    crate::draw::keep_moving();
+                    let words = |ink: crate::paint::Color| {
+                        self.p.text(s(b, "title"), x + 16.0, y + 72.0, 42.0, Weight::Bold, w - 32.0, ink);
+                        self.p.text(s(b, "sub"), x + 16.0, y + 103.0, 13.0, Weight::Semibold, w - 32.0, ink);
+                        let mut fx = x + 16.0;
+                        for f in b["foot"].as_array().cloned().unwrap_or_default() {
+                            let t = f.as_str().unwrap_or("");
+                            fx += self.p.text(t, fx, y + h - 17.0, 12.0, Weight::Bold, 200.0, ink) + 14.0;
+                        }
+                    };
+                    words(TEXT);
+                    let under = Painter::wave_path(r, shown, ph, amp);
+                    self.p.within_path(&under, || words(crate::paint::Color(0.016, 0.075, 0.043, 0.92)));
+                    if b["tip"].is_string() {
+                        self.hit_tip(r, Press::Action(String::new(), Value::Null), b["tip"].clone());
+                    }
+                }
+                h
+            }
+            // (the apps that drew the most: a switch of how far back on its right; each app its picture, its name, its share and a bar;
+            // what no app accounts for last, grey)
+            // (the Recycle Bin: each thing thrown away (its picture, its name, where it came from, how long ago, how big), Put Back on
+            // its right, its menu on a right-click; at the foot, how much of the room is used, File Explorer, and Empty, held)
+            "binrows" => {
+                let mut yy = y;
+                for row in b["rows"].as_array().cloned().unwrap_or_default() {
+                    let rh = 38.0;
+                    let rr = Rect::new(x - 6.0, yy, w + 12.0, rh);
+                    let bb = Rect::new(x + w - 28.0, yy + 5.0, 28.0, 28.0);
+                    if self.draw && hovered(rr) {
+                        self.p.round(rr, 9.0, LIT);
+                    }
+                    if self.draw && hovered(bb) {
+                        self.p.round(bb, 8.0, SOFT);
+                    }
+                    self.icon("back", bb.x + 7.0, bb.y + 7.0, 14.0, if hovered(bb) { TEXT } else { DIM });
+                    self.hit_tip(bb, Press::Action(s(&row, "back").to_string(), row["args"].clone()), json!("Restore"));
+                    self.hit(rr, Press::Action(String::new(), Value::Null));
+                    self.last_hit(false, row["menu"].clone());
+                    let ic = Rect::new(x, yy + 5.0, 28.0, 28.0);
+                    if self.draw && !self.p.picture(s(&row, "image"), ic, 7.0) {
+                        self.p.round(ic, 7.0, TRACK);
+                        self.p.icon("file", ic.x + 7.0, ic.y + 7.0, 14.0, DIM);
+                    }
+                    let (sw, ww) = (56.0, 76.0);
+                    self.text_end(s(&row, "size"), x + w - 36.0, yy + 19.0, 11.0, Weight::Regular, sw, TEXT.alpha(0.8));
+                    self.text_end(s(&row, "when"), x + w - 36.0 - sw - 6.0, yy + 19.0, 11.0, Weight::Regular, ww, DIM);
+                    let tx = x + 38.0;
+                    let tw = (w - 38.0 - 36.0 - sw - ww - 12.0).max(40.0);
+                    self.text(s(&row, "name"), tx, yy + 13.0, 12.5, Weight::Semibold, tw, TEXT);
+                    self.text(s(&row, "sub"), tx, yy + 27.0, 10.5, Weight::Regular, tw, DIM);
+                    yy += rh + 2.0;
+                }
+                if !s(b, "more").is_empty() {
+                    self.text(s(b, "more"), x, yy + 9.0, 10.5, Weight::Regular, w, DIM);
+                    yy += 20.0;
+                }
+                yy += 6.0;
+                if self.draw {
+                    self.p.round(Rect::new(x, yy, w, 1.0), 0.5, FAINT);
+                }
+                yy += 10.0;
+                let part = f(b, "used").clamp(0.0, 1.0);
+                if self.draw {
+                    let bar = Rect::new(x, yy + 12.5, 90.0, 5.0);
+                    self.p.round(bar, 2.5, TRACK);
+                    if part > 0.0 {
+                        self.p.round(Rect::new(bar.x, bar.y, (bar.w * part).max(5.0), bar.h), 2.5, if part > 0.85 { AMBER } else { accent() });
+                    }
+                }
+                self.text(s(b, "used_text"), x + 100.0, yy + 15.0, 11.0, Weight::Regular, w - 180.0, DIM);
+                let ob = Rect::new(x + w - 64.0, yy, 30.0, 30.0);
+                let eb = Rect::new(x + w - 30.0, yy, 30.0, 30.0);
+                for (r, ic, act, tip, hold, col) in [(ob, "folder", s(b, "open").to_string(), "Open in File Explorer", false, DIM), (eb, "trash", s(b, "empty").to_string(), "Empty", true, RED)] {
+                    if self.draw && hovered(r) {
+                        self.p.round(r, 9.0, SOFT);
+                    }
+                    self.icon(ic, r.x + 8.0, r.y + 8.0, 14.0, col);
+                    self.hit_tip(r, Press::Action(act, Value::Null), json!(tip));
+                    self.last_hit(hold, Value::Null);
+                }
+                yy += 30.0;
+                yy - y
+            }
+            "appshares" => {
+                let mut yy = y;
+                let opts = b["options"].as_array().cloned().unwrap_or_default();
+                if !opts.is_empty() {
+                    let ow: Vec<f32> = opts.iter().map(|o| self.p.measure(s(o, "label"), 11.0, Weight::Semibold, 80.0) + 18.0).collect();
+                    let total: f32 = ow.iter().sum::<f32>() + 6.0;
+                    let mut ox = x + w - total + 3.0;
+                    self.round(Rect::new(x + w - total, yy, total, 26.0), 10.0, crate::paint::Color(0.09, 0.09, 0.1, 1.0));
+                    for (o, ww) in opts.iter().zip(ow) {
+                        let r = Rect::new(ox, yy + 3.0, ww, 20.0);
+                        let on = o["value"] == b["value"];
+                        if on {
+                            self.round(r, 7.0, crate::paint::Color(0.22, 0.22, 0.25, 1.0));
+                        } else if self.draw && hovered(r) {
+                            self.round(r, 7.0, LIT);
+                        }
+                        self.text(s(o, "label"), r.x + 9.0, r.y + 10.0, 11.0, Weight::Semibold, 80.0, if on { TEXT } else { DIM });
+                        if !on {
+                            self.hit(r, Press::Action(s(b, "action").to_string(), json!({ "value": o["value"] })));
+                        }
+                        ox += ww;
+                    }
+                    yy += 36.0;
+                }
+                for row in b["rows"].as_array().cloned().unwrap_or_default() {
+                    let sys = row["system"] == true;
+                    let ic = Rect::new(x, yy + 3.0, 30.0, 30.0);
+                    if self.draw && (sys || !self.p.picture(s(&row, "image"), ic, 8.0)) {
+                        self.p.round(ic, 8.0, TRACK);
+                        self.p.icon(if sys { "desktop" } else { "grid" }, ic.x + 7.0, ic.y + 7.0, 16.0, DIM);
+                    }
+                    let tx = x + 42.0;
+                    let right = s(&row, "text");
+                    let rw = self.p.measure(right, 12.5, Weight::Semibold, 80.0);
+                    self.text(s(&row, "name"), tx, yy + 11.0, 13.0, Weight::Semibold, w - 42.0 - rw - 10.0, if sys { DIM } else { TEXT });
+                    self.text_end(right, x + w, yy + 11.0, 12.5, Weight::Semibold, 80.0, DIM);
+                    if self.draw {
+                        let br = Rect::new(tx, yy + 25.0, w - 42.0, 4.0);
+                        self.p.round(br, 2.0, crate::paint::Color(0.15, 0.15, 0.17, 1.0));
+                        let part = row["part"].as_f64().unwrap_or(0.0).clamp(0.0, 1.0) as f32;
+                        if part > 0.0 {
+                            self.p.round(Rect::new(br.x, br.y, (br.w * part).max(4.0), br.h), 2.0, if sys { crate::paint::Color(0.36, 0.36, 0.4, 1.0) } else { color_of(&row["color"], GREEN) });
+                        }
+                    }
+                    if row["tip"].is_string() {
+                        self.hit_tip(Rect::new(x, yy, w, 36.0), Press::Action(String::new(), Value::Null), row["tip"].clone());
+                    }
+                    yy += 42.0;
+                }
+                (yy - y - 6.0).max(0.0)
+            }
             "linegraph" => {
                 let vals: Vec<f32> = b["values"].as_array().map(|a| a.iter().map(|v| v.as_f64().unwrap_or(0.0) as f32).collect()).unwrap_or_default();
                 let h = b["height"].as_f64().unwrap_or(40.0) as f32;

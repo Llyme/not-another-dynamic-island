@@ -436,7 +436,7 @@ impl Frame {
             let had = c.pinned.iter().position(|p| p.id.to_lowercase() == app).map(|i| c.pinned.remove(i));
             // (on the dock: pinned there; off it: unpinned, and one that was not pinned stays as it was)
             if near {
-                let pin = had.unwrap_or(config::Pin { name: name.clone(), id: app.clone() });
+                let pin = had.unwrap_or(config::Pin { name: name.clone(), id: app.clone(), icon: String::new() });
                 let at = at.min(c.pinned.len());
                 c.pinned.insert(at, pin);
             }

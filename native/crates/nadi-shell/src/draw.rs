@@ -430,9 +430,104 @@ impl<'a> Painter<'a> {
         }
     }
 
+    /// The battery's round tank: dark, filled to `level` with a waving liquid (no rim; while it charges, a rim of its colour and
+    /// bubbles rising in it; full, still to the brim with a check in it).
+    /// A bin (the Recycle Bin), drawn in a box of 24: its body narrowing to its foot, filling from there as far as `part` in `c`;
+    /// its lid, with its handle, over it, lifted and tipped back about its left end by `lid` (0..1: something dragged over it).
+    pub fn bin(&self, r: Rect, part: f32, lid: f32, c: Color) {
+        let z = r.w.min(r.h);
+        let (x, y) = ((r.x + (r.w - z) / 2.0) * self.s, (r.y + (r.h - z) / 2.0) * self.s);
+        let size = z * self.s;
+        let f = &self.g.d2d_factory;
+        let part = part.clamp(0.0, 1.0);
+        // (what it holds: the body, from its foot up so far, its sides narrowing as the body does)
+        if part > 0.005 {
+            let (top, foot) = (8.6, 20.4);
+            let yf = foot - (foot - top) * part;
+            let at = |yy: f32| ((6.5 + (yy - 8.0) / 13.0) + 0.6, (17.5 - (yy - 8.0) / 13.0) - 0.6);
+            let (l0, r0) = at(yf);
+            let (l1, r1) = at(foot);
+            let d = format!("M{l0:.2} {yf:.2}L{r0:.2} {yf:.2}L{r1:.2} {foot:.2}L{l1:.2} {foot:.2}Z");
+            let _ = crate::icons::draw_path(self.dc, f, &d, 24.0, x, y, size, Some(c.alpha(0.92)), None, (0.0, 0.0, 0.0));
+        }
+        let _ = crate::icons::draw_path(self.dc, f, "M6.5 8h11l-1 13h-9z", 24.0, x, y, size, None, Some((TEXT, 1.7)), (0.0, 0.0, 0.0));
+        let _ = crate::icons::draw_path(self.dc, f, "M4.5 6h15M10 6V4.5h4V6", 24.0, x, y - lid * 1.6 * self.s, size, None, Some((TEXT, 1.7)), (-28.0 * lid, 4.5, 6.0));
+    }
+
+    pub fn tank(&self, r: Rect, level: f32, charging: bool, full: bool, c: Color) {
+        let z = r.w.min(r.h);
+        let (cx, cy) = (r.x + r.w / 2.0, r.y + r.h / 2.0);
+        let rr = z / 2.0;
+        self.circle(cx, cy, rr, crate::paint::Color(0.106, 0.106, 0.125, 1.0));
+        let inner = if charging { rr - 1.6 } else { rr };
+        let b = Rect::new(cx - inner, cy - inner, inner * 2.0, inner * 2.0);
+        if full {
+            self.circle(cx, cy, inner, c);
+            let k = z * 0.6;
+            self.icon("check", cx - k / 2.0, cy - k / 2.0, k, crate::paint::Color(0.016, 0.075, 0.043, 1.0));
+        } else {
+            let level = level.clamp(0.0, 1.0);
+            // (never empty to the eye: a thin layer at the foot)
+            let shown = if level > 0.0 { 0.08 + level * 0.92 } else { 0.0 };
+            self.wave_fill(b, inner, shown, self.t * 0.45, (z * 0.06).max(0.8), c);
+            if charging {
+                // (bubbles: each rising from the foot, fading as it goes)
+                for i in 0..3 {
+                    let ph = (self.t * 0.55 + i as f32 / 3.0).fract();
+                    let bx = cx + (i as f32 - 1.0) * inner * 0.45;
+                    let by = cy + inner * 0.85 - ph * inner * 1.2 * shown.max(0.3);
+                    let a = (1.0 - ph) * (ph * 4.0).min(1.0) * 0.7;
+                    self.circle(bx, by, (z * 0.05).max(0.9), crate::paint::Color(1.0, 1.0, 1.0, a));
+                }
+            }
+            keep_moving();
+        }
+        if charging {
+            self.ring(cx, cy, rr - 0.7, 1.4, 1.0, 0.0, c, c);
+        }
+    }
+
+    /// Draw only where a shape (an SVG path, logical px) is: what `f` draws is cut to it.
+    pub fn within_path(&self, d: &str, f: impl FnOnce()) {
+        let Ok(g) = crate::icons::path_of(&self.g.d2d_factory, d, true) else { return };
+        unsafe {
+            let params = D2D1_LAYER_PARAMETERS1 {
+                contentBounds: D2D_RECT_F { left: -1e6, top: -1e6, right: 1e6, bottom: 1e6 },
+                geometricMask: std::mem::ManuallyDrop::new(Some(g.into())),
+                maskAntialiasMode: D2D1_ANTIALIAS_MODE_PER_PRIMITIVE,
+                maskTransform: windows::Foundation::Numerics::Matrix3x2 { M11: self.s, M12: 0.0, M21: 0.0, M22: self.s, M31: 0.0, M32: 0.0 },
+                opacity: 1.0,
+                opacityBrush: std::mem::ManuallyDrop::new(None),
+                layerOptions: D2D1_LAYER_OPTIONS1_NONE,
+            };
+            self.dc.PushLayer(&params, None);
+            f();
+            self.dc.PopLayer();
+            let _ = std::mem::ManuallyDrop::into_inner(params.geometricMask);
+        }
+    }
+
+    /// The front wave of a waving fill (as `wave_fill` draws it), as a path: what is under its surface.
+    pub fn wave_path(r: Rect, part: f32, phase: f32, amp: f32) -> String {
+        let top = r.y + r.h * (1.0 - part.clamp(0.0, 1.0));
+        let mut d = format!("M {} {}", r.x, r.bottom());
+        let n = 24;
+        for i in 0..=n {
+            let fx = i as f32 / n as f32;
+            let y = top + amp * ((fx + phase) * std::f32::consts::TAU).sin();
+            d.push_str(&format!(" L {} {}", r.x + r.w * fx, y));
+        }
+        d.push_str(&format!(" L {} {} Z", r.right(), r.bottom()));
+        d
+    }
+
     /// A picture in a rounded box (cover, program icon); false when there is none.
     pub fn picture(&self, name: &str, r: Rect, radius: f32) -> bool {
         let Some(bmp) = images::get_at(self.dc, self.pc, name, self.t) else { return false };
+        // (a moving picture: drawn again at the next frame)
+        if images::animated(name) {
+            keep_moving();
+        }
         let p = self.px(r);
         unsafe {
             let size = bmp.GetSize();
@@ -673,6 +768,9 @@ impl<'a> Painter<'a> {
         let inner = Rect::new(x + pad, y + pad, size - 2.0 * pad, size - 2.0 * pad);
         let drew = !image.is_empty() && self.picture(image, inner, inner.w * 0.28);
         if drew {
+        } else if tile["tank"].as_bool() == Some(true) {
+            let lv = ring.unwrap_or(0.0) as f32;
+            self.tank(inner, lv, tile["bolt"].as_bool() == Some(true), lv >= 0.995, c);
         } else if tile["vessel"].as_bool() == Some(true) {
             self.round(inner, inner.w * 0.28, c.alpha(0.18));
             let lv = Rect::new(inner.x + inner.w * 0.14, inner.y + inner.h * 0.3, inner.w * 0.72, inner.h * 0.4);
@@ -690,7 +788,7 @@ impl<'a> Painter<'a> {
                 self.icon(icon, inner.x + (inner.w - z) / 2.0, inner.y + (inner.h - z) / 2.0, z, c);
             }
         }
-        if let (Some(part), false) = (ring, tile["vessel"].as_bool() == Some(true)) {
+        if let (Some(part), false) = (ring, tile["vessel"].as_bool() == Some(true) || tile["tank"].as_bool() == Some(true)) {
             let rc = color_of(&tile["ring_color"], c);
             self.ring(x + size / 2.0, y + size / 2.0, size / 2.0 - size * 0.05, size * 0.07, part as f32, 0.0, rc, FAINT);
         }

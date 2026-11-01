@@ -148,6 +148,10 @@ fn uninstall(dir: &Path) -> Result<(), String> {
     unsafe {
         let _ = RegDeleteKeyValueW(HKEY_CURRENT_USER, RUN, w!("NADI"));
         let _ = RegDeleteTreeW(HKEY_CURRENT_USER, UNINSTALL);
+        // (File Explorer's menu items, if they were on)
+        for k in [w!("Software\\Classes\\*\\shell\\NADI.PinDock"), w!("Software\\Classes\\*\\shell\\NADI.PinApps"), w!("Software\\Classes\\Directory\\shell\\NADI.PinDock"), w!("Software\\Classes\\Directory\\shell\\NADI.PinApps"), w!("Software\\Classes\\*\\shell\\NADI"), w!("Software\\Classes\\Directory\\shell\\NADI"), w!("Software\\Classes\\lnkfile\\shell\\NADI")] {
+            let _ = RegDeleteTreeW(HKEY_CURRENT_USER, k);
+        }
     }
     // (the uninstaller that started this may still be ending: a few tries)
     for _ in 0..20 {

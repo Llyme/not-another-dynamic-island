@@ -323,6 +323,34 @@ fn stroke(factory: &ID2D1Factory1) -> Result<ID2D1StrokeStyle> {
     Ok(s)
 }
 
+/// Draw a path of one's own (SVG words, in a `box_px` box), `size` px square, its top-left at `x`, `y`: filled in `fill`, and drawn
+/// round in `line` (its colour, how thick in the box), round at its ends and corners; turned `turn` degrees about (`ox`, `oy`) in the
+/// box first.
+#[allow(clippy::too_many_arguments)]
+pub fn draw_path(dc: &ID2D1DeviceContext, factory: &ID2D1Factory1, d: &str, box_px: f32, x: f32, y: f32, size: f32, fill: Option<Color>, line: Option<(Color, f32)>, turn: (f32, f32, f32)) -> Result<()> {
+    let k = size / box_px;
+    unsafe {
+        let mut before = Matrix3x2::default();
+        dc.GetTransform(&mut before);
+        let (deg, ox, oy) = turn;
+        let a = deg.to_radians();
+        let (cs, sn) = (a.cos(), a.sin());
+        let rot = Matrix3x2 { M11: cs, M12: sn, M21: -sn, M22: cs, M31: ox - cs * ox + sn * oy, M32: oy - sn * ox - cs * oy };
+        let m = rot * Matrix3x2 { M11: k, M12: 0.0, M21: 0.0, M22: k, M31: x, M32: y } * before;
+        dc.SetTransform(&m);
+        if let Some(c) = fill {
+            let g = path_of(factory, d, true)?;
+            dc.FillGeometry(&g, &brush(dc, c)?, None);
+        }
+        if let Some((c, w)) = line {
+            let g = path_of(factory, d, false)?;
+            dc.DrawGeometry(&g, &brush(dc, c)?, w, &stroke(factory)?);
+        }
+        dc.SetTransform(&before);
+    }
+    Ok(())
+}
+
 /// Draw the icon `name`, `size` px square, its top-left at `x`, `y`.
 pub fn draw(dc: &ID2D1DeviceContext, factory: &ID2D1Factory1, name: &str, x: f32, y: f32, size: f32, c: Color) -> Result<()> {
     let i = icon(factory, name)?;

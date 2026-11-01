@@ -1,5 +1,6 @@
 //! What NADI reads from the PC, for the plugins that may see it (and the shell).
 
+pub mod apppower;
 pub mod audio;
 pub mod battery;
 pub mod browsersensor;

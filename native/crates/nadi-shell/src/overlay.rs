@@ -165,6 +165,8 @@ impl Overlay {
             let target = gfx.target_for(hwnd)?;
             let root = gfx.dcomp.CreateVisual()?;
             target.SetRoot(&root)?;
+            // (files dropped on a widget that takes them)
+            crate::drop::register(hwnd);
             // (nothing takes the mouse until there are pieces)
             SetWindowRgn(hwnd, CreateRectRgn(0, 0, 0, 0), false);
             let _ = ShowWindow(hwnd, SW_SHOWNOACTIVATE);

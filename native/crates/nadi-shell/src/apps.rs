@@ -72,10 +72,21 @@ pub fn all() -> Vec<App> {
             }
         }
     }
+    // (the Steam games installed: Steam puts them in the Start menu only when asked to, so many are not there)
+    let have: std::collections::HashSet<String> = out.iter().map(|a| a.name.to_lowercase()).collect();
+    for g in nadi_core::sensors::steamlib::state()["games"].as_array().cloned().unwrap_or_default() {
+        let (Some(id), Some(name)) = (g["id"].as_u64(), g["name"].as_str()) else { continue };
+        if !have.contains(&name.to_lowercase()) {
+            out.push(App { name: name.to_string(), id: format!("{STEAM}{id}") });
+        }
+    }
     out.sort_by_key(|a| a.name.to_lowercase());
     out.dedup_by(|a, b| a.id == b.id);
     out
 }
+
+/// how a Steam game is named among the apps (run through Steam)
+pub const STEAM: &str = "steam://rungameid/";
 
 /// The shell item of an app (for its picture).
 pub fn item(id: &str) -> Option<IShellItem> {
@@ -84,10 +95,24 @@ pub fn item(id: &str) -> Option<IShellItem> {
 
 /// Launch an app by its id; a path (a program, a shortcut) is opened as it is.
 pub fn launch(id: &str) {
-    let target = if id.contains(":\\") && !id.contains('!') { id.to_string() } else { format!("shell:AppsFolder\\{id}") };
-    unsafe {
-        let _ = ShellExecuteW(None, &HSTRING::from("open"), &HSTRING::from(target), None, None, SW_SHOWNORMAL);
+    if id.starts_with(STEAM) {
+        return launch_uri(id);
     }
+    let target = if id.contains(":\\") && !id.contains('!') { id.to_string() } else { format!("shell:AppsFolder\\{id}") };
+    // (a program started in its own folder, as a shortcut to it would: a game that looks for its files beside it finds them)
+    let dir = program_dir(&target);
+    unsafe {
+        let _ = ShellExecuteW(None, &HSTRING::from("open"), &HSTRING::from(target), None, dir.as_ref().map_or(windows::core::PCWSTR::null(), |d| windows::core::PCWSTR(d.as_ptr())), SW_SHOWNORMAL);
+    }
+}
+
+/// A program's own folder (as words for Windows), when `path` is a program.
+pub fn program_dir(path: &str) -> Option<HSTRING> {
+    let p = std::path::Path::new(path);
+    if !path.to_lowercase().ends_with(".exe") || !p.is_file() {
+        return None;
+    }
+    p.parent().map(|d| HSTRING::from(d.as_os_str()))
 }
 
 /// Open an address (`ms-settings:`, a web page) as the PC opens it.

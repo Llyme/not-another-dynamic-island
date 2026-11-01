@@ -56,6 +56,8 @@ pub struct AppPin {
     pub name: String,
     /// the folder of pins it is in (none: loose)
     pub folder: String,
+    /// a picture of one's own in place of its own (kept in NADI's folder; a GIF moves)
+    pub icon: String,
 }
 
 /// An app pinned to the dock.
@@ -65,6 +67,8 @@ pub struct Pin {
     pub name: String,
     /// the program's path, or a store app's id
     pub id: String,
+    /// a picture of one's own in place of its own (kept in NADI's folder; a GIF moves)
+    pub icon: String,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
@@ -118,6 +122,11 @@ pub struct Config {
     pub desk_keys: bool,
     /// the launcher open brings every widget out (over a game too)
     pub launcher_reveal: bool,
+    /// "Pin to NADI Dock" and "Pin to NADI Apps" in File Explorer's right-click menu
+    pub explorer_menu: bool,
+    /// how near an edge the mouse brings hidden widgets out (logical px, 2 to 64), and how long it rests there first (ms)
+    pub edge_reach: f32,
+    pub edge_wait: u32,
 }
 
 impl Config {
@@ -133,7 +142,7 @@ impl Config {
 
 impl Default for Config {
     fn default() -> Self {
-        Config { widgets: BTreeMap::new(), monitors: "follow".into(), taskbar: "keep".into(), scale: 1.0, auto_hide: "fullscreen".into(), pinned: Vec::new(), launcher_pins: None, launcher_foot: None, win_key: "auto".into(), reveal: "all".into(), hold_key: "none".into(), open_on: "hover".into(), tray_pinned: Vec::new(), quiet_full: true, quiet_banners: Vec::new(), liquid: 50.0, theme: "#5ac88c".into(), theme2: "#e8b04a".into(), desk_map: BTreeMap::new(), desk_keys: true, launcher_reveal: false }
+        Config { widgets: BTreeMap::new(), monitors: "follow".into(), taskbar: "keep".into(), scale: 1.0, auto_hide: "fullscreen".into(), pinned: Vec::new(), launcher_pins: None, launcher_foot: None, win_key: "auto".into(), reveal: "all".into(), hold_key: "none".into(), open_on: "hover".into(), tray_pinned: Vec::new(), quiet_full: true, quiet_banners: Vec::new(), liquid: 50.0, theme: "#5ac88c".into(), theme2: "#e8b04a".into(), desk_map: BTreeMap::new(), desk_keys: true, launcher_reveal: false, explorer_menu: false, edge_reach: 6.0, edge_wait: 0 }
     }
 }
 

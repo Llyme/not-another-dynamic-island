@@ -65,6 +65,8 @@ pub struct Modal {
     mouse: (f32, f32),
     /// the keys moved the focus: the focused ghost shows its ground
     keyed: bool,
+    /// words in it too long for their room, scrolling: drawn again each frame
+    marquee: bool,
 }
 
 unsafe extern "system" fn proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> LRESULT {
@@ -122,6 +124,7 @@ impl Modal {
                 waiting: Vec::new(),
                 mouse: (-1.0, -1.0),
                 keyed: false,
+                marquee: false,
             })
         }
     }
@@ -223,7 +226,7 @@ impl Modal {
 
     /// Something in it moves: it springs out or away, its countdown runs, its caret blinks.
     pub fn moving(&self) -> bool {
-        self.t != self.to || self.vel != 0.0 || (self.shown && (self.spec["countdown"].is_number() || self.spec["field"].is_object() || self.opened.elapsed().as_secs_f32() < 0.6))
+        self.t != self.to || self.vel != 0.0 || (self.shown && (self.marquee || self.spec["countdown"].is_number() || self.spec["field"].is_object() || self.opened.elapsed().as_secs_f32() < 0.6))
     }
 
     /// One frame: its spring; its countdown run out, its last button pressed. True while it moves.
@@ -370,6 +373,7 @@ impl Modal {
         let bs = self.buttons();
         let (focus, mouse, field_text, keyed) = (self.focus, self.mouse, self.field.clone(), self.keyed);
         let from = self.from;
+        let _ = crate::draw::take_marquee();
         let _ = g.draw_surface(&self.surface, |dc| unsafe {
             use windows::Foundation::Numerics::Matrix3x2;
             // (the screen behind: dimmed, more as it comes out)
@@ -445,5 +449,6 @@ impl Modal {
             });
             dc.SetTransform(&base);
         });
+        self.marquee = crate::draw::take_marquee();
     }
 }

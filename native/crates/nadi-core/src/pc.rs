@@ -38,6 +38,9 @@ pub struct Pc {
     /// what is downloading now (as the downloads sensor last saw it, and when): the dock shows it on its app
     pub downloads: Mutex<(Option<std::time::Instant>, Vec<Value>)>,
     pub toast_seq: AtomicU64,
+    /// what each plugin has cost since NADI started (by its id; "~ name": a sensor gathered for them): ms gathering its events, ms
+    /// running them, how many events
+    pub plugin_cost: Mutex<std::collections::BTreeMap<String, (f64, f64, u64)>>,
 }
 
 impl Pc {

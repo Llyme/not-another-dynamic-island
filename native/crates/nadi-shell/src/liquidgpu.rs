@@ -104,7 +104,14 @@ fn compile(src: &str, target: windows::core::PCSTR) -> Option<Vec<u8>> {
     unsafe {
         let mut code: Option<ID3DBlob> = None;
         let mut errors: Option<ID3DBlob> = None;
-        D3DCompile(src.as_ptr() as _, src.len(), s!("liquid"), None, None, s!("main"), target, 0, 0, &mut code, Some(&mut errors)).ok()?;
+        let done = D3DCompile(src.as_ptr() as _, src.len(), s!("liquid"), None, None, s!("main"), target, 0, 0, &mut code, Some(&mut errors));
+        if done.is_err() {
+            if let Some(e) = &errors {
+                let msg = String::from_utf8_lossy(std::slice::from_raw_parts(e.GetBufferPointer() as *const u8, e.GetBufferSize()));
+                eprintln!("liquid shader: {msg}");
+            }
+            return None;
+        }
         let code = code?;
         Some(std::slice::from_raw_parts(code.GetBufferPointer() as *const u8, code.GetBufferSize()).to_vec())
     }

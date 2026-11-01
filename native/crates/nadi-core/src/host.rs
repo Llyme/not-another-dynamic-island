@@ -669,6 +669,10 @@ impl Host {
         if want(|p| p.battery) && self.battery_at.map_or(true, |t| t.elapsed() >= BATTERY_EVERY) {
             self.battery_now = (self.battery_reader)();
             self.battery_at = Some(Instant::now());
+            // (what each app drew of it, counted as it is read)
+            if want(|p| p.app_power) {
+                sensors::apppower::sample(&self.battery_now);
+            }
         }
         if want(|p| p.system) && self.system_at.map_or(true, |t| t.elapsed() >= SYSTEM_EVERY) {
             let s = sensors::stats::read(&self.pc);
@@ -690,10 +694,18 @@ impl Host {
                 }
                 self.run(i, ev, by_user);
             }
+            let (g, r) = ((t1 - t0).as_secs_f64() * 1000.0, t1.elapsed().as_secs_f64() * 1000.0);
+            {
+                let mut cost = self.pc.plugin_cost.lock().unwrap();
+                let e = cost.entry(self.plugins[i].manifest.id.clone()).or_default();
+                e.0 += g;
+                e.1 += r;
+                e.2 += n;
+            }
             if let Some((_, _, map)) = &mut self.profile {
                 let e = map.entry(self.plugins[i].manifest.id.clone()).or_default();
-                e.0 += (t1 - t0).as_secs_f64() * 1000.0;
-                e.1 += t1.elapsed().as_secs_f64() * 1000.0;
+                e.0 += g;
+                e.1 += r;
                 e.2 += n;
             }
         }
@@ -788,7 +800,11 @@ impl Host {
         }
         if perms.battery && !battery.is_null() && (sensors::battery::changed(&s.told_battery.0, &battery) || s.told_battery.1.map_or(true, |t| t.elapsed() >= BATTERY_TOLD)) {
             s.told_battery = (battery.clone(), Some(Instant::now()));
-            out.push(("battery", json!({ "battery": battery }), false));
+            let mut b = battery.clone();
+            if perms.app_power {
+                b["apps"] = sensors::apppower::summary();
+            }
+            out.push(("battery", json!({ "battery": b }), false));
         }
         if perms.audio {
             let seq = pc.audio_seq.load(Ordering::Relaxed);
@@ -943,6 +959,14 @@ impl Host {
                 out.push(("service", args, false));
             } else {
                 out.push(("action", json!({ "action": action, "args": args }), by_user));
+            }
+        }
+        if !timed.is_empty() {
+            let mut cost = self.pc.plugin_cost.lock().unwrap();
+            for (what, ms) in &timed {
+                let e = cost.entry(format!("~ {what}")).or_default();
+                e.0 += ms;
+                e.2 += 1;
             }
         }
         if let Some((_, _, map)) = &mut self.profile {

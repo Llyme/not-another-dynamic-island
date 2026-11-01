@@ -297,6 +297,60 @@ pub fn decode(dc: &ID2D1DeviceContext, bytes: &[u8]) -> Result<ID2D1Bitmap1> {
     }
 }
 
+/// A picture from the shell's bitmap of an icon. Its pixels are read and made sound first: an old icon's see-through edge comes with
+/// colour where there is no cover (drawn as it is, a pale frame round it), and one with no cover at all (no alpha) is all solid.
+fn from_hbitmap(dc: &ID2D1DeviceContext, hbmp: windows::Win32::Graphics::Gdi::HBITMAP) -> Option<ID2D1Bitmap1> {
+    use windows::Win32::Graphics::Gdi::*;
+    unsafe {
+        let mut bm = BITMAP::default();
+        if GetObjectW(hbmp, std::mem::size_of::<BITMAP>() as i32, Some(&mut bm as *mut _ as *mut _)) == 0 {
+            return None;
+        }
+        let (w, h) = (bm.bmWidth.max(1), bm.bmHeight.abs().max(1));
+        let mut info = BITMAPINFO { bmiHeader: BITMAPINFOHEADER { biSize: std::mem::size_of::<BITMAPINFOHEADER>() as u32, biWidth: w, biHeight: -h, biPlanes: 1, biBitCount: 32, biCompression: BI_RGB.0, ..Default::default() }, ..Default::default() };
+        let mut px = vec![0u8; (w * h * 4) as usize];
+        let hdc = GetDC(None);
+        let lines = GetDIBits(hdc, hbmp, 0, h as u32, Some(px.as_mut_ptr() as *mut _), &mut info, DIB_RGB_COLORS);
+        ReleaseDC(None, hdc);
+        if lines == 0 {
+            return None;
+        }
+        // (an icon smaller than asked for comes in a faint frame of the shell's own, two pixels round the edge: taken off)
+        let a_at = |x: i32, y: i32| px[((y * w + x) * 4 + 3) as usize];
+        let ring = a_at(1, 0);
+        if w > 8 && (0x10..=0x60).contains(&ring) && (1..w - 1).all(|x| a_at(x, 0) == ring && a_at(x, h - 1) == ring) && (1..h - 1).all(|y| a_at(0, y) == ring && a_at(w - 1, y) == ring) {
+            for y in 0..h {
+                for x in 0..w {
+                    if x < 2 || y < 2 || x >= w - 2 || y >= h - 2 {
+                        let i = ((y * w + x) * 4) as usize;
+                        px[i..i + 4].fill(0);
+                    }
+                }
+            }
+        }
+        if px.chunks(4).all(|c| c[3] == 0) {
+            for c in px.chunks_mut(4) {
+                c[3] = 255;
+            }
+        } else {
+            for c in px.chunks_mut(4) {
+                let a = c[3];
+                c[0] = c[0].min(a);
+                c[1] = c[1].min(a);
+                c[2] = c[2].min(a);
+            }
+        }
+        let props = D2D1_BITMAP_PROPERTIES1 {
+            pixelFormat: windows::Win32::Graphics::Direct2D::Common::D2D1_PIXEL_FORMAT { format: windows::Win32::Graphics::Dxgi::Common::DXGI_FORMAT_B8G8R8A8_UNORM, alphaMode: windows::Win32::Graphics::Direct2D::Common::D2D1_ALPHA_MODE_PREMULTIPLIED },
+            dpiX: 96.0,
+            dpiY: 96.0,
+            bitmapOptions: D2D1_BITMAP_OPTIONS_NONE,
+            colorContext: std::mem::ManuallyDrop::new(None),
+        };
+        dc.CreateBitmap(windows::Win32::Graphics::Direct2D::Common::D2D_SIZE_U { width: w as u32, height: h as u32 }, Some(px.as_ptr() as *const _), (w * 4) as u32, &props).ok()
+    }
+}
+
 /// A picture from an icon handle (a window's).
 fn from_icon(dc: &ID2D1DeviceContext, icon: windows::Win32::UI::WindowsAndMessaging::HICON) -> Option<ID2D1Bitmap1> {
     unsafe {
@@ -334,12 +388,9 @@ fn app_icon(dc: &ID2D1DeviceContext, id: &str) -> Option<ID2D1Bitmap1> {
         let item = crate::apps::item(id)?;
         let factory: IShellItemImageFactory = item.cast().ok()?;
         let hbmp = factory.GetImage(windows::Win32::Foundation::SIZE { cx: 64, cy: 64 }, SIIGBF_ICONONLY | SIIGBF_BIGGERSIZEOK).ok()?;
-        let f = wic().ok()?;
-        let b = f.CreateBitmapFromHBITMAP(hbmp, None, WICBitmapUsePremultipliedAlpha);
+        let b = from_hbitmap(dc, hbmp);
         let _ = windows::Win32::Graphics::Gdi::DeleteObject(hbmp);
-        let conv = f.CreateFormatConverter().ok()?;
-        conv.Initialize(&b.ok()?, &GUID_WICPixelFormat32bppPBGRA, WICBitmapDitherTypeNone, None, 0.0, WICBitmapPaletteTypeMedianCut).ok()?;
-        dc.CreateBitmapFromWicBitmap(&conv, None).ok()
+        b
     }
 }
 
@@ -351,12 +402,9 @@ fn shell_icon(dc: &ID2D1DeviceContext, path: &str) -> Option<ID2D1Bitmap1> {
         let item: IShellItem = SHCreateItemFromParsingName(&HSTRING::from(path), None).ok()?;
         let factory: IShellItemImageFactory = item.cast().ok()?;
         let hbmp = factory.GetImage(windows::Win32::Foundation::SIZE { cx: 48, cy: 48 }, SIIGBF_ICONONLY | SIIGBF_BIGGERSIZEOK).ok()?;
-        let f = wic().ok()?;
-        let b = f.CreateBitmapFromHBITMAP(hbmp, None, WICBitmapUsePremultipliedAlpha);
+        let b = from_hbitmap(dc, hbmp);
         let _ = windows::Win32::Graphics::Gdi::DeleteObject(hbmp);
-        let conv = f.CreateFormatConverter().ok()?;
-        conv.Initialize(&b.ok()?, &GUID_WICPixelFormat32bppPBGRA, WICBitmapDitherTypeNone, None, 0.0, WICBitmapPaletteTypeMedianCut).ok()?;
-        dc.CreateBitmapFromWicBitmap(&conv, None).ok()
+        b
     }
 }
 
@@ -438,8 +486,22 @@ pub fn get(dc: &ID2D1DeviceContext, pc: &Arc<Pc>, name: &str) -> Option<ID2D1Bit
                 decode(dc, &bytes).ok()
             }
         })
+    } else if let Some(path) = name.strip_prefix("img:") {
+        // (a picture of one's own, chosen for a pin: a GIF of several frames moves)
+        std::fs::read(path).ok().and_then(|bytes| {
+            if let Some(frames) = gif_frames(dc, &bytes) {
+                let first = frames.first().map(|(b, _)| b.clone());
+                MOVING.with(|m| m.borrow_mut().insert(name.to_string(), frames));
+                first
+            } else {
+                decode(dc, &bytes).ok()
+            }
+        })
     } else if let Some(h) = name.strip_prefix("hwnd:").and_then(|h| h.parse::<isize>().ok()) {
         window_icon(dc, h)
+    } else if let Some(id) = name.strip_prefix("app:").and_then(|i| i.strip_prefix(crate::apps::STEAM)).and_then(|i| i.parse::<u32>().ok()) {
+        // (a Steam game among the apps: its own icon)
+        nadi_core::sensors::steamlib::icon(id).and_then(|p| std::fs::read(p).ok()).and_then(|b| decode(dc, &b).ok())
     } else if let Some(id) = name.strip_prefix("app:") {
         app_icon(dc, id)
     } else {
@@ -449,7 +511,7 @@ pub fn get(dc: &ID2D1DeviceContext, pc: &Arc<Pc>, name: &str) -> Option<ID2D1Bit
         let mut c = c.borrow_mut();
         // (covers come and go: only the last few are kept)
         if c.len() > 200 {
-            c.retain(|k, _| k.starts_with("exe:") || k.starts_with("app:") || k.starts_with("file:"));
+            c.retain(|k, _| k.starts_with("exe:") || k.starts_with("app:") || k.starts_with("file:") || k.starts_with("img:"));
         }
         c.insert(name.to_string(), bmp.clone());
     });

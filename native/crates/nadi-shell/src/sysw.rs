@@ -442,7 +442,11 @@ pub fn open_drive(letter: char) {
 
 fn size_text(b: u64) -> String {
     let gb = b as f64 / 1_073_741_824.0;
-    if gb >= 100.0 {
+    // (a thousand GB and more: in TB, "1.8 TB", "4.5 TB"; ten and more without a decimal)
+    if gb >= 1000.0 {
+        let tb = gb / 1024.0;
+        if tb >= 10.0 { format!("{tb:.0} TB") } else { format!("{tb:.1} TB") }
+    } else if gb >= 100.0 {
         format!("{gb:.0} GB")
     } else if gb >= 1.0 {
         format!("{gb:.1} GB")

@@ -101,6 +101,23 @@ input[type=range] { accent-color: var(--accent); flex: 1; min-width: 80px; }
 #sheet .box { width: 400px; background: var(--card); border-radius: 16px; padding: 16px; display: flex; flex-direction: column; gap: 12px; box-shadow: 0 0 0 1px #24242a; }
 .tip { position: fixed; pointer-events: none; background: #26262c; color: var(--text); padding: 7px 10px; border-radius: 9px; font-size: 12px; max-width: 320px; opacity: 0; transition: opacity .15s; z-index: 9; white-space: pre-wrap; }
 .hint { text-decoration: underline dotted; text-decoration-color: var(--dim); text-underline-offset: 3px; cursor: help; flex: 0 1 auto; margin-right: auto; }
+/* the Performance page */
+.ptiles { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; }
+.ptile { background: var(--card); border-radius: 14px; padding: 12px 12px 6px; display: flex; flex-direction: column; gap: 6px; overflow: hidden; }
+.ptile .th { display: flex; align-items: center; gap: 6px; color: var(--dim); }
+.ptile .tv { font-size: 22px; font-weight: 600; color: var(--text); font-variant-numeric: tabular-nums; }
+.ptile .tu { font-size: 12px; font-weight: 600; align-self: flex-end; margin-bottom: 4px; }
+.ptile svg.spark { width: 100%; height: 44px; display: block; }
+.prow { display: flex; align-items: center; gap: 10px; font-size: 12.5px; min-height: 26px; }
+.prow .av { width: 24px; height: 24px; border-radius: 7px; font-size: 12px; }
+.prow .pn { width: 130px; font-weight: 600; white-space: nowrap; overflow: hidden; display: flex; align-items: center; gap: 6px; }
+.pbar { flex: 1; height: 6px; border-radius: 3px; background: var(--card2); display: flex; overflow: hidden; }
+.pbar i { display: block; height: 100%; }
+.pv { width: 64px; text-align: right; font-variant-numeric: tabular-nums; font-weight: 600; }
+.pe { width: 40px; text-align: right; font-variant-numeric: tabular-nums; color: var(--faint); }
+.hotdot { width: 6px; height: 6px; border-radius: 3px; background: var(--amber); flex: none; }
+.legend { display: flex; align-items: center; gap: 4px; margin-left: auto; }
+.legend i { width: 8px; height: 8px; border-radius: 2px; display: inline-block; margin-left: 8px; }
 </style>
 </head>
 <body>
@@ -114,6 +131,15 @@ const LOGO = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAEAAAABACAYAAACqaXHe
 // (the rail's pictures, 24 box)
 const ICONS = {
   plugins: "M9 3v5M15 3v5M6 8h12v3a6 6 0 0 1-12 0zM12 17v4",
+  perf: "M4 16.5a8 8 0 1 1 16 0M12 16.5l4-5",
+  cpu: "M7 7h10v10H7zM4 10h3M4 14h3M17 10h3M17 14h3M10 4v3M14 4v3M10 17v3M14 17v3",
+  mem: "M4 8h16v8H4zM8 8v8M12 8v8M16 8v8",
+  drawing: "M4 18l4-6 4 3 4-7 4 4",
+  brush: "M14 4l6 6-8 8H6v-6z",
+  gather: "M5 12h14M12 5l7 7-7 7",
+  run: "M8 5l11 7-11 7z",
+  pause: "M9 6v12M15 6v12",
+  play: "M8 5l11 7-11 7z",
   look: "M12 3.5a8.5 8.5 0 1 0 0 17c1.4 0 2-1 1.6-2.1-.4-1.1.3-2.2 1.5-2.2h1.7a3.2 3.2 0 0 0 3.3-3.3C20 7 16.5 3.5 12 3.5zM7.5 12h.01M10 8h.01M14.5 8h.01",
   frame: "M3 5.5A2.5 2.5 0 0 1 5.5 3h13A2.5 2.5 0 0 1 21 5.5v10a2.5 2.5 0 0 1-2.5 2.5h-13A2.5 2.5 0 0 1 3 15.5zM9 3v3h6V3M8 21h8",
   about: "M12 3.5a8.5 8.5 0 1 0 0 17 8.5 8.5 0 0 0 0-17zM12 11v5.5M12 7.5v.5",
@@ -133,12 +159,14 @@ const ICONS = {
   folder: "M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z",
   grid: "M4 4h6v6H4zM14 4h6v6h-6zM4 14h6v6H4zM14 14h6v6h-6z",
 };
-const PAGES = [["plugins", "Plugins"], ["look", "Look"], ["frame", "Frame"]];
+const PAGES = [["plugins", "Plugins"], ["look", "Look"], ["perf", "Performance"]];
 const DEFAULT_REPO = "Llyme/nadi-plugins";
 let S = { plugins: [], config: {}, widgets: [], repos: {}, busy: {}, errors: {} };
 const store = { get(k) { try { return localStorage.getItem(k); } catch (_) { return null; } }, set(k, v) { try { localStorage.setItem(k, v); } catch (_) {} } };
 let page = store.get("page") || "plugins";
-if (!["plugins", "look", "frame", "about"].includes(page)) page = "plugins";
+// (the frame's settings are on the Look page now)
+if (page === "frame") page = "look";
+if (!["plugins", "look", "perf", "about"].includes(page)) page = "plugins";
 // (on the plugins page: the list, a plugin's own page, or a source's)
 let view = { kind: "list" };
 let filter = "all", source = "all", query = "";
@@ -206,7 +234,9 @@ function draw() {
   const keep = m.scrollTop;
   const focus = document.activeElement && document.activeElement.dataset.keep;
   m.replaceChildren();
-  ({ plugins: pagePlugins, look: pageLook, frame: pageFrame, about: pageAbout })[page](m);
+  // (the Performance page: NADI measures what it costs only while it is open)
+  perfWatch(page === "perf");
+  ({ plugins: pagePlugins, look: pageLookAll, perf: pagePerf, about: pageAbout })[page](m);
   m.scrollTop = keep;
   if (focus) { const f = m.querySelector(`[data-keep="${focus}"]`); if (f) { f.focus(); f.setSelectionRange(f.value.length, f.value.length); } }
   drawSheet();
@@ -494,6 +524,101 @@ function repoOf(t) {
   return m ? m[1] : null;
 }
 
+// ---------------------------------------------------------------------------------------------------------- performance
+// (what NADI costs: three graphs over the last minute, ten minutes or hour; each plugin's time over the last minute, gathering and
+// running; each widget's drawing)
+let perfRange = 60, perfPaused = false, perfSent = false;
+function perfWatch(on) {
+  if (on === perfSent) return;
+  perfSent = on;
+  send("perf", { on, range: perfRange });
+}
+function spark(vals, color, lo, hi) {
+  const w = 200, h = 44, n = vals.length;
+  const s = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+  s.setAttribute("viewBox", `0 0 ${w} ${h}`); s.setAttribute("preserveAspectRatio", "none"); s.setAttribute("class", "spark");
+  if (n < 2) return s;
+  const pts = vals.map((v, i) => [i * w / (n - 1), h - 2 - Math.max(0, Math.min(1, (v - lo) / Math.max(1e-6, hi - lo))) * (h - 4)]);
+  const d = "M" + pts.map(p => p[0].toFixed(1) + " " + p[1].toFixed(1)).join(" L");
+  const area = document.createElementNS("http://www.w3.org/2000/svg", "path");
+  area.setAttribute("d", d + ` L${w} ${h} L0 ${h} Z`); area.setAttribute("fill", color); area.setAttribute("fill-opacity", "0.14");
+  const line = document.createElementNS("http://www.w3.org/2000/svg", "path");
+  line.setAttribute("d", d); line.setAttribute("fill", "none"); line.setAttribute("stroke", color); line.setAttribute("stroke-width", "1.6");
+  line.setAttribute("vector-effect", "non-scaling-stroke"); line.setAttribute("stroke-linejoin", "round");
+  s.append(area, line);
+  return s;
+}
+function pagePerf(root) {
+  const P = S.perf;
+  const m = el("div"); m.style.cssText = "display:flex;flex-direction:column;gap:12px"; root.append(m);
+  const bar = el("div", "row");
+  bar.append(seg([[60, "1M"], [600, "10M"], [3600, "1H"]], perfRange, v => { perfRange = v; send("perf", { on: true, range: v }); draw(); }), el("span", "grow"));
+  const pause = gh(null, "", () => { perfPaused = !perfPaused; draw(); }, perfPaused ? "play" : "pause");
+  tipOn(pause, perfPaused ? "Go On" : "Pause");
+  bar.append(pause);
+  m.append(bar);
+  if (!P) { const w = el("div", "row"); w.append(el("span", "spin")); m.append(w); return; }
+  const series = P.series || [];
+  const col = i => series.map(v => v[i]);
+  const tiles = el("div", "ptiles");
+  const tile = (ico, value, unit, vals, color, tip, lo, hi) => {
+    const t = el("div", "ptile"); const th = el("div", "th");
+    th.append(icon(ico, "s"), el("span", "tv", value), el("span", "tu", unit));
+    t.append(th, spark(vals, color, lo, hi)); tipOn(t, tip); return t;
+  };
+  const cpu = col(0), mem = col(1), fr = col(2);
+  const mx = a => a.length ? Math.max(...a) : 0, mn = a => a.length ? Math.min(...a) : 0;
+  const accent = getComputedStyle(document.documentElement).getPropertyValue("--accent").trim() || "#5ac88c";
+  tiles.append(
+    tile("cpu", P.now[0] < 10 ? P.now[0].toFixed(2) : P.now[0].toFixed(1), "%", cpu, accent, "Processor: NADI's share of the whole PC", 0, Math.max(1, mx(cpu) * 1.25)),
+    tile("mem", String(Math.round(P.now[1])), "MB", mem, "#b57de6", "Memory: NADI's own", mn(mem) * 0.9, Math.max(mx(mem) * 1.05, mn(mem) * 0.9 + 1)),
+    tile("drawing", P.now[2].toFixed(1), "ms/s", fr, "#4f8ff0", "Drawing: how long NADI spent on its widgets each second", 0, Math.max(5, mx(fr) * 1.25)));
+  m.append(tiles);
+  const blue = "#4f8ff0", purple = "#b57de6";
+  // (each plugin: its time over the last minute, gathering (blue) and running (purple); its updates)
+  const plugins = P.plugins || [];
+  if (plugins.length) {
+    const c = el("div", "card");
+    const head = el("div", "row"); const hi = icon("plugins", "s"); hi.style.color = "var(--dim)";
+    const legend = el("span", "legend");
+    const lg = (color, ico, tip) => { const i = el("i"); i.style.background = color; const p = icon(ico, "s"); p.style.color = "var(--faint)"; p.style.width = "12px"; p.style.height = "12px"; const w = el("span"); w.style.display = "inline-flex"; w.style.alignItems = "center"; w.style.gap = "4px"; w.append(i, p); tipOn(w, tip); return w; };
+    legend.append(lg(blue, "gather", "Gathering what it is told"), lg(purple, "run", "Running its code"));
+    head.append(hi, legend); c.append(head);
+    const top = Math.max(0.001, ...plugins.map(p => p.gather + p.run));
+    for (const p of plugins) {
+      const r = el("div", "prow");
+      const a = avatar(p.shared ? "~" : p.name);
+      const n = el("span", "pn", p.name);
+      if (p.shared) tipOn(n, "Gathered once for every plugin that asks");
+      if (p.hot) { const d = el("span", "hotdot"); tipOn(d, "Busy: more than 5% of a core this last minute"); n.append(d); }
+      const b = el("div", "pbar");
+      const g = el("i"); g.style.width = (p.gather / top * 100) + "%"; g.style.background = blue;
+      const u = el("i"); u.style.width = (p.run / top * 100) + "%"; u.style.background = purple;
+      b.append(g, u);
+      const v = el("span", "pv", Math.round(p.gather + p.run) + " ms");
+      tipOn(v, `A minute: ${Math.round(p.gather)} ms gathering, ${Math.round(p.run)} ms running`);
+      const e = el("span", "pe", String(p.events)); tipOn(e, "Updates a minute");
+      r.append(a, n, b, v, e); c.append(r);
+    }
+    m.append(c);
+  }
+  // (each widget: how long it took to draw over the last minute, and how many times)
+  const widgets = P.widgets || [];
+  if (widgets.length) {
+    const c = el("div", "card");
+    const head = el("div", "row"); const hi = icon("brush", "s"); hi.style.color = "var(--dim)"; head.append(hi); c.append(head);
+    const top = Math.max(0.001, ...widgets.map(w => w.ms));
+    for (const w of widgets) {
+      const r = el("div", "prow");
+      const b = el("div", "pbar"); const i = el("i"); i.style.width = (w.ms / top * 100) + "%"; i.style.background = blue; b.append(i);
+      const v = el("span", "pv", (w.ms < 10 ? w.ms.toFixed(1) : Math.round(w.ms)) + " ms"); tipOn(v, "Drawing it, a minute");
+      const e = el("span", "pe", String(w.times)); tipOn(e, "Times drawn a minute");
+      r.append(avatar(w.name), el("span", "pn", w.name), b, v, e); c.append(r);
+    }
+    m.append(c);
+  }
+}
+
 // ----------------------------------------------------------------------------------------------------------------- look
 function pageLook(m) {
   const c = S.config;
@@ -527,6 +652,17 @@ function pageLook(m) {
   m.append(grid);
 }
 
+// (the look and the frame together, in one grid: there is not much of either)
+function pageLookAll(m) {
+  pageLook(m);
+  const grid = m.querySelector(".grid2");
+  const t = el("div");
+  pageFrame(t);
+  for (const x of [...t.children]) {
+    if (grid && x.classList.contains("grid2")) grid.append(...x.children); else m.append(x);
+  }
+}
+
 // ---------------------------------------------------------------------------------------------------------------- frame
 const MINI = `<rect x="1" y="1" width="62" height="38" rx="5" fill="none" stroke="#3a3a42" stroke-width="1.5"/>`;
 const CUR = (x, y) => `<path d="M${x} ${y}l0 7 2-2 1.5 3 1.5-.6-1.5-3 3 0z" fill="#f2f2f5"/>`;
@@ -536,6 +672,28 @@ function pageFrame(m) {
   const lit = (S.config.theme || "#5ac88c"), grey = "#6d6d75";
   const grid = el("div", "grid2");
   const reveal = c.reveal || "all";
+  // (how near an edge the mouse brings them out, shown on a little screen as a soft frame that thick; and how long it rests there first)
+  const reachRows = () => {
+    const box = el("div"); box.style.display = "flex"; box.style.flexDirection = "column"; box.style.gap = "10px";
+    const scr = el("div"); scr.style.cssText = "position:relative;height:96px;border-radius:10px;overflow:hidden;background:linear-gradient(160deg,#13204a,#1c3270)";
+    const band = el("div"), edge = el("div");
+    const draw = px => { const k = Math.max(2, px) * 0.6; band.style.cssText = `position:absolute;inset:0;box-shadow:inset 0 0 0 ${k}px ${lit}33`; edge.style.cssText = `position:absolute;inset:${k}px;border:1.5px solid ${lit};border-radius:6px`; };
+    draw(c.edge_reach ?? 6);
+    scr.append(band, edge);
+    const slide = (label, min, max, step, value, fmt, put, live) => {
+      const r = el("div", "row"); const k = el("span", "grow", label);
+      const s = el("input"); s.type = "range"; s.min = min; s.max = max; s.step = step; s.value = value; s.style.width = "150px";
+      const v = el("span", "sub", fmt(Number(value))); v.style.width = "44px"; v.style.textAlign = "right"; v.style.color = "var(--dim)";
+      s.oninput = () => { v.textContent = fmt(Number(s.value)); live && live(Number(s.value)); };
+      s.onchange = () => { put(Number(s.value)); live && live(Number(s.value), true); };
+      r.append(k, s, v); return r;
+    };
+    box.append(scr,
+      // (as it is dragged, the band shows on the screen itself too; let go, it fades a moment later)
+      slide("Edge Reach", 2, 64, 1, c.edge_reach ?? 6, v => v + " px", v => set({ edge_reach: v }), (v, done) => { draw(v); if (!done) send("reach_preview", { px: v }); }),
+      slide("Wait", 0, 1000, 50, c.edge_wait ?? 0, v => v === 0 ? "None" : (v / 1000).toFixed(2).replace(/0$/, "") + " s", v => set({ edge_wait: v })));
+    return box;
+  };
   grid.append(card("Show Widgets",
     tiles(4, [
       ["all", "Always", `${MINI}<rect x="20" y="1" width="24" height="5" rx="2" fill="${lit}"/><rect x="1" y="14" width="5" height="12" rx="2" fill="${lit}"/><rect x="24" y="34" width="16" height="5" rx="2" fill="${lit}"/>`],
@@ -543,6 +701,7 @@ function pageFrame(m) {
       ["edge", "Hovered Edge", `${MINI}<rect x="24" y="34" width="16" height="5" rx="2" fill="${grey}"/>${CUR(33, 26)}`],
       ["near", "Near Mouse", `${MINI}<rect x="24" y="34" width="9" height="5" rx="2" fill="${grey}"/><circle cx="29" cy="30" r="9" fill="none" stroke="#3a3a42" stroke-dasharray="2 2"/>${CUR(27, 24)}`],
     ], reveal, v => set({ reveal: v })),
+    reachRows(),
     row("Open Widgets On", seg([["hover", "Hover"], ["click", "Click"]], c.open_on || "hover", v => set({ open_on: v }))),
     row("Hold to Show", seg([["none", "None"], ["alt", "Alt"], ["ctrl", "Ctrl"]], c.hold_key || "none", v => set({ hold_key: v })))));
   const twin = (a, b, bar) => `<rect x="1" y="6" width="28" height="18" rx="3" fill="none" stroke="${a}" stroke-width="1.5"/><rect x="35" y="6" width="28" height="18" rx="3" fill="none" stroke="${b}" stroke-width="1.5"/>${bar}`;
@@ -563,6 +722,7 @@ function pageFrame(m) {
   grid.append(card("Windows",
     hintRow("Taskbar", "Keep: widgets stay clear of it. Under: widgets stand at the screen's edge, the taskbar under them. Hide: hidden.", seg([["keep", "Keep"], ["under", "Under"], ["hide", "Hide"]], c.taskbar || "keep", v => set({ taskbar: v })), "taskbar"),
     row("Windows Key", seg([["auto", "Auto"], ["launcher", "Launcher"], ["start", "Start"]], c.win_key || "auto", v => set({ win_key: v })), "win"),
+    hintRow("Pin From File Explorer", "Adds Pin to NADI Dock and Pin to NADI Apps to the right-click menu of files and folders. On Windows 11, under Show more options.", sw(!!c.explorer_menu, on => set({ explorer_menu: on })), "folder"),
     hintRow("Launcher Shows Widgets", "Opening the launcher brings every widget out, over a game too.", sw(!!c.launcher_reveal, on => set({ launcher_reveal: on })), "grid"),
     row("Start With Windows", sw(!!S.autostart, on => send("autostart", { on })), "power")));
   m.append(grid);
@@ -587,10 +747,17 @@ window.chrome.webview.addEventListener("message", e => {
     if (msg.goto) {
       const [kind, id] = String(msg.goto).split(":");
       if (kind === "plugin" && id) { page = "plugins"; view = { kind: "plugin", id }; }
-      else if (["plugins", "look", "frame", "about"].includes(kind)) { page = kind; view = { kind: "list" }; }
+      else if (["plugins", "look", "frame", "about"].includes(kind)) { page = kind === "frame" ? "look" : kind; view = { kind: "list" }; }
       send("goto_done");
     }
     draw();
+  }
+  // (what NADI costs, once a second while the Performance page is open; paused, kept as it was)
+  if (msg.type === "perf") {
+    if (perfPaused) return;
+    S.perf = msg;
+    // (a tip showing: left as it is until the mouse moves off, so the tip stays with what it names)
+    if (page === "perf" && document.getElementById("tip").style.opacity !== "1") draw();
   }
 });
 send("ready");
