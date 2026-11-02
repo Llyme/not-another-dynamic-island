@@ -133,6 +133,13 @@ fn install(start: bool) -> Result<(), String> {
     Ok(())
 }
 
+/// NADI's own corner of the temporary folder (as `nadi_core::paths::temp_dir`): what is left there, NADI's Clean Up takes.
+fn nadi_temp() -> PathBuf {
+    let d = std::env::temp_dir().join("NADI");
+    let _ = std::fs::create_dir_all(&d);
+    d
+}
+
 fn ask_uninstall() -> Result<(), String> {
     let yes = unsafe { MessageBoxW(None, w!("Uninstall NADI?"), w!("NADI"), MB_YESNO | MB_ICONQUESTION) } == IDYES;
     if !yes {
@@ -140,7 +147,7 @@ fn ask_uninstall() -> Result<(), String> {
     }
     // (from a copy elsewhere: this one is in the folder that goes)
     let me = std::env::current_exe().map_err(|e| e.to_string())?;
-    let copy = std::env::temp_dir().join(format!("nadi-uninstall-{}.exe", std::process::id()));
+    let copy = nadi_temp().join(format!("nadi-uninstall-{}.exe", std::process::id()));
     std::fs::copy(&me, &copy).map_err(|e| e.to_string())?;
     std::process::Command::new(&copy).arg("--uninstall-now").spawn().map_err(|e| e.to_string())?;
     Ok(())
@@ -181,7 +188,7 @@ fn remove_keys_helper() {
         return;
     }
     // (run from a copy: the one in Program Files is taken away)
-    let copy = std::env::temp_dir().join(format!("nadi-keys-remove-{}.exe", std::process::id()));
+    let copy = nadi_temp().join(format!("nadi-keys-remove-{}.exe", std::process::id()));
     if std::fs::copy(&exe, &copy).is_err() {
         return;
     }

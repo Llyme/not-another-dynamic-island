@@ -11,3 +11,6 @@ Thumbs.db
 # local scratch
 *.log
 .env
+
+# Claude Code
+.claude/

@@ -11,6 +11,13 @@ pub fn plugins_dir() -> Option<PathBuf> {
     Some(data_dir()?.join("plugins"))
 }
 
+/// NADI's own corner of the temporary folder (`%TEMP%\NADI`): installers it downloads, the copies it runs from. Made when asked for.
+pub fn temp_dir() -> PathBuf {
+    let d = std::env::temp_dir().join("NADI");
+    let _ = std::fs::create_dir_all(&d);
+    d
+}
+
 /// Write a file whole or not at all (a crash halfway leaves the old one).
 pub fn write_atomic(path: &std::path::Path, bytes: &[u8]) -> std::io::Result<()> {
     if let Some(dir) = path.parent() {

@@ -83,6 +83,7 @@ enum Sys {
     Windows,
     Lock,
     Sleep,
+    SignOut,
     Restart,
     ShutDown,
 }
@@ -118,6 +119,7 @@ impl Sys {
             Sys::Terminal => "term",
             Sys::Lock => "lock",
             Sys::Sleep => "moon",
+            Sys::SignOut => "signout",
             Sys::Restart => "refresh",
             Sys::ShutDown => "power",
         }
@@ -144,6 +146,7 @@ impl Sys {
             Sys::Terminal => "Terminal".into(),
             Sys::Lock => "Lock".into(),
             Sys::Sleep => "Sleep".into(),
+            Sys::SignOut => "Sign Out".into(),
             Sys::Restart => "Restart".into(),
             Sys::ShutDown => "Shut Down".into(),
         }
@@ -161,7 +164,7 @@ impl Sys {
 
     /// Held until its ring fills, not pressed.
     fn held(self) -> bool {
-        matches!(self, Sys::Restart | Sys::ShutDown)
+        matches!(self, Sys::SignOut | Sys::Restart | Sys::ShutDown)
     }
 
     /// Do it. True when the launcher goes away after.
@@ -218,6 +221,10 @@ impl Sys {
             }
             Sys::Sleep => {
                 crate::builtin::power("sleep");
+                true
+            }
+            Sys::SignOut => {
+                crate::builtin::power("signout");
                 true
             }
             Sys::Restart => {
@@ -339,7 +346,7 @@ const FOOT: f32 = 34.0;
 
 /// The foot's pins it starts with: lock, sleep, restart, shut down.
 pub fn default_foot() -> Vec<AppPin> {
-    [("lock", "Lock"), ("sleep", "Sleep"), ("restart", "Restart"), ("shutdown", "Shut Down")]
+    [("lock", "Lock"), ("sleep", "Sleep"), ("signout", "Sign Out"), ("restart", "Restart"), ("shutdown", "Shut Down")]
         .iter()
         .map(|(id, name)| AppPin { kind: "sys".into(), id: id.to_string(), name: name.to_string(), folder: String::new(), icon: String::new() })
         .collect()
@@ -367,6 +374,7 @@ fn sys_of(id: &str) -> Option<Sys> {
         "windows" => Sys::Windows,
         "lock" => Sys::Lock,
         "sleep" => Sys::Sleep,
+        "signout" => Sys::SignOut,
         "restart" => Sys::Restart,
         "shutdown" => Sys::ShutDown,
         _ => return None,
@@ -426,6 +434,7 @@ const TOOLS: &[(Sys, &str, &str)] = &[
     (Sys::Focus, "focus", "Focus"),
     (Sys::Lock, "lock", "Lock"),
     (Sys::Sleep, "sleep", "Sleep"),
+    (Sys::SignOut, "signout", "Sign Out"),
     (Sys::Restart, "restart", "Restart"),
     (Sys::ShutDown, "shutdown", "Shut Down"),
 ];
@@ -739,6 +748,7 @@ impl Launcher {
     /// Restart or shut down pressed: asked first (counting down), and put away.
     fn ask_held(&mut self, i: usize) {
         let id = match self.items.get(i).map(|(h, _, _)| h) {
+            Some(Hit::Sys(Sys::SignOut)) => "signout",
             Some(Hit::Sys(Sys::Restart)) => "restart",
             Some(Hit::Sys(Sys::ShutDown)) => "shutdown",
             Some(Hit::Pin(k)) => self.pins.get(*k).map_or("", |p| p.id.as_str()),
@@ -746,6 +756,7 @@ impl Launcher {
             _ => "",
         };
         let (icon, title, now, word) = match id {
+            "signout" => ("signout", "Sign Out?", "Sign Out", "Signing out"),
             "restart" => ("refresh", "Restart?", "Restart", "Restarting"),
             "shutdown" => ("power", "Shut Down?", "Shut Down", "Shutting down"),
             _ => return,

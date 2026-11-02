@@ -1,4 +1,5 @@
-//! Files dragged from File Explorer onto a widget that takes them (its content says `drop`: the action told the paths): the frame's
+//! Files dragged from File Explorer, or words dragged from a page or a document, onto a widget that takes them (its content says `drop`:
+//! the action told the paths, or the words as `text`): the frame's
 //! windows are drop targets; where a widget that takes them is, the drag may let go, and the widget hears of it (its lid lifts).
 //! Its places are kept here by the frame as it lays them out (physical px, on the screen), so a drag is answered at once.
 
@@ -17,7 +18,7 @@ pub const WM_DROPPED: u32 = WM_APP + 14;
 
 static TARGETS: Mutex<Vec<(i32, i32, i32, i32, String)>> = Mutex::new(Vec::new());
 static HOVER: Mutex<Option<String>> = Mutex::new(None);
-static DROPPED: Mutex<Vec<(String, Vec<String>)>> = Mutex::new(Vec::new());
+static DROPPED: Mutex<Vec<(String, Vec<String>, String)>> = Mutex::new(Vec::new());
 static NOTIFY: Mutex<isize> = Mutex::new(0);
 
 /// Where the frame's message window is (told of drags and drops).
@@ -35,8 +36,8 @@ pub fn hover() -> Option<String> {
     HOVER.lock().unwrap().clone()
 }
 
-/// What was let go since last asked: on which widget, which paths.
-pub fn take() -> Vec<(String, Vec<String>)> {
+/// What was let go since last asked: on which widget, which paths (or, words dragged, the words).
+pub fn take() -> Vec<(String, Vec<String>, String)> {
     std::mem::take(&mut *DROPPED.lock().unwrap())
 }
 
@@ -82,6 +83,28 @@ unsafe fn paths(obj: &IDataObject) -> Vec<String> {
         let mut buf = vec![0u16; len + 1];
         let got = DragQueryFileW(hdrop, i, Some(&mut buf)) as usize;
         out.push(String::from_utf16_lossy(&buf[..got]));
+    }
+    ReleaseStgMedium(&mut med);
+    out
+}
+
+/// The words a drag carries (a page's, a document's).
+unsafe fn words(obj: &IDataObject) -> String {
+    use windows::Win32::Foundation::HGLOBAL;
+    use windows::Win32::System::Memory::{GlobalLock, GlobalUnlock};
+    // (13: Windows' own words, in UTF-16)
+    let fmt = FORMATETC { cfFormat: 13, ptd: std::ptr::null_mut(), dwAspect: DVASPECT_CONTENT.0, lindex: -1, tymed: TYMED_HGLOBAL.0 as u32 };
+    let Ok(mut med) = obj.GetData(&fmt) else { return String::new() };
+    let h = HGLOBAL(med.u.hGlobal.0);
+    let p = GlobalLock(h) as *const u16;
+    let mut out = String::new();
+    if !p.is_null() {
+        let mut n = 0usize;
+        while n < 20000 && *p.add(n) != 0 {
+            n += 1;
+        }
+        out = String::from_utf16_lossy(std::slice::from_raw_parts(p, n));
+        let _ = GlobalUnlock(h);
     }
     ReleaseStgMedium(&mut med);
     out
@@ -135,11 +158,12 @@ impl IDropTarget_Impl for Target_Impl {
             return Ok(());
         };
         let ps = unsafe { paths(obj) };
+        let text = if ps.is_empty() { unsafe { words(obj) } } else { String::new() };
         unsafe {
-            *eff = if ps.is_empty() { DROPEFFECT_NONE } else { DROPEFFECT_COPY };
+            *eff = if ps.is_empty() && text.trim().is_empty() { DROPEFFECT_NONE } else { DROPEFFECT_COPY };
         }
-        if !ps.is_empty() {
-            DROPPED.lock().unwrap().push((k, ps));
+        if !ps.is_empty() || !text.trim().is_empty() {
+            DROPPED.lock().unwrap().push((k, ps, text));
             post(WM_DROPPED);
         }
         Ok(())

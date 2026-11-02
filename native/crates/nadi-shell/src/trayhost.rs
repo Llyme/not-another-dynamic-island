@@ -269,10 +269,15 @@ fn sweep() {
 
 /// Pass a message on to Explorer's taskbar, and give back its answer.
 unsafe fn forward(msg: u32, wp: WPARAM, lp: LPARAM) -> Option<LRESULT> {
+    forward_within(msg, wp, lp, 400)
+}
+
+/// Passed on to Explorer's taskbar, waited for so long (ms).
+unsafe fn forward_within(msg: u32, wp: WPARAM, lp: LPARAM, ms: u32) -> Option<LRESULT> {
     let to = explorer_tray()?;
     let mut out = 0usize;
     FORWARDED.fetch_add(1, Ordering::Relaxed);
-    let ok = SendMessageTimeoutW(to, msg, wp, lp, SMTO_ABORTIFHUNG | SMTO_NORMAL, 400, Some(&mut out));
+    let ok = SendMessageTimeoutW(to, msg, wp, lp, SMTO_ABORTIFHUNG | SMTO_NORMAL, ms, Some(&mut out));
     if ok.0 == 0 {
         UNANSWERED.fetch_add(1, Ordering::Relaxed);
         return None;
@@ -295,8 +300,10 @@ unsafe extern "system" fn proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> 
                 }
                 return forward(msg, wp, lp).unwrap_or(LRESULT(if mine { 1 } else { 0 }));
             }
-            // (the rest: where the taskbar is, an icon's place; Explorer answers)
-            forward(msg, wp, lp).unwrap_or(LRESULT(0))
+            // (the rest: where the taskbar is, an icon's place; Explorer answers. An app bar's (`dwData` 0: a bar kept on an edge):
+            // Explorer works out the screen's room again before it answers, which takes a while)
+            let ms = if cds.dwData == 0 { 5000 } else { 400 };
+            forward_within(msg, wp, lp, ms).unwrap_or(LRESULT(0))
         }
         WM_HOST_STOP => {
             let _ = DestroyWindow(hwnd);

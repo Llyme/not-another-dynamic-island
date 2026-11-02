@@ -899,6 +899,10 @@ pub fn power(what: &str) {
         "sleep" => unsafe {
             let _ = windows::Win32::System::Power::SetSuspendState(false, false, false);
         },
+        "signout" => unsafe {
+            use windows::Win32::System::Shutdown::{ExitWindowsEx, EWX_LOGOFF, SHUTDOWN_REASON};
+            let _ = ExitWindowsEx(EWX_LOGOFF, SHUTDOWN_REASON(0));
+        },
         "restart" => {
             let _ = std::process::Command::new("shutdown").args(["/r", "/t", "0"]).spawn();
         }

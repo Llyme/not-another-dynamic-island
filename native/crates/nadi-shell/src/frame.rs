@@ -43,10 +43,6 @@ const LEAVE_CLOSE: Duration = Duration::from_millis(380);
 const BANNER_W: f32 = 380.0;
 /// how far a floating piece stands off its edge
 pub const FLOAT_OFF: f32 = 8.0;
-/// how tall the dock stands
-const DOCK_DEPTH: f32 = 50.0;
-/// how tall the dock stands at its largest, with an app on its stage
-const DOCK_LARGE: f32 = 63.0;
 /// a press must be held this long, without moving more than `DRAG_START`, to pick its widget up
 const HOLD: Duration = Duration::from_millis(450);
 const DRAG_START: f32 = 6.0;
@@ -510,8 +506,8 @@ pub struct Frame {
     dock_was_seen: bool,
     /// changes that would lay the widgets out again, made while all were tucked away: done as one comes out
     layout_pending: bool,
-    /// the settings changed: the edges kept for the widgets (Make Room) set anew at the next layout
-    room_dirty: bool,
+    /// the dock's grip the mouse is on (its first end or its last): its dot lit
+    grip_at: Option<u8>,
     /// the app in front on the dock, the one before it, and when it changed (its card grows, its ground pops in)
     dock_front: Option<(String, Option<String>, Instant)>,
     /// when each widget last came out of its edge (its glow plays again from strong)
@@ -598,6 +594,17 @@ fn s_of<'v>(v: &'v Value, k: &str) -> &'v str {
 impl Frame {
     pub fn new(g: Gfx, pc: Arc<Pc>, tx: Sender<Command>, msg_hwnd: HWND) -> Frame {
         let (mut config, config_when) = config::load();
+        // (Sign Out, once, in a launcher's foot set before it was)
+        if !config.foot_signout {
+            config.foot_signout = true;
+            if let Some(foot) = config.launcher_foot.as_mut() {
+                if !foot.iter().any(|p| p.kind == "sys" && p.id == "signout") {
+                    let at = foot.iter().position(|p| p.kind == "sys" && p.id == "sleep").map_or(foot.len(), |i| i + 1);
+                    foot.insert(at, crate::launcher::AppPin { kind: "sys".into(), id: "signout".into(), name: "Sign Out".into(), folder: String::new(), icon: String::new() });
+                }
+            }
+            config::save(&config);
+        }
         if keep_shortcuts(&mut config) {
             config::save(&config);
         }
@@ -688,7 +695,7 @@ impl Frame {
             wheeled: HashMap::new(),
             dock_was_seen: false,
             layout_pending: false,
-            room_dirty: true,
+            grip_at: None,
             dock_front: None,
             shown_at: HashMap::new(),
             told_seen: HashMap::new(),
@@ -807,6 +814,20 @@ impl Frame {
     /// A newer NADI found (told once, in a banner: Update fetches and installs it), or its download done or failed: the settings
     /// show where it stands.
     pub fn update_changed(&mut self) {
+        // (an installer coming down: a modal of how far, with a way to stop it; done or failed, put away)
+        let fetching = matches!(crate::update::status(), crate::update::Status::Fetching(_));
+        let showing = self.modal.as_ref().is_some_and(|m| m.shows_progress("nadi-update"));
+        if fetching && !showing {
+            if let crate::update::Status::Fetching(v) = crate::update::status() {
+                let spec = json!({ "icon": "download", "tone": "theme", "title": v, "progress": "nadi-update", "buttons": [{ "label": "Cancel", "action": "nadi_stop_update" }] });
+                self.ask(spec, crate::builtin::PLUGIN.into(), None);
+            }
+        } else if !fetching && showing {
+            if let Some(m) = &mut self.modal {
+                m.close_progress("nadi-update");
+            }
+            self.tick_rate();
+        }
         if let crate::update::Status::Ready(v, _) = crate::update::status() {
             if self.config.update_told != v {
                 let told = v.clone();
@@ -836,10 +857,11 @@ impl Frame {
 
     /// Files let go on a widget that takes them: its action told their paths.
     pub fn dropped(&mut self) {
-        for (k, paths) in crate::drop::take() {
+        for (k, paths, text) in crate::drop::take() {
             let Some((plugin, _)) = k.split_once('/') else { continue };
             let Some(action) = self.widgets.get(&k).and_then(|w| w.content["drop"].as_str().map(str::to_string)) else { continue };
-            self.act(plugin.to_string(), action, json!({ "paths": paths }));
+            let args = if paths.is_empty() { json!({ "text": text }) } else { json!({ "paths": paths }) };
+            self.act(plugin.to_string(), action, args);
         }
     }
 
@@ -1289,6 +1311,11 @@ impl Frame {
         // (a newer NADI, from its banner: fetched and installed)
         if action == "nadi_update" {
             crate::update::install();
+            return;
+        }
+        // (its installer coming down: stopped)
+        if action == "nadi_stop_update" {
+            crate::update::stop();
             return;
         }
         // (another version, from its modal: fetched and installed)
@@ -1796,6 +1823,7 @@ impl Frame {
                 "open" => match m["what"].as_str() {
                     Some("plugins") => nadi_core::win::open_url(&nadi_core::paths::plugins_dir().unwrap_or_default().to_string_lossy()),
                     Some("data") => nadi_core::win::open_url(&nadi_core::paths::data_dir().unwrap_or_default().to_string_lossy()),
+                    Some("leftovers") => nadi_core::win::open_url(&crate::cleanup::folder().to_string_lossy()),
                     Some("repo") => {
                         let _ = nadi_core::repo::open_page(&st("repo"));
                     }
@@ -2300,6 +2328,10 @@ impl Frame {
     /// Its glow now, if it has one: its colour, how strong (0..1), and whether it changes (it breathes, or fades). A widget asks for one
     /// (`glow`: a colour, or `{ color, style: "steady" | "breathe" | "flash" }`); an icon alone with something new glows amber.
     fn glow_of(&self, k: &str) -> Option<(crate::paint::Color, f32, bool)> {
+        // (named by Edit Mode's Find: lit where it is)
+        if self.found_by_find(k) {
+            return Some((crate::draw::accent(), GLOW_FRESH, false));
+        }
         let w = self.widgets.get(unpop(k))?;
         // (a bump: strong in the second colour as it comes out, fading as it goes back)
         if let Some(e) = self.bumped_at.get(k).map(|t| t.elapsed().as_secs_f32()).filter(|e| *e < 2.4) {
@@ -2364,6 +2396,9 @@ impl Frame {
             peek["roll"]["from"] = json!(r.0);
             peek["roll"]["k"] = json!((r.2.elapsed().as_secs_f32() / ROLL_FOR).min(1.0));
         }
+        if peek["dock"].is_object() {
+            peek["dock"]["depth"] = json!(self.even_depth(k));
+        }
         // (the app in front just changed: how far its coming has got, and which it was before)
         if peek["dock"].is_object() {
             if let Some((_, prev, at)) = &self.dock_front {
@@ -2401,6 +2436,9 @@ impl Frame {
                 peek["dock"]["inner"] = json!(at);
                 // (the grip: while the mouse is on the dock)
                 peek["dock"]["grip"] = json!(self.click_to_open() && self.hover.as_ref().is_some_and(|(_, h)| h == k));
+                if let Some(g) = self.grip_at {
+                    peek["dock"]["grip_at"] = json!(g);
+                }
             }
         }
         // (its colour from a picture: a cover's)
@@ -2734,42 +2772,6 @@ impl Frame {
     }
 
     /// The same, drawing again only the pieces that are new, moved, or named in `dirty` (none named: all).
-    /// Make Room: each edge with widgets on it kept for them (maximized windows stop there), as deep as its deepest widget (and the
-    /// gap from the edge, for floating ones), or the depth of its own the setting says, and a gap more. Only while the widgets stay out
-    /// (Show Widgets: Always). `shrink`: the settings changed, every edge set anew; else a kept edge only grows (no jumping windows).
-    pub(super) fn sync_room(&mut self, shrink: bool) {
-        let on = self.config.make_room && (self.config.reveal.is_empty() || self.config.reveal == "all");
-        let mut want: Vec<(RECT, Edge, i32)> = Vec::new();
-        if on {
-            for sc in &self.screens {
-                let mut deep: [f32; 4] = [0.0; 4];
-                for (k, it) in &sc.items {
-                    if is_pop(k) || it.drag_place.is_some() {
-                        continue;
-                    }
-                    let edge = match it.slot.place {
-                        Place::Edge(e) => e,
-                        Place::Corner(Corner::TopLeft | Corner::TopRight) => Edge::Top,
-                        Place::Corner(_) => Edge::Bottom,
-                    };
-                    let d = if matches!(edge, Edge::Top | Edge::Bottom) { it.slot.h } else { it.slot.w } + if it.floating { FLOAT_OFF } else { 0.0 };
-                    let i = edge as usize;
-                    deep[i] = deep[i].max(d);
-                }
-                for (i, e) in [Edge::Top, Edge::Bottom, Edge::Left, Edge::Right].into_iter().enumerate() {
-                    let d = deep[e as usize];
-                    let _ = i;
-                    if d <= 0.0 {
-                        continue;
-                    }
-                    let room = if self.config.room_mode == "own" { self.config.room_own.clamp(16.0, 96.0) } else { d } + self.config.room_gap.clamp(0.0, 16.0);
-                    want.push((sc.ov.monitor.rect, e, (room * sc.s).round() as i32));
-                }
-            }
-        }
-        crate::room::set(&want, shrink || !on);
-    }
-
     fn relayout_with(&mut self, dirty: Option<&HashSet<String>>) {
         self.layout_pending = false;
         let m = Metrics::default();
@@ -3009,9 +3011,6 @@ impl Frame {
         self.hit_regions();
         self.commit();
         self.tick_rate();
-        // (the edges kept for the widgets, as they are laid out now)
-        let shrink = std::mem::take(&mut self.room_dirty);
-        self.sync_room(shrink);
     }
 
     pub fn commit(&mut self) {
@@ -3482,8 +3481,17 @@ impl Frame {
         };
         // (the mouse on it: swollen a little, out of its edge and along it; none of it once its panel is open)
         let sw = if swell { it.swell.now.clamp(-0.3, 1.4) * (1.0 - t) } else { 0.0 };
-        let b = if sw.abs() > 0.001 {
+        let b = if sw.abs() > 0.001 && it.floating {
+            // (floating: swollen in place, about its own middle, every way alike)
             let (out, along) = (SWELL_OUT * sw, SWELL_ALONG * sw);
+            if it.slot.place.horizontal() || matches!(it.slot.place, Place::Corner(_)) {
+                Bx { x: b.x - along / 2.0, y: b.y - out / 2.0, w: b.w + along, h: b.h + out }
+            } else {
+                Bx { x: b.x - out / 2.0, y: b.y - along / 2.0, w: b.w + out, h: b.h + along }
+            }
+        } else if sw.abs() > 0.001 {
+            // (merged into its edge: swollen in place, along its edge only; it does not rise out of it)
+            let (out, along) = (0.0, SWELL_ALONG * sw);
             match it.slot.place {
                 Place::Edge(Edge::Top) => Bx { x: b.x - along / 2.0, w: b.w + along, h: b.h + out, ..b },
                 Place::Edge(Edge::Bottom) => Bx { x: b.x - along / 2.0, y: b.y - out, w: b.w + along, h: b.h + out },
@@ -3749,7 +3757,8 @@ impl Frame {
         };
         // (swollen under the mouse: its ground swells, its contents stay where they were, laid out in its shape as it was)
         let still = self.screens[si].items.get(k).filter(|it| it.swell.now.abs() > 0.001 && it.open.now < 0.01).and_then(|it| self.shape_still(si, it).ok());
-        let swell_off = still.as_ref().map_or((0.0, 0.0), |(_, sb)| (sb.x - b.x, sb.y - b.y));
+        // (its contents in the middle of its swollen shape: along its edge and out of it alike)
+        let swell_off = still.as_ref().map_or((0.0, 0.0), |(_, sb)| ((b.w - sb.w) / 2.0, (b.h - sb.h) / 2.0));
         // (a hidden one's glow fades with it)
         let shown = self.screens[si].items.get(k).map_or(0.0, |i| i.shown.now.clamp(0.0, 1.0));
         let glow = self.glow_of(k).filter(|_| shown > 0.01 && !is_pop(k)).map(|(c, st, moves)| (c, st * shown, moves));
@@ -5250,7 +5259,6 @@ impl Frame {
         crate::draw::set_accent(&self.config.theme);
         crate::draw::set_accent2(&self.config.theme2);
         crate::paint::set_roundness(self.config.roundness);
-        self.room_dirty = true;
         crate::keyhook::set_desk_keys(self.config.desk_keys);
         crate::keyhook::set_enabled(self.config.win_launcher());
         self.sync_tray();
@@ -5424,7 +5432,7 @@ impl Frame {
     /// What the dock keeps free at the bottom of the screens while the taskbar is hidden.
     fn reserve(&self) -> f32 {
         if !self.floating(&key(crate::builtin::PLUGIN, crate::builtin::DOCK)) && self.place_of(crate::builtin::PLUGIN, crate::builtin::DOCK).map(|(p, _)| p) == Some(Place::Edge(Edge::Bottom)) {
-            DOCK_DEPTH
+            self.even_depth(&key(crate::builtin::PLUGIN, crate::builtin::DOCK))
         } else {
             0.0
         }
@@ -5806,20 +5814,8 @@ impl Frame {
         if corner {
             want = want.min(m.corner_max);
         }
-        let base = if w.content["peek"]["dock"].is_object() {
-            // (its card for the app in front only along a top or bottom edge: on a side edge it is its icons alone)
-            let staged = look.horizontal() && self.large(k) && w.content["peek"]["dock"]["items"].as_array().is_some_and(|a| a.iter().any(|i| i["front"] == true));
-            if staged {
-                DOCK_LARGE
-            } else if !look.horizontal() && self.large(k) && !self.icon_alone(k) {
-                peek::DOCK_SIDE_LARGE
-            } else {
-                DOCK_DEPTH
-            }
-        } else {
-            // (every widget as deep as the others of its size, on every edge: the settings' depth, or its plugin's own)
-            self.even_depth(k)
-        };
+        // (every widget as deep as the others of its size, on every edge, the dock too: the settings' depth, or its plugin's own)
+        let base = self.even_depth(k);
         // (the desktops' map: as deep as its rows need, every one shown)
         let base = if w.content["peek"]["desks"].is_object() && !self.icon_alone(k) { base.max(peek::desk_depth(&self.peek_of(k), look.horizontal()).round()) } else { base };
         // (on the edge the taskbar stands on, under the widgets: as deep as it, over all of it)
@@ -6015,6 +6011,16 @@ impl Frame {
     }
 
     pub fn mouse_move(&mut self, si: usize, x: f32, y: f32) {
+        // (the mouse onto one of the dock's grips, or off: its dot lit or not)
+        let dock = key(crate::builtin::PLUGIN, crate::builtin::DOCK);
+        let g = self.grip_end(si, &dock, x, y);
+        if g != self.grip_at {
+            self.grip_at = g;
+            if self.screens.get(si).is_some_and(|sc| sc.items.contains_key(&dock)) {
+                self.render(si, &dock);
+                self.commit();
+            }
+        }
         if self.size_move(si, x, y) {
             return;
         }
@@ -6911,29 +6917,40 @@ impl Frame {
         }
     }
 
-    /// Is the mouse on the dock's grip (where a click opens widgets: the strip on its inner edge)?
+    /// Is the mouse on the dock's grip (where a click opens widgets: its two ends, past its first and last icon)?
     fn on_grip(&self, si: usize, k: &str, x: f32, y: f32) -> bool {
+        self.grip_end(si, k, x, y).is_some()
+    }
+
+    /// Which of the dock's grips the mouse is on: its first end (0) or its last (1).
+    fn grip_end(&self, si: usize, k: &str, x: f32, y: f32) -> Option<u8> {
         if k != key(crate::builtin::PLUGIN, crate::builtin::DOCK) || !self.click_to_open() {
-            return false;
+            return None;
         }
-        let Some(it) = self.screens.get(si).and_then(|sc| sc.items.get(k)) else { return false };
+        let it = self.screens.get(si).and_then(|sc| sc.items.get(k))?;
         if it.open.now > 0.05 {
-            return false;
+            return None;
         }
-        let Ok((_, b)) = self.shape_now(si, it) else { return false };
-        if x < b.x || x >= b.x + b.w {
-            return false;
+        let (_, b) = self.shape_now(si, it).ok()?;
+        if x < b.x || x >= b.x + b.w || y < b.y || y >= b.y + b.h {
+            return None;
         }
-        if y < b.y || y >= b.y + b.h {
-            return false;
+        // (its body, less its fillets into the edge)
+        let f = if it.floating { 0.0 } else { Metrics::default().fillet };
+        let end = crate::peek::DOCK_END + 2.0;
+        let (v, lo, hi) = if it.slot.place.horizontal() { (x, b.x + f, b.x + b.w - f) } else { (y, b.y + f, b.y + b.h - f) };
+        if v < lo + end {
+            Some(0)
+        } else if v >= hi - end {
+            Some(1)
+        } else {
+            None
         }
-        let band = crate::peek::DOCK_BAND;
-        match it.slot.place {
-            Place::Edge(Edge::Bottom) | Place::Corner(Corner::BottomLeft | Corner::BottomRight) => y < b.y + band,
-            Place::Edge(Edge::Top) | Place::Corner(Corner::TopLeft | Corner::TopRight) => y > b.y + b.h - band,
-            Place::Edge(Edge::Left) => x > b.x + b.w - band,
-            Place::Edge(Edge::Right) => x < b.x + band,
-        }
+    }
+
+    /// The pointer over the dock's grips: a hand.
+    pub fn grip_cursor(&self) -> Option<windows::core::PCWSTR> {
+        self.grip_at.map(|_| windows::Win32::UI::WindowsAndMessaging::IDC_HAND)
     }
 
     /// What the mouse rests on that has a tip: (its screen, what it is, the tip, what it comes out of, the way out). A widget at rest

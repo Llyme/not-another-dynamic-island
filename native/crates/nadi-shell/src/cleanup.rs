@@ -1,5 +1,5 @@
 //! Clean Up (Settings › About): what NADI left behind that it no longer needs. Installers it downloaded to update itself, the copies
-//! the installer and the Windows-key helper ran from, anything else of NADI's in the temporary folder, old copies of nadi.exe set
+//! the installer and the Windows-key helper ran from (all in NADI's own corner of the temporary folder), old copies of nadi.exe set
 //! aside while it was replaced, the plugin downloads kept from repositories (fetched again when needed), and its logs. Never the
 //! settings, the plugins, or what plugins keep (a speech model is theirs).
 
@@ -11,6 +11,8 @@ use windows::Win32::UI::WindowsAndMessaging::PostMessageW;
 /// how much there is to clean up, as last looked (bytes); none: not looked yet
 static SIZE: Mutex<Option<u64>> = Mutex::new(None);
 static BUSY: Mutex<bool> = Mutex::new(false);
+/// the folder that holds most of it, as last looked
+static DIR: Mutex<Option<PathBuf>> = Mutex::new(None);
 
 fn size_of(p: &Path) -> u64 {
     match std::fs::metadata(p) {
@@ -23,12 +25,9 @@ fn size_of(p: &Path) -> u64 {
 /// What can go.
 fn found() -> Vec<PathBuf> {
     let mut out = Vec::new();
-    // (the temporary folder: NADI's own)
-    for e in std::fs::read_dir(std::env::temp_dir()).into_iter().flatten().flatten() {
-        let n = e.file_name().to_string_lossy().to_lowercase();
-        if n.starts_with("nadi-") || n.starts_with("nadi_") {
-            out.push(e.path());
-        }
+    // (NADI's corner of the temporary folder: what it downloaded, the copies it ran from)
+    for e in std::fs::read_dir(nadi_core::paths::temp_dir()).into_iter().flatten().flatten() {
+        out.push(e.path());
     }
     // (old copies of nadi.exe, set aside as it was replaced)
     if let Some(dir) = std::env::var_os("LOCALAPPDATA").map(|l| PathBuf::from(l).join("Programs").join("NADI")) {
@@ -59,11 +58,31 @@ fn tell(notify: HWND) {
     }
 }
 
+/// How much there is, and the folder that holds most of it (the plugin downloads: their own folder).
+fn measure() -> u64 {
+    let mut by_dir: Vec<(PathBuf, u64)> = Vec::new();
+    for p in found() {
+        let n = size_of(&p);
+        let dir = if p.file_name().is_some_and(|f| f == "repo-cache") { p.clone() } else { p.parent().map(Path::to_path_buf).unwrap_or_default() };
+        match by_dir.iter_mut().find(|(d, _)| *d == dir) {
+            Some((_, t)) => *t += n,
+            None => by_dir.push((dir, n)),
+        }
+    }
+    *DIR.lock().unwrap() = by_dir.iter().filter(|(_, n)| *n > 0).max_by_key(|(_, n)| *n).map(|(d, _)| d.clone());
+    by_dir.iter().map(|(_, n)| n).sum()
+}
+
+/// The folder that holds most of what can go (NADI's corner of the temporary folder when not looked yet).
+pub fn folder() -> PathBuf {
+    DIR.lock().unwrap().clone().unwrap_or_else(nadi_core::paths::temp_dir)
+}
+
 /// How much there is to clean up (looked for on a thread of its own; `notify` told when known).
 pub fn look(notify: HWND) {
     let h = notify.0 as isize;
     std::thread::spawn(move || {
-        let n = found().iter().map(|p| size_of(p)).sum();
+        let n = measure();
         *SIZE.lock().unwrap() = Some(n);
         tell(HWND(h as *mut _));
     });
@@ -84,7 +103,7 @@ pub fn clean(notify: HWND) {
             }
         }
         *BUSY.lock().unwrap() = false;
-        let n = found().iter().map(|p| size_of(p)).sum();
+        let n = measure();
         *SIZE.lock().unwrap() = Some(n);
         tell(HWND(h as *mut _));
     });

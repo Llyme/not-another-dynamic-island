@@ -427,11 +427,23 @@ fn tray_item_w(p: &Painter, it: &Value) -> f32 {
     }
 }
 
-const DOCK_ICON: f32 = 30.0;
 const TRAY_ICON: f32 = 18.0;
 const TRAY_GAP: f32 = 10.0;
 
 /// The tray at rest: its first icons (each pressed for its app), then how many more.
+/// how big a tray icon is drawn, every one, small or large: Windows' own small icon (the size the apps make them for)
+const TRAY_PIC: f32 = 16.0;
+
+/// A tray icon in its box: all of them one size (Windows' small icon, which is what the apps draw them at: blown up, they blur), on
+/// whole pixels, in the box's middle. Drawn?
+fn tray_icon(p: &Painter, image: &str, r: Rect) -> bool {
+    let s = p.s;
+    let z = TRAY_PIC.min(r.w.min(r.h));
+    let snap = |v: f32| (v * s).round() / s;
+    let (x, y) = (snap(r.x + (r.w - z) / 2.0), snap(r.y + (r.h - z) / 2.0));
+    p.picture(image, Rect::new(x, y, snap(z), snap(z)), 3.0)
+}
+
 fn tray(p: &Painter, peek: &Value, body: Rect, horizontal: bool) -> Vec<(Rect, String)> {
     let items = peek["tray"]["items"].as_array().cloned().unwrap_or_default();
     let more = peek["tray"]["more"].as_u64().unwrap_or(0);
@@ -455,7 +467,7 @@ fn tray(p: &Painter, peek: &Value, body: Rect, horizontal: bool) -> Vec<(Rect, S
                 p.round(Rect::new(at, cy - TRAY_CHIP_H / 2.0, w, TRAY_CHIP_H), TRAY_CHIP_H / 2.0, crate::paint::Color(0.106, 0.106, 0.125, 1.0));
             }
             let r = Rect::new(ix, cy - zl / 2.0, zl, zl);
-            if !p.picture(it["image"].as_str().unwrap_or(""), r, 4.0) {
+            if !tray_icon(p, it["image"].as_str().unwrap_or(""), r) {
                 p.round(r, 6.0, SOFT);
             }
             let tx = ix + zl + 6.0;
@@ -484,7 +496,7 @@ fn tray(p: &Painter, peek: &Value, body: Rect, horizontal: bool) -> Vec<(Rect, S
             p.round(Rect::new(m.x, m.y - 2.0, m.w, m.h + 4.0), 1.0, SOFT);
         }
         let r = place(at, z);
-        if !p.picture(it["image"].as_str().unwrap_or(""), r, 3.0) {
+        if !tray_icon(p, it["image"].as_str().unwrap_or(""), r) {
             p.round(r, 5.0, SOFT);
         }
         out.push((Rect::new(r.x - 4.0, r.y - 4.0, r.w + 8.0, r.h + 8.0), it["action"].as_str().unwrap_or("").to_string()));
@@ -945,7 +957,7 @@ fn tray_grid(p: &Painter, items: &[Value], body: Rect) {
     };
     for (it, (x, y, z)) in items.iter().zip(cells) {
         let r = Rect::new(x - z / 2.0, y - z / 2.0, z, z);
-        if !p.picture(it["image"].as_str().unwrap_or(""), r, 2.5) {
+        if !tray_icon(p, it["image"].as_str().unwrap_or(""), r) {
             p.round(r, 3.0, SOFT);
         }
     }
@@ -983,9 +995,12 @@ fn measure_at(p: &Painter, peek: &Value, horizontal: bool) -> f32 {
         // (each app: a running one with its meters beside it)
         let n = (items.len() as f32).max(1.0);
         // (on a side edge: its icons alone, one under the other; no meters, cards or bars beside them)
-        let sides: f32 = if horizontal { items.iter().filter(|i| !staged(peek, i)).map(|i| side_room(i)).sum() } else { 0.0 };
-        let stages: f32 = if horizontal { items.iter().filter(|i| staged(peek, i)).map(|i| stage_w(peek, i) - DOCK_ICON).sum() } else { 0.0 };
-        return 12.0 * 2.0 + n * DOCK_ICON + (n - 1.0) * DOCK_GAP + sides + stages;
+        let large = peek["dock"]["large"] == true;
+        let sides: f32 = if horizontal { items.iter().filter(|i| !staged(peek, i)).map(|i| side_room(i, large)).sum() } else { 0.0 };
+        let icon = dock_icon(dock_depth(peek));
+        // (at its ends, its grips)
+        let stages: f32 = if horizontal { items.iter().filter(|i| staged(peek, i)).map(|i| stage_w(peek, i) - icon).sum() } else { 0.0 };
+        return DOCK_END * 2.0 + n * icon + (n - 1.0) * DOCK_GAP + sides + stages;
     }
     if !horizontal {
         let (text, _) = words_of(peek);
@@ -1248,18 +1263,35 @@ fn lead(p: &Painter, peek: &Value, x: f32, cy: f32, size: f32) -> f32 {
 }
 
 /// The room beside a dock app for its meters: its use on the left (running), how far its download is on the right.
-fn side_room(it: &Value) -> f32 {
-    (if it["cpu"].is_null() { 0.0 } else { METERS }) + (if it["progress"].is_null() { 0.0 } else { PROGRESS })
+fn side_room(it: &Value, large: bool) -> f32 {
+    (if it["cpu"].is_null() || !large || it["front"] != true { 0.0 } else { METERS }) + (if it["progress"].is_null() { 0.0 } else { PROGRESS })
 }
 
-/// the dock at its largest: the app in front on its card (its icon, or the cover of what it plays; its name and what you are in,
-/// or the song and who sings it; how far along; its use, while it works hard)
+/// the dock at its largest: the app in front on its card (its icon, or the cover of what it plays; one line: what you are in, or the
+/// song; its use, while it works hard)
 pub const STAGE_W: f32 = 150.0;
-pub const STAGE_H: f32 = 48.0;
-/// the dock's band along its side toward the middle of the screen: its apps' marks, and its grip
-pub const DOCK_BAND: f32 = 11.0;
-/// how wide the dock stands on a side edge at its largest: each app a row, its name beside it
-pub const DOCK_SIDE_LARGE: f32 = 200.0;
+
+/// How deep the dock stands (the even depth of its size, as the frame tells it).
+fn dock_depth(peek: &Value) -> f32 {
+    peek["dock"]["depth"].as_f64().map_or(32.0, |d| d as f32)
+}
+
+/// The dock's ends, past its first and last icon: its grips (a short bar in each while the mouse is on it, where a press takes hold of
+/// it).
+pub const DOCK_END: f32 = 14.0;
+
+/// The dock's margins: toward the middle of the screen (thin), and toward its edge (its apps' marks: their windows' dots, their sound).
+fn dock_margins(depth: f32) -> (f32, f32) {
+    // (the same each side: its icons in the middle of its depth)
+    let m = (depth * 0.15).round().clamp(4.0, 8.0);
+    (m, m)
+}
+
+/// Its icons: what the depth leaves past its margins.
+fn dock_icon(depth: f32) -> f32 {
+    let (a, b) = dock_margins(depth);
+    (depth - a - b).round().max(14.0)
+}
 
 /// Is this app on its card (the dock at its largest, the app in front)?
 fn staged(peek: &Value, it: &Value) -> bool {
@@ -1279,37 +1311,38 @@ fn leaving_front(peek: &Value, it: &Value) -> bool {
 fn stage_w(peek: &Value, it: &Value) -> f32 {
     let k = front_k(peek);
     let e = 1.0 - (1.0 - k).powi(3);
+    let icon = dock_icon(dock_depth(peek));
     if it["front"] == true {
-        DOCK_ICON + (STAGE_W - DOCK_ICON) * e
+        icon + (STAGE_W - icon) * e
     } else {
-        STAGE_W - (STAGE_W - DOCK_ICON) * e
+        STAGE_W - (STAGE_W - icon) * e
     }
 }
 
-fn stage(p: &Painter, it: &Value, x: f32, cy: f32, w: f32) -> Vec<(Rect, String)> {
-    let r = Rect::new(x, cy - STAGE_H / 2.0, w, STAGE_H);
+fn stage(p: &Painter, it: &Value, x: f32, cy: f32, w: f32, z: f32) -> Vec<(Rect, String)> {
+    let h = z + 4.0;
+    let r = Rect::new(x, cy - h / 2.0, w, h);
     let mut out = Vec::new();
-    p.round(r, 18.0_f32.min(w / 2.0), crate::paint::Color(0.106, 0.106, 0.125, 1.0));
+    p.round(r, (h * 0.3).min(w / 2.0), crate::paint::Color(0.106, 0.106, 0.125, 1.0));
     unsafe {
         p.dc.PushAxisAlignedClip(&p.px(r).d2d(), windows::Win32::Graphics::Direct2D::D2D1_ANTIALIAS_MODE_ALIASED);
     }
-    let out = stage_inner(p, it, r, cy, &mut out);
+    let out = stage_inner(p, it, r, cy, z, &mut out);
     unsafe {
         p.dc.PopAxisAlignedClip();
     }
     out
 }
 
-fn stage_inner(p: &Painter, it: &Value, r: Rect, cy: f32, out: &mut Vec<(Rect, String)>) -> Vec<(Rect, String)> {
+fn stage_inner(p: &Painter, it: &Value, r: Rect, cy: f32, z: f32, out: &mut Vec<(Rect, String)>) -> Vec<(Rect, String)> {
     let mut out = std::mem::take(out);
     // (growing out of its icon: the icon where it stood, moving in to its place as the card widens)
-    let inset = ((r.w - DOCK_ICON) / 2.0).clamp(0.0, 9.0);
+    let inset = ((r.w - z) / 2.0).clamp(0.0, 2.0);
     let r = Rect::new(r.x, r.y, STAGE_W, r.h);
     let media = &it["media"];
     let playing = media.is_object();
     // its picture: the cover of what it plays, else its icon, as big as the dock's other icons (an icon drawn bigger blurs)
-    let z = DOCK_ICON;
-    let pic = Rect::new(r.x + inset, r.y + (STAGE_H - z) / 2.0, z, z);
+    let pic = Rect::new(r.x + inset, r.y + (r.h - z) / 2.0, z, z);
     let cover = media["art"].as_str().unwrap_or("");
     let shown = playing && !cover.is_empty() && p.picture(cover, pic, 7.0);
     if !shown && !p.picture(it["image"].as_str().unwrap_or(""), pic, z * 0.22) {
@@ -1323,39 +1356,33 @@ fn stage_inner(p: &Painter, it: &Value, r: Rect, cy: f32, out: &mut Vec<(Rect, S
             out.push((pic, format!("mediatoggle:{src}")));
         }
     }
-    // (several windows: their dots under its picture)
-    window_dots(p, it, pic.x + pic.w / 2.0, pic.bottom() + 5.0);
     // its use: two bars at its edge, as beside every app that runs
     let busy = !it["cpu"].is_null();
     if busy {
-        use_bars(p, it, r.right() - 18.0, r.bottom() - 10.0, STAGE_H - 20.0);
+        use_bars(p, it, r.right() - 14.0, r.bottom() - 4.0, r.h - 8.0);
     }
-    // its words
-    let tx = pic.right() + 10.0;
-    let tw = r.right() - 12.0 - if busy { 16.0 } else { 0.0 } - tx;
-    let (l1, l2) = if playing {
-        (media["title"].as_str().unwrap_or("").to_string(), media["artist"].as_str().unwrap_or("").to_string())
+    // its words, one line: what it plays, else what you are in (its window's title), else its name
+    let tx = pic.right() + 8.0;
+    let tw = r.right() - 10.0 - if busy { 12.0 } else { 0.0 } - tx;
+    let title = it["title"].as_str().unwrap_or("");
+    let line = if playing {
+        media["title"].as_str().unwrap_or("").to_string()
+    } else if !title.is_empty() {
+        title.to_string()
     } else {
-        (it["name"].as_str().unwrap_or("").to_string(), it["title"].as_str().unwrap_or("").to_string())
+        it["name"].as_str().unwrap_or("").to_string()
     };
-    let bar = media["progress"].as_f64().map(|f| f as f32);
-    let sw = if it["audio"].is_array() { 20.0 } else { 0.0 };
-    let (y1, y2, yb) = match (l2.is_empty(), bar.is_some()) {
-        (true, false) => (cy, cy, cy),
-        (false, false) => (cy - 8.0, cy + 8.0, cy),
-        (true, true) => (cy - 5.0, cy, cy + 8.0),
-        (false, true) => (cy - 12.0, cy + 2.0, cy + 14.0),
-    };
-    p.text(&l1, tx, y1, 12.5, Weight::Semibold, tw - sw, TEXT);
+    let sw = if it["audio"].is_array() { 18.0 } else { 0.0 };
+    let size = (r.h * 0.4).clamp(10.5, 12.5);
+    p.text(&line, tx, cy, size, Weight::Semibold, tw - sw, TEXT);
     if let Some(v) = it["audio"].as_array() {
-        sound_bars(p, v, tx + tw - 8.0, y1, 11.0);
+        sound_bars(p, v, tx + tw - 8.0, cy, (r.h * 0.35).min(11.0));
     }
-    if !l2.is_empty() {
-        p.text(&l2, tx, y2, 11.0, Weight::Regular, tw, DIM);
-    }
-    if let Some(f) = bar {
-        p.round(Rect::new(tx, yb - 1.5, tw, 3.0), 1.5, crate::paint::Color(0.149, 0.149, 0.173, 1.0));
-        p.round(Rect::new(tx, yb - 1.5, tw * f.clamp(0.0, 1.0), 3.0), 1.5, crate::draw::accent());
+    // (what it plays: how far along, a thin line along its foot)
+    if let Some(f) = media["progress"].as_f64().map(|f| f as f32) {
+        let yb = r.bottom() - 2.5;
+        p.round(Rect::new(tx, yb - 1.0, tw, 2.0), 1.0, crate::paint::Color(0.149, 0.149, 0.173, 1.0));
+        p.round(Rect::new(tx, yb - 1.0, tw * f.clamp(0.0, 1.0), 2.0), 1.0, crate::draw::accent());
     }
     out
 }
@@ -1503,50 +1530,38 @@ pub fn load_color(cpu: f32) -> crate::paint::Color {
 fn dock(p: &Painter, peek: &Value, body: Rect, horizontal: bool) -> Vec<(Rect, String)> {
     let items = peek["dock"]["items"].as_array().cloned().unwrap_or_default();
     let hovered = peek["dock"]["hovered"].as_str().unwrap_or("");
-    // (its band: a strip along its side toward the middle of the screen, where each app's marks are (its windows' dots, its sound);
-    // where a click opens widgets, the band is also its grip, lit while the mouse is on it)
+    // (its icons fill its depth but for two thin margins: toward the middle of the screen, and toward its edge, where each app's marks
+    // are (its windows' dots, its sound). Where a click opens widgets, a grip along its inner side while the mouse is on it, drawn over
+    // it, taking no room)
     let inner = peek["dock"]["inner"].as_str().unwrap_or(if horizontal { "top" } else { "right" });
-    let band = match inner {
-        "bottom" => Rect::new(body.x, body.bottom() - DOCK_BAND, body.w, DOCK_BAND),
-        "right" => Rect::new(body.right() - DOCK_BAND, body.y, DOCK_BAND, body.h),
-        "left" => Rect::new(body.x, body.y, DOCK_BAND, body.h),
-        _ => Rect::new(body.x, body.y, body.w, DOCK_BAND),
-    };
-    // (the band's side toward the screen's middle, and the way back into the dock from it: the grip and the marks in one row along
-    // the band's middle)
+    let depth = if horizontal { body.h } else { body.w };
+    let (m_in, m_out) = dock_margins(depth);
+    let icon = dock_icon(depth);
+    // (its side toward the screen's middle, and the way into the dock from it)
     let (side, into) = match inner {
-        "bottom" => (band.bottom(), -1.0),
-        "right" => (band.right(), -1.0),
-        "left" => (band.x, 1.0),
-        _ => (band.y, 1.0),
+        "bottom" => (body.bottom(), -1.0),
+        "right" => (body.right(), -1.0),
+        "left" => (body.x, 1.0),
+        _ => (body.y, 1.0),
     };
-    // (the grip: the same handle as an open widget's, only for the look, in the marks' row (they are drawn over it))
-    if peek["dock"]["grip"] == true {
-        let c = side + into * DOCK_BAND / 2.0;
-        let g = if horizontal { Rect::new(body.x + body.w / 2.0 - 16.0, c - 2.0, 32.0, 4.0) } else { Rect::new(c - 2.0, body.y + body.h / 2.0 - 16.0, 4.0, 32.0) };
-        p.round(g, 2.0, DIM.alpha(0.5));
-    }
+    let band = match inner {
+        "bottom" => Rect::new(body.x, body.bottom() - m_in, body.w, m_in),
+        "right" => Rect::new(body.right() - m_in, body.y, m_in, body.h),
+        "left" => Rect::new(body.x, body.y, m_in, body.h),
+        _ => Rect::new(body.x, body.y, body.w, m_in),
+    };
+    let grip = peek["dock"]["grip"] == true;
     let mut out = Vec::new();
     let n = items.len().max(1) as f32;
     // (on a side edge, more apps than fit: each smaller, down to a size)
-    let z = if horizontal { DOCK_ICON } else { ((body.h - 24.0 - (n - 1.0) * DOCK_GAP) / n).clamp(20.0, DOCK_ICON) };
-    let mut at = if horizontal { body.x + 12.0 } else { body.y + 12.0 };
-    // (on a side edge at its largest: each app a row, its name beside its icon)
-    let rows = !horizontal && peek["dock"]["large"] == true;
-    // (the icons clear of the band; on its stage, the app in front as big as the stage)
-    let staged_any = horizontal && items.iter().any(|i| staged(peek, i));
-    let deep = if staged_any { STAGE_H } else { z };
-    let cross = match inner {
-        "bottom" => body.bottom() - DOCK_BAND - deep / 2.0,
-        // (as rows: the icon near the edge (on the right edge, just past the band), its name after it)
-        "right" if rows => body.x + 10.0 + z / 2.0,
-        "left" if rows => band.right() + 6.0 + z / 2.0,
-        "right" => body.x + (body.w - DOCK_BAND) / 2.0,
-        "left" => body.x + DOCK_BAND + (body.w - DOCK_BAND) / 2.0,
-        _ => body.y + DOCK_BAND + deep / 2.0,
-    };
-    // (in the band: where the marks are)
-    let mark = side + into * DOCK_BAND / 2.0;
+    let z = if horizontal { icon } else { ((body.h - 2.0 * DOCK_END - (n - 1.0) * DOCK_GAP) / n).clamp(14.0, icon) };
+    // (past its ends, its grips)
+    let mut at = if horizontal { body.x + DOCK_END } else { body.y + DOCK_END };
+    // (on a side edge: a column of icons, as wide as every widget there; their names in their tips)
+    let rows = false;
+    // (the icons between the margins; the marks in the outer one)
+    let cross = side + into * (m_in + (depth - m_in - m_out) / 2.0);
+    let mark = side + into * (depth - m_out / 2.0);
     // (toward the middle of the screen: which way a hop goes)
     let inward = if inner == "bottom" || inner == "right" { 1.0 } else { -1.0 };
     let place = |at: f32| if horizontal { Rect::new(at, cross - z / 2.0, z, z) } else { Rect::new(cross - z / 2.0, at, z, z) };
@@ -1554,15 +1569,17 @@ fn dock(p: &Painter, peek: &Value, body: Rect, horizontal: bool) -> Vec<(Rect, S
         // (the app in front, at the dock's largest: on its stage)
         if staged(peek, it) && horizontal {
             let sw = stage_w(peek, it);
-            for (r, a) in stage(p, it, at, cross, sw) {
+            for (r, a) in stage(p, it, at, cross, sw, z) {
                 out.push((r, a));
             }
-            out.push((Rect::new(at, cross - STAGE_H / 2.0, sw, STAGE_H), format!("app:{i}")));
+            out.push((Rect::new(at, cross - (z + 4.0) / 2.0, sw, z + 4.0), format!("app:{i}")));
             at += sw + DOCK_GAP;
             continue;
         }
         // (running: its use on its left; its download on its right; only as tall as each is)
-        let meters = !it["cpu"].is_null();
+        // (its use: large only, and only the app in front's)
+        let large = peek["dock"]["large"] == true;
+        let meters = !it["cpu"].is_null() && large && it["front"] == true;
         let downloading = !it["progress"].is_null();
         // (a little shorter than the icon at both ends)
         let foot = cross + z / 2.0 - 3.0;
@@ -1634,9 +1651,10 @@ fn dock(p: &Painter, peek: &Value, body: Rect, horizontal: bool) -> Vec<(Rect, S
         // (in the band beside it: several windows, a dot for each, the one in front lit; making sound, the dots are the sound: a
         // bar each, moving with it (one window: its three bars, as ever). On a side edge, the dots stand in a column)
         // (at its largest there is room: the bars bigger)
-        let bh = 7.0;
+        let bh = (m_out + 1.0).min(7.0);
         let (mx, my) = if horizontal { (r.x + z / 2.0, mark) } else { (mark, r.y + z / 2.0) };
-        if let Some(v) = it["audio"].as_array() {
+        // (large: only the app in front's sound shows; the others' marks are their windows' dots)
+        if let Some(v) = it["audio"].as_array().filter(|_| !large || it["front"] == true) {
             if !horizontal {
                 sound_bars_lying(p, v, mx, my, 9.0);
             } else if it["windows"].as_u64().unwrap_or(0) >= 2 {
@@ -1666,7 +1684,9 @@ fn dock(p: &Painter, peek: &Value, body: Rect, horizontal: bool) -> Vec<(Rect, S
             p.round(Rect::new(r.x - 3.0, r.y - 3.0, r.w + 6.0, r.h + 6.0), (z + 6.0) * 0.3, FAINT);
         }
         let img = it["image"].as_str().unwrap_or("");
-        if !p.picture(img, r, z * 0.22) {
+        // (large: its picture a little inside its place, clear of the ground behind it; the place, and all round it, as it was)
+        let pic = if large { Rect::new(r.x + 2.0, r.y + 2.0, r.w - 4.0, r.h - 4.0) } else { r };
+        if !p.picture(img, pic, z * 0.22) {
             p.round(r, z * 0.3, SOFT);
             let name = it["name"].as_str().unwrap_or("?");
             let letter: String = name.chars().take(1).collect();
@@ -1683,6 +1703,17 @@ fn dock(p: &Painter, peek: &Value, body: Rect, horizontal: bool) -> Vec<(Rect, S
         }
         out.push((if rows { row } else { r }, format!("app:{i}")));
         at += z + DOCK_GAP + if downloading && horizontal { PROGRESS } else { 0.0 };
+    }
+    // (its grips: a small dot in the middle of each end while the mouse is on it; the one the mouse is over, brighter and a touch
+    // bigger)
+    if grip {
+        let c = side + into * depth / 2.0;
+        let lit = peek["dock"]["grip_at"].as_u64();
+        for (i, e) in [DOCK_END / 2.0, if horizontal { body.w } else { body.h } - DOCK_END / 2.0].into_iter().enumerate() {
+            let on = lit == Some(i as u64);
+            let (cx, cy) = if horizontal { (body.x + e, c) } else { (c, body.y + e) };
+            p.circle(cx, cy, if on { 3.0 } else { 2.5 }, if on { TEXT.alpha(0.9) } else { DIM.alpha(0.7) });
+        }
     }
     out
 }

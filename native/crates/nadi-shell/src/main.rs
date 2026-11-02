@@ -18,7 +18,6 @@ mod eyes;
 mod frame;
 mod update;
 mod cleanup;
-mod room;
 mod adminkeys;
 mod changes;
 mod drop;
@@ -226,7 +225,7 @@ fn run() -> windows::core::Result<()> {
             }
             WM_RBUTTONDOWN => {}
             // (near a side of a panel: the arrow to resize it by)
-            WM_SETCURSOR => match fr.sizing_cursor() {
+            WM_SETCURSOR => match fr.sizing_cursor().or_else(|| fr.grip_cursor()) {
                 Some(c) => unsafe {
                     if let Ok(h) = LoadCursorW(None, c) {
                         SetCursor(h);
@@ -246,9 +245,9 @@ fn run() -> windows::core::Result<()> {
             DispatchMessageW(&msg);
         }
     }
+    // (the settings page shut while NADI still runs: WebView2 left to tear it down as the process ends would call back into what is gone)
+    frame.borrow_mut().close_settings();
     tray::remove(msg_hwnd);
-    // (the edges kept for the widgets given back)
-    room::clear();
     // (the tray given back to Explorer)
     trayhost::stop();
     // (the taskbar is given back: NADI is gone)

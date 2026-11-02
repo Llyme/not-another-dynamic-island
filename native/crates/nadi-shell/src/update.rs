@@ -31,6 +31,19 @@ static NOW: Mutex<Status> = Mutex::new(Status::Current);
 /// the newer one last found (its version, where its installer is): kept, so a download that failed can be tried again
 static FOUND: Mutex<Option<(String, String)>> = Mutex::new(None);
 static NOTIFY: Mutex<isize> = Mutex::new(0);
+/// how far its installer has come (0..1, in thousandths), and whether to stop fetching it
+static FRACTION: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+static STOP: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// How far the installer being fetched has come (0..1).
+pub fn fraction() -> f32 {
+    FRACTION.load(std::sync::atomic::Ordering::Relaxed) as f32 / 1000.0
+}
+
+/// The installer being fetched: given up.
+pub fn stop() {
+    STOP.store(true, std::sync::atomic::Ordering::Relaxed);
+}
 
 fn post() {
     let h = *NOTIFY.lock().unwrap();
@@ -112,21 +125,28 @@ pub fn install_version(v: &str) {
 }
 
 fn run_installer(v: String, url: String) {
+    FRACTION.store(0, std::sync::atomic::Ordering::Relaxed);
+    STOP.store(false, std::sync::atomic::Ordering::Relaxed);
     set(Status::Fetching(v.clone()));
     std::thread::spawn(move || {
         let r = (|| -> Result<(), String> {
-            let bytes = nadi_core::repo::fetch_installer(&url)?;
+            let bytes = nadi_core::repo::fetch_installer_with(&url, &|f| FRACTION.store((f * 1000.0) as u32, std::sync::atomic::Ordering::Relaxed), &STOP)?;
             // (an installer is a program: what came is checked to be one before it is run)
             if bytes.len() < 1024 || &bytes[..2] != b"MZ" {
                 return Err("What came was not an installer.".into());
             }
-            let path = std::env::temp_dir().join(format!("NADI-Setup-{v}.exe"));
+            let path = nadi_core::paths::temp_dir().join(format!("NADI-Setup-{v}.exe"));
             std::fs::write(&path, &bytes).map_err(|e| format!("Could not keep the installer ({e})."))?;
             std::process::Command::new(&path).arg("--quiet").spawn().map_err(|e| format!("Could not start the installer ({e})."))?;
             Ok(())
         })();
         match r {
             Ok(()) => set(Status::Installing(v)),
+            // (given up: as it was, a newer one still found)
+            Err(_) if STOP.load(std::sync::atomic::Ordering::Relaxed) => set(match FOUND.lock().unwrap().clone() {
+                Some((v, url)) if newer(&v) => Status::Ready(v, url),
+                _ => Status::Current,
+            }),
             // (it can be tried again: what was found is kept)
             Err(e) => set(Status::Failed(e)),
         }

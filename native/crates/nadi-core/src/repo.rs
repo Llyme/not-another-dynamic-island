@@ -280,6 +280,51 @@ pub fn fetch_installer(url: &str) -> Result<Vec<u8>, String> {
     http_get(url, "application/octet-stream", 200 * 1024 * 1024).map_err(fetch_text)
 }
 
+/// A release's installer, fetched whole, `progress` told how far along (0..1) as it comes; `stop` set: given up.
+pub fn fetch_installer_with(url: &str, progress: &dyn Fn(f32), stop: &std::sync::atomic::AtomicBool) -> Result<Vec<u8>, String> {
+    let agent = ureq::AgentBuilder::new().redirects(0).timeout(Duration::from_secs(120)).user_agent("NADI-plugin-installer").build();
+    let mut url = url.to_string();
+    for _ in 0..6 {
+        let host = host_of(&url).ok_or_else(|| "The address is not a secure one.".to_string())?;
+        if !host_allowed(&host) {
+            return Err(format!("GitHub sent the download to {host}, which NADI does not read."));
+        }
+        let resp = match agent.get(&url).set("Accept", "application/octet-stream").call() {
+            Ok(r) if (301..=308).contains(&r.status()) => {
+                url = r.header("Location").and_then(|l| resolve(&url, l)).ok_or_else(|| "GitHub sent no place to go.".to_string())?;
+                continue;
+            }
+            Ok(r) => r,
+            Err(ureq::Error::Status(c, r)) if matches!(c, 301 | 302 | 303 | 307 | 308) => {
+                url = r.header("Location").and_then(|l| resolve(&url, l)).ok_or_else(|| "GitHub sent no place to go.".to_string())?;
+                continue;
+            }
+            Err(ureq::Error::Status(404, _)) => return Err("Not found on GitHub.".into()),
+            Err(ureq::Error::Status(c, _)) => return Err(format!("GitHub said {c}.")),
+            Err(ureq::Error::Transport(t)) => return Err(format!("Cannot reach GitHub ({}).", t.kind())),
+        };
+        let total = resp.header("Content-Length").and_then(|v| v.parse::<u64>().ok()).unwrap_or(0);
+        let mut reader = resp.into_reader().take(200 * 1024 * 1024);
+        let mut out = Vec::with_capacity(total as usize);
+        let mut buf = vec![0u8; 64 * 1024];
+        loop {
+            if stop.load(std::sync::atomic::Ordering::Relaxed) {
+                return Err("Stopped.".into());
+            }
+            let n = reader.read(&mut buf).map_err(|e| format!("The download broke off ({e})."))?;
+            if n == 0 {
+                break;
+            }
+            out.extend_from_slice(&buf[..n]);
+            if total > 0 {
+                progress((out.len() as f64 / total as f64).min(1.0) as f32);
+            }
+        }
+        return Ok(out);
+    }
+    Err("GitHub sent it round in circles.".into())
+}
+
 /// The tag in the address the page of the latest release sends you on to.
 fn tag_from(location: &str) -> Option<String> {
     let tag = location.split("/releases/tag/").nth(1).map(|t| t.split(['?', '#']).next().unwrap_or(t).to_string());

@@ -212,6 +212,18 @@ impl Modal {
         }
     }
 
+    /// Put away, if it is the one asking for this (`progress` of its spec): what it showed is over.
+    pub fn close_progress(&mut self, key: &str) {
+        if self.shown && self.spec["progress"] == key {
+            self.close();
+        }
+    }
+
+    /// Is it showing this one's progress?
+    pub fn shows_progress(&self, key: &str) -> bool {
+        self.shown && self.spec["progress"] == key
+    }
+
     /// What was pressed (once): who asked, the button's action, and its args (the field's words).
     pub fn take_result(&mut self) -> Option<(String, String, Value)> {
         self.result.take()
@@ -248,7 +260,7 @@ impl Modal {
 
     /// Something in it moves: it springs out or away, its countdown runs, its caret blinks.
     pub fn moving(&self) -> bool {
-        self.t != self.to || self.vel != 0.0 || (self.shown && (self.marquee || self.spec["countdown"].is_number() || self.spec["field"].is_object() || self.opened.elapsed().as_secs_f32() < 0.6))
+        self.t != self.to || self.vel != 0.0 || (self.shown && (self.marquee || self.spec["progress"].is_string() || self.spec["countdown"].is_number() || self.spec["field"].is_object() || self.opened.elapsed().as_secs_f32() < 0.6))
     }
 
     /// One frame: its spring; its countdown run out, its last button pressed. True while it moves.
@@ -314,7 +326,7 @@ impl Modal {
         let cw = self.cw();
         let has_text = !self.spec["text"].as_str().unwrap_or("").is_empty() || (self.spec["countdown"].is_number() && self.spec["counting"].is_string());
         let has_field = self.spec["field"].is_object();
-        let has_change = self.spec["change"].as_array().is_some_and(|c| c.len() == 2);
+        let has_change = self.spec["change"].as_array().is_some_and(|c| c.len() == 2) || self.spec["progress"].is_string();
         let n = self.list().len();
         let list_h = n.min(ROWS) as f32 * ROW;
         let mut h = PAD + ICON + 14.0 + 20.0;
@@ -476,6 +488,14 @@ impl Modal {
                 let title = spec["title"].as_str().unwrap_or("");
                 let tw = p.measure(title, 15.0, Weight::Semibold, cw - 40.0);
                 p.text(title, card.x + cw / 2.0 - tw / 2.0, title_y, 15.0, Weight::Semibold, cw - 40.0, draw::TEXT);
+                // (how far it has come: a bar in the modal's colour)
+                if spec["progress"] == "nadi-update" {
+                    let f = crate::update::fraction();
+                    let bw = cw - 80.0;
+                    let r = Rect::new(card.x + 40.0, change_y - 3.0, bw, 6.0);
+                    p.round(r, 3.0, Color(0.15, 0.15, 0.17, 1.0));
+                    p.round(Rect::new(r.x, r.y, (bw * f).max(6.0), 6.0), 3.0, tone);
+                }
                 // (from one to another: two chips and an arrow, the second in the modal's colour)
                 if let Some([a, b]) = spec["change"].as_array().map(|c| c.as_slice()) {
                     let (a, b) = (a.as_str().unwrap_or(""), b.as_str().unwrap_or(""));

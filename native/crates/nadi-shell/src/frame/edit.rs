@@ -62,8 +62,9 @@ pub(super) struct Edit {
     pub carry: Option<Carry>,
     /// something held over the tray (it lights up: let go there, and it is hidden)
     pub over_tray: bool,
-    /// the edge something carried is nearest (its rail lit)
+    /// the edge something carried is nearest (its rail lit), or the corner it is in
     pub rail: Option<Edge>,
+    pub corner: Option<Corner>,
 }
 
 impl Frame {
@@ -91,7 +92,7 @@ impl Frame {
         let dim = self.screens[si].ov.piece_below(&self.g, (m.right - m.left) as u32, (m.bottom - m.top) as u32).ok();
         let s = self.screens[si].s;
         let tray = self.screens[si].ov.piece(&self.g, (TRAY_W * s) as u32 + 4, (480.0 * s) as u32).ok();
-        self.edit = Some(Edit { si, field: None, find: String::new(), apps: Vec::new(), add: None, touched: Instant::now(), dim, tray, at: Bx::default(), chips: Vec::new(), carry: None, over_tray: false, rail: None });
+        self.edit = Some(Edit { si, field: None, find: String::new(), apps: Vec::new(), add: None, touched: Instant::now(), dim, tray, at: Bx::default(), chips: Vec::new(), carry: None, over_tray: false, rail: None, corner: None });
         self.render_edit_dim();
         self.render_edit_tray();
         // (Find typed into at once)
@@ -161,7 +162,7 @@ impl Frame {
     pub(super) fn render_edit_dim(&mut self) {
         let Some(e) = &self.edit else { return };
         let Some(d) = &e.dim else { return };
-        let (si, lit) = (e.si, e.rail);
+        let (si, lit, corner) = (e.si, e.rail, e.corner);
         let s = self.screens[si].s;
         let p = self.painter(s);
         let m = self.screens[si].ov.monitor.rect;
@@ -182,11 +183,25 @@ impl Frame {
                     Edge::Left => Rect::new(a.x + inset, a.y + 16.0, t, a.h - 32.0),
                     Edge::Right => Rect::new(a.x + a.w - inset - t, a.y + 16.0, t, a.h - 32.0),
                 };
-                if lit == Some(e) {
+                if lit == Some(e) && corner.is_none() {
                     p.round(Rect::new(r.x - 3.0, r.y - 3.0, r.w + 6.0, r.h + 6.0), 4.5, draw::accent().alpha(0.25));
                     p.round(r, 1.5, draw::accent());
                 } else {
                     p.round(r, 1.5, Color(1.0, 1.0, 1.0, 0.09));
+                }
+            }
+            for c in [Corner::TopLeft, Corner::TopRight, Corner::BottomLeft, Corner::BottomRight] {
+                let (cx, cy) = match c {
+                    Corner::TopLeft => (a.x + 12.0, a.y + 12.0),
+                    Corner::TopRight => (a.x + a.w - 12.0, a.y + 12.0),
+                    Corner::BottomLeft => (a.x + 12.0, a.y + a.h - 12.0),
+                    Corner::BottomRight => (a.x + a.w - 12.0, a.y + a.h - 12.0),
+                };
+                if corner == Some(c) {
+                    p.circle(cx, cy, 11.0, draw::accent().alpha(0.25));
+                    p.circle(cx, cy, 6.0, draw::accent());
+                } else {
+                    p.circle(cx, cy, 5.0, Color(1.0, 1.0, 1.0, 0.12));
                 }
             }
         });
@@ -200,8 +215,19 @@ impl Frame {
         let d = [(Edge::Top, y - a.y), (Edge::Bottom, a.y + a.h - y), (Edge::Left, x - a.x), (Edge::Right, a.x + a.w - x)];
         let near = d.iter().copied().fold((Edge::Bottom, f32::MAX), |b, c| if c.1 < b.1 { c } else { b }).0;
         let want = (!over).then_some(near);
-        if self.edit.as_ref().is_some_and(|e| e.rail != want) {
-            self.edit.as_mut().unwrap().rail = want;
+        // (in a corner: near two edges at once)
+        let reach = 140.0;
+        let corner = (!over).then(|| match (d[0].1 < reach, d[1].1 < reach, d[2].1 < reach, d[3].1 < reach) {
+            (true, _, true, _) => Some(Corner::TopLeft),
+            (true, _, _, true) => Some(Corner::TopRight),
+            (_, true, true, _) => Some(Corner::BottomLeft),
+            (_, true, _, true) => Some(Corner::BottomRight),
+            _ => None,
+        }).flatten();
+        if self.edit.as_ref().is_some_and(|e| e.rail != want || e.corner != corner) {
+            let e = self.edit.as_mut().unwrap();
+            e.rail = want;
+            e.corner = corner;
             self.render_edit_dim();
         }
     }
@@ -226,13 +252,34 @@ impl Frame {
         self.commit();
     }
 
-    /// What was typed in Find: the shelf narrows to it.
+    /// What was typed in Find: the shelf narrows to it, and the widgets on screen it names glow where they are.
     pub(super) fn set_find(&mut self, text: String) {
         if let Some(e) = &mut self.edit {
             e.find = text;
             e.touched = Instant::now();
         }
         self.render_edit_tray();
+        let on: Vec<(usize, String)> = self.screens.iter().enumerate().flat_map(|(si, sc)| sc.items.keys().filter(|k| !is_pop(k)).map(move |k| (si, k.clone()))).collect();
+        for (si, k) in on {
+            self.render(si, &k);
+        }
+        self.commit();
+    }
+
+    /// A widget's name, as the shelf would show it.
+    pub(super) fn widget_label(&self, k: &str) -> String {
+        let Some((pl, id)) = k.split_once('/') else { return String::new() };
+        if let Some(n) = self.plugins.iter().find(|p| p.id == pl).and_then(|p| p.widgets.iter().find(|w| w.id == id).map(|w| if w.name.is_empty() { p.name.clone() } else { w.name.clone() })) {
+            return n;
+        }
+        self.edit_chips().into_iter().find(|c| c.key == k).map(|c| c.label).unwrap_or_else(|| id.to_string())
+    }
+
+    /// Is this widget on screen named by what is typed in Find?
+    pub(super) fn found_by_find(&self, k: &str) -> bool {
+        let Some(e) = &self.edit else { return false };
+        let f = e.find.trim().to_lowercase();
+        !f.is_empty() && self.widget_label(unpop(k)).to_lowercase().contains(&f)
     }
 
     pub(super) fn render_edit_tray(&mut self) {
@@ -403,6 +450,10 @@ impl Frame {
                 return true;
             }
             if let Some((_, c)) = e.chips.iter().find(|(r, _)| lx >= r.x && lx < r.x + r.w && ly >= r.y && ly < r.y + r.h).cloned() {
+                // (a widget whose plugin is on: lifted out as itself, carried as any widget on screen is)
+                if c.plugin_off.is_none() && self.widgets.contains_key(&c.key) && self.lift_out(si, &c.key, x, y) {
+                    return true;
+                }
                 let s = self.screens[si].s;
                 let w = self.painter(s).measure(&c.label, 11.5, Weight::Semibold, 200.0) + 24.0;
                 self.start_carry(si, Carried::Chip(c), w, CHIP_H, x, y);
@@ -451,6 +502,41 @@ impl Frame {
             return true;
         }
         true
+    }
+
+    /// A hidden widget lifted out of the shelf: put on the edge nearest the mouse, last there, and picked up at once, its middle under
+    /// the mouse (so the widgets of the edge it is carried to part for it, and it goes back into the shelf as any widget does).
+    fn lift_out(&mut self, si: usize, k: &str, x: f32, y: f32) -> bool {
+        let spot = self.drop_place(si, x, y);
+        let name = spot.place.name().to_string();
+        let key = k.to_string();
+        self.change_config(|c| {
+            let w = c.widgets.entry(key).or_default();
+            w.place = Some(name);
+            w.rank = Some(100_000);
+        });
+        self.relayout();
+        let Some(b) = self.screens.get(si).and_then(|sc| sc.items.get(k)).map(|it| it.rest.now()) else { return false };
+        self.press = Some((si, k.to_string(), b.x + b.w / 2.0, b.y + b.h / 2.0, Instant::now() - HOLD));
+        self.mouse = (si, x, y);
+        self.pick_up();
+        self.render_edit_tray();
+        true
+    }
+
+    /// A widget carried over the shelf: drawn smaller (as small as a tile), so it is plain where it will go; away from it, its size.
+    fn shrink_over_shelf(&mut self, si: usize, over: bool) {
+        use windows::Foundation::Numerics::Matrix3x2;
+        let Some((_, k, _, _)) = self.drag.clone() else { return };
+        let Some(it) = self.screens.get(si).and_then(|sc| sc.items.get(&k)) else { return };
+        let s = self.screens[si].s;
+        let b = it.rest.now();
+        let z = if over { (TILE / b.w.max(b.h)).clamp(0.4, 1.0) } else { 1.0 };
+        let (px, py) = (b.w * s / 2.0, b.h * s / 2.0);
+        unsafe {
+            let _ = it.piece.visual.SetTransform2(&Matrix3x2 { M11: z, M12: 0.0, M21: 0.0, M22: z, M31: px * (1.0 - z), M32: py * (1.0 - z) });
+        }
+        self.commit();
     }
 
     fn start_carry(&mut self, si: usize, what: Carried, w: f32, h: f32, x: f32, y: f32) {
@@ -523,6 +609,7 @@ impl Frame {
             if self.edit.as_ref().is_some_and(|e| e.over_tray != over) {
                 self.edit.as_mut().unwrap().over_tray = over;
                 self.render_edit_tray();
+                self.shrink_over_shelf(si, over);
             }
         }
         false
@@ -530,9 +617,15 @@ impl Frame {
 
     /// The button let go while editing. True: handled here.
     pub(super) fn edit_click(&mut self, si: usize, x: f32, y: f32) -> bool {
+        // (let go: whatever was carried at its own size again)
+        if self.edit.as_ref().is_some_and(|e| e.over_tray) && self.drag.is_some() {
+            self.shrink_over_shelf(si, false);
+        }
         // (let go: no rail lit)
-        if self.edit.as_ref().is_some_and(|e| e.rail.is_some()) {
-            self.edit.as_mut().unwrap().rail = None;
+        if self.edit.as_ref().is_some_and(|e| e.rail.is_some() || e.corner.is_some()) {
+            let e = self.edit.as_mut().unwrap();
+            e.rail = None;
+            e.corner = None;
             self.render_edit_dim();
         }
         let Some(e) = &self.edit else { return false };
