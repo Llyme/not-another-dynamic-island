@@ -32,6 +32,11 @@ static NOTIFY: AtomicIsize = AtomicIsize::new(0);
 /// when Win went down (ms since the PC started), while it is
 static WIN_AT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 
+/// when the hook last heard Win let go (ms since the PC started)
+static WIN_UP_AT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+/// the window in front before the last one (Start not counted) keeps its keys from NADI (a program run as administrator)
+static PREV_HIDDEN: AtomicBool = AtomicBool::new(false);
+
 /// Win held, alone, for a moment (its numbers show on the dock).
 pub fn win_held() -> bool {
     let at = WIN_AT.load(Ordering::Relaxed);
@@ -99,6 +104,7 @@ unsafe extern "system" fn hook(code: i32, wp: WPARAM, lp: LPARAM) -> LRESULT {
                     }
                 }
             } else if win {
+                WIN_UP_AT.store(windows::Win32::System::SystemInformation::GetTickCount64(), Ordering::Relaxed);
                 let alone = WIN_DOWN.swap(false, Ordering::Relaxed) && !OTHER.load(Ordering::Relaxed);
                 if alone && ENABLED.load(Ordering::Relaxed) {
                     // (held back: the mask key, then the release itself)
@@ -114,6 +120,109 @@ unsafe extern "system" fn hook(code: i32, wp: WPARAM, lp: LPARAM) -> LRESULT {
     CallNextHookEx(None, code, wp, lp)
 }
 
+/// The program a window belongs to (its file name, small letters).
+fn program_of(h: HWND) -> String {
+    use windows::Win32::System::Threading::*;
+    unsafe {
+        let mut pid = 0u32;
+        GetWindowThreadProcessId(h, Some(&mut pid));
+        let Ok(p) = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, pid) else { return String::new() };
+        let mut buf = [0u16; 512];
+        let mut n = buf.len() as u32;
+        let ok = QueryFullProcessImageNameW(p, PROCESS_NAME_WIN32, windows::core::PWSTR(buf.as_mut_ptr()), &mut n).is_ok();
+        let _ = CloseHandle(p);
+        if !ok {
+            return String::new();
+        }
+        let path = String::from_utf16_lossy(&buf[..n as usize]).to_ascii_lowercase();
+        path.rsplit('\\').next().unwrap_or("").to_string()
+    }
+}
+
+/// Is this program Start's? (Windows 11's own, or, on newer builds, Start and search in one: SearchHost)
+fn starts(program: &str) -> bool {
+    matches!(program, "startmenuexperiencehost.exe" | "searchhost.exe")
+}
+
+/// Is this window Start?
+fn is_start(h: HWND) -> bool {
+    starts(&program_of(h))
+}
+
+/// Windows' own shell (the taskbar, the desktop, Start, search, quick settings): passed through on the way to Start, not counted as
+/// what was in front.
+fn is_shell(program: &str) -> bool {
+    matches!(program, "explorer.exe" | "startmenuexperiencehost.exe" | "searchhost.exe" | "shellhost.exe" | "shellexperiencehost.exe" | "textinputhost.exe")
+}
+
+/// (what happened each time Start opened, in `winkey.log` in NADI's data folder, kept short: to see why Start was let be)
+fn log(line: &str) {
+    use std::io::Write;
+    let Some(dir) = nadi_core::paths::data_dir() else { return };
+    let p = dir.join("winkey.log");
+    if std::fs::metadata(&p).map_or(0, |m| m.len()) > 32 * 1024 {
+        let _ = std::fs::remove_file(&p);
+    }
+    if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(&p) {
+        let _ = writeln!(f, "{} {line}", chrono::Local::now().format("%m-%d %H:%M:%S"));
+    }
+}
+
+/// the program in front before Start (Windows' shell not counted)
+static PREV_PROGRAM: std::sync::Mutex<String> = std::sync::Mutex::new(String::new());
+
+/// Is the mouse on a taskbar (Start pressed there, not with the key)?
+fn over_taskbar() -> bool {
+    unsafe {
+        let mut p = POINT::default();
+        if GetCursorPos(&mut p).is_err() {
+            return false;
+        }
+        let root = GetAncestor(WindowFromPoint(p), GA_ROOT);
+        let mut c = [0u16; 64];
+        let n = GetClassNameW(root, &mut c) as usize;
+        matches!(String::from_utf16_lossy(&c[..n]).as_str(), "Shell_TrayWnd" | "Shell_SecondaryTrayWnd")
+    }
+}
+
+/// Another window came to the front. Over a program run as administrator Windows keeps the keyboard from NADI, so Win reaches Start
+/// unheard: Start opening over one, with no Win heard, is shut again and the launcher opened in its place.
+unsafe extern "system" fn foreground(_: windows::Win32::UI::Accessibility::HWINEVENTHOOK, _: u32, h: HWND, _: i32, _: i32, _: u32, _: u32) {
+    if h.is_invalid() {
+        return;
+    }
+    let program = program_of(h);
+    if !starts(&program) {
+        // (the taskbar or the desktop, on the way to Start: what was in front before them is kept)
+        if !is_shell(&program) {
+            PREV_HIDDEN.store(crate::winlist::keys_hidden(h), Ordering::Relaxed);
+            *PREV_PROGRAM.lock().unwrap() = if program.is_empty() { "(hidden)".into() } else { program };
+        }
+        return;
+    }
+    let heard = windows::Win32::System::SystemInformation::GetTickCount64().saturating_sub(WIN_UP_AT.load(Ordering::Relaxed)) < 300;
+    let (on, hidden, taskbar) = (ENABLED.load(Ordering::Relaxed), PREV_HIDDEN.load(Ordering::Relaxed), over_taskbar());
+    let go = on && hidden && !heard && !taskbar;
+    log(&format!("start over {} launcher-key {on} keys-hidden {hidden} win-heard {heard} on-taskbar {taskbar}: {}", PREV_PROGRAM.lock().unwrap(), if go { "shut, launcher" } else { "let be" }));
+    if !go {
+        return;
+    }
+    // (Esc shuts Start; once more if it is still there, then the launcher, so Start's closing does not take the front from it)
+    std::thread::spawn(|| {
+        let esc = [key(VK_ESCAPE.0, false), key(VK_ESCAPE.0, true)];
+        for _ in 0..2 {
+            let fg = GetForegroundWindow();
+            if !is_start(fg) {
+                break;
+            }
+            SendInput(&esc, std::mem::size_of::<INPUT>() as i32);
+            std::thread::sleep(std::time::Duration::from_millis(120));
+        }
+        let to = NOTIFY.load(Ordering::Relaxed);
+        let _ = PostMessageW(HWND(to as *mut _), WM_LAUNCHER, WPARAM(0), LPARAM(0));
+    });
+}
+
 /// Listen to the keyboard, on a thread of its own that does nothing else: a hook on the window's thread, kept waiting while that
 /// thread draws or Windows makes it wait, is dropped by Windows without a word, and the key stops opening the launcher. The launcher's
 /// message goes to `notify`.
@@ -122,6 +231,8 @@ pub fn install(notify: HWND) {
     std::thread::spawn(|| unsafe {
         let inst = GetModuleHandleW(None).unwrap_or_default();
         let _ = SetWindowsHookExW(WH_KEYBOARD_LL, Some(hook), inst, 0);
+        use windows::Win32::UI::Accessibility::SetWinEventHook;
+        let _ = SetWinEventHook(EVENT_SYSTEM_FOREGROUND, EVENT_SYSTEM_FOREGROUND, None, Some(foreground), 0, 0, WINEVENT_OUTOFCONTEXT | WINEVENT_SKIPOWNPROCESS);
         let mut msg = MSG::default();
         while GetMessageW(&mut msg, None, 0, 0).as_bool() {
             let _ = TranslateMessage(&msg);

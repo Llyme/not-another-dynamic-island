@@ -76,23 +76,9 @@ fn store_path(id: &str) -> Option<PathBuf> {
 
 /// What a plugin kept (null when it kept nothing). It is sealed for this Windows user; a file from before that is read as it is.
 pub fn store_of(id: &str) -> Value {
-    let Some(bytes) = store_path(id).and_then(|p| std::fs::read(p).ok()) else { return legacy(id) };
+    let Some(bytes) = store_path(id).and_then(|p| std::fs::read(p).ok()) else { return Value::Null };
     let plain = crate::seal::unprotect(&bytes).unwrap_or(bytes);
     serde_json::from_slice(&plain).unwrap_or(Value::Null)
-}
-
-/// The sign-in the usage rings had when they were a part of the app (`claude-login.bin`, sealed for this Windows user) is the one
-/// the plugin that took them over starts with, so nobody signs in twice. Once the plugin keeps something, this is not looked at.
-fn legacy(id: &str) -> Value {
-    if id != "claude-usage" {
-        return Value::Null;
-    }
-    let Some(path) = crate::paths::data_dir().map(|d| d.join("claude-login.bin")) else { return Value::Null };
-    let Some(plain) = std::fs::read(path).ok().and_then(|b| crate::seal::unprotect(&b)) else { return Value::Null };
-    match serde_json::from_slice::<Value>(&plain) {
-        Ok(login) if login["access"].is_string() => json!({ "login": login }),
-        _ => Value::Null,
-    }
 }
 
 /// Keep this for a plugin (refused when it is more than it may keep).
@@ -159,6 +145,9 @@ pub fn fetch(hosts: &[String], req: &Value) -> Value {
     }
     let method = match req["method"].as_str().unwrap_or("GET").to_ascii_uppercase().as_str() {
         "POST" => "POST",
+        "PATCH" => "PATCH",
+        "PUT" => "PUT",
+        "DELETE" => "DELETE",
         _ => "GET",
     };
     let agent = ureq::AgentBuilder::new().redirects(0).timeout(Duration::from_secs(20)).build();
@@ -175,7 +164,7 @@ pub fn fetch(hosts: &[String], req: &Value) -> Value {
         }
     }
     let sent = match req["body"].as_str() {
-        Some(b) if method == "POST" => r.send_string(b),
+        Some(b) if method != "GET" => r.send_string(b),
         _ => r.call(),
     };
     let (status, resp) = match sent {

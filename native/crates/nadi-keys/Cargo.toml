@@ -1,0 +1,20 @@
+[package]
+name = "nadi-keys"
+version = "1.4.0"
+edition = "2021"
+
+# NADI's Windows-key helper: run as administrator (set up once from NADI's settings), it hears the Windows key over apps that run as
+# administrator too (games), which Windows keeps from NADI, and tells NADI to open its launcher instead of Start.
+
+[dependencies]
+serde_json.workspace = true
+windows = { version = "0.58", features = [
+    "Win32_Foundation",
+    "Win32_Graphics_Gdi",
+    "Win32_Security",
+    "Win32_System_LibraryLoader",
+    "Win32_System_Threading",
+    "Win32_UI_Input_KeyboardAndMouse",
+    "Win32_UI_Shell",
+    "Win32_UI_WindowsAndMessaging",
+] }

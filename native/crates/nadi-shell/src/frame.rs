@@ -510,6 +510,8 @@ pub struct Frame {
     dock_was_seen: bool,
     /// changes that would lay the widgets out again, made while all were tucked away: done as one comes out
     layout_pending: bool,
+    /// the settings changed: the edges kept for the widgets (Make Room) set anew at the next layout
+    room_dirty: bool,
     /// the app in front on the dock, the one before it, and when it changed (its card grows, its ground pops in)
     dock_front: Option<(String, Option<String>, Instant)>,
     /// when each widget last came out of its edge (its glow plays again from strong)
@@ -601,6 +603,7 @@ impl Frame {
         }
         crate::draw::set_accent(&config.theme);
         crate::draw::set_accent2(&config.theme2);
+        crate::paint::set_roundness(config.roundness);
         crate::keyhook::set_desk_keys(config.desk_keys);
         // (File Explorer's menu, pointing at this NADI where it is now)
         if config.explorer_menu {
@@ -685,6 +688,7 @@ impl Frame {
             wheeled: HashMap::new(),
             dock_was_seen: false,
             layout_pending: false,
+            room_dirty: true,
             dock_front: None,
             shown_at: HashMap::new(),
             told_seen: HashMap::new(),
@@ -734,6 +738,16 @@ impl Frame {
         crate::net::start();
         crate::recycle::start();
         crate::update::start(f.msg_hwnd);
+        // (updated since NADI last ran: what is new shown once, in a modal; not on its first run, nor going back)
+        let now = env!("CARGO_PKG_VERSION");
+        if f.config.last_run != now {
+            let since = f.config.last_run.clone();
+            let ran_before = config_when.is_some();
+            f.change_config(|c| c.last_run = now.into());
+            if ran_before && (since.is_empty() || crate::update::parts(now) > crate::update::parts(&since)) {
+                crate::changes::after_update(f.msg_hwnd, since);
+            }
+        }
         crate::drop::set_notify(f.msg_hwnd);
         crate::radios::refresh();
         f.sync_sys();
@@ -750,7 +764,7 @@ impl Frame {
         if !changed && !force && have {
             return;
         }
-        let dock = self.bi.dock(&self.config, &self.pc);
+        let dock = self.bi.dock(&self.config);
         let quick = self.bi.quick();
         self.apply(vec![
             Update::Widget { plugin: PLUGIN.into(), widget: DOCK.into(), content: dock },
@@ -806,6 +820,13 @@ impl Frame {
             }
         }
         self.push_settings();
+    }
+
+    /// What is new since the last version run: a modal, once.
+    pub fn whats_new(&mut self) {
+        if let Some(spec) = crate::changes::take_modal() {
+            self.ask(spec, crate::builtin::PLUGIN.into(), None);
+        }
     }
 
     /// A drag came over a widget that takes files, or left it.
@@ -986,7 +1007,7 @@ impl Frame {
         let m = Metrics::default();
         let mut moved_any = false;
         // (a key held in a program that keeps its keyboard from NADI cannot be seen: there, the cursor showing stands for it. A game
-        // that hides the cursor while it is played shows it while its own key is held, as NTE does with Alt)
+        // that hides the cursor while it is played shows it while its own key is held, as some do with Alt)
         let held = if self.keys_hidden { crate::winlist::cursor_showing() } else { unsafe {
             match self.config.hold_key.as_str() {
                 "alt" => GetAsyncKeyState(VK_MENU.0 as i32) as u16 & 0x8000 != 0,
@@ -1045,6 +1066,14 @@ impl Frame {
             } else {
                 edges_at
             };
+            // (only edges with a widget on them that is not idle, when the setting says so: an empty or quiet edge brings nothing out)
+            let edges_at = if self.config.edge_busy_only && mode == "edges" {
+                let sc = &self.screens[si];
+                edges_at.into_iter().filter(|e| sc.items.iter().any(|(k, i)| !is_pop(k) && edge_of(i.slot.place).contains(e) && self.widgets.get(k).is_some_and(|w| w.content["idle"] != true))).collect()
+            } else {
+                edges_at
+            };
+            let sc = &self.screens[si];
             let keys: Vec<String> = sc.items.keys().cloned().collect();
             let always: HashSet<String> = keys.iter().filter(|k| self.always_shown(k)).cloned().collect();
             // (a menu open on this screen: every widget on it stays out while it is, over a full-screen app too)
@@ -1262,6 +1291,11 @@ impl Frame {
             crate::update::install();
             return;
         }
+        // (another version, from its modal: fetched and installed)
+        if action == "nadi_install" {
+            crate::update::install_version(args["version"].as_str().unwrap_or(""));
+            return;
+        }
         // (the Recycle Bin's: put back, deleted for good, emptied, opened, files dropped on it thrown away)
         if action.starts_with("bin_") {
             let parse = args["parse"].as_str().unwrap_or("").to_string();
@@ -1387,7 +1421,7 @@ impl Frame {
         let g = &self.g;
         if let Some(l) = &mut self.launcher {
             if l.shown {
-                l.hide();
+                l.dismiss();
             } else {
                 let pins = self.config.launcher_pins.clone().unwrap_or_else(crate::launcher::default_pins);
                 let foot = self.config.launcher_foot.clone().unwrap_or_else(crate::launcher::default_foot);
@@ -1454,7 +1488,8 @@ impl Frame {
             }));
         };
         for p in self.plugins.iter().filter(|p| p.on) {
-            for w in &p.widgets {
+            // (a `many` widget is the plugin's to show, each as a window: not one to place)
+            for w in p.widgets.iter().filter(|w| !w.many) {
                 add(&p.id, &p.name, &w.id, if w.name.is_empty() { &w.id } else { &w.name });
             }
         }
@@ -1473,6 +1508,11 @@ impl Frame {
     }
 
     /// Tell the settings page everything it draws.
+    /// A plugin's own colour, when its manifest names one.
+    fn plugin_accent(&self, plugin: &str) -> Option<crate::paint::Color> {
+        self.plugins.iter().find(|p| p.id == plugin).and_then(|p| p.accent.as_deref()).map(crate::paint::Color::hex)
+    }
+
     /// A pin's name now: the dock's (`at` "dock", by its program) or the launcher's ("apps", by "kind|id").
     fn pin_name(&self, at: &str, ident: &str) -> Option<String> {
         if at == "dock" {
@@ -1538,8 +1578,25 @@ impl Frame {
             .collect();
         wrows.sort_by(|a, b| b["ms"].as_f64().unwrap_or(0.0).total_cmp(&a["ms"].as_f64().unwrap_or(0.0)));
         let r = |v: f32, k: f32| (v * k).round() / k;
+        // (memory, each program apart: NADI, its settings window, each plugin's helper)
+        let memory: Vec<Value> = crate::perf::memory_parts()
+            .into_iter()
+            .map(|(k, mb)| {
+                let name = match k.as_str() {
+                    "nadi" => "NADI".to_string(),
+                    "webview" => "Settings Window".to_string(),
+                    "watchdog" => "Watchdog".to_string(),
+                    _ => match k.strip_prefix("plugin:") {
+                        Some(id) => name_of(id).unwrap_or_else(|| id.to_string()),
+                        None => k.clone(),
+                    },
+                };
+                json!({ "key": k, "name": name, "mb": r(mb, 10.0) })
+            })
+            .collect();
         let msg = json!({
             "type": "perf",
+            "memory": memory,
             "range": self.perf_range,
             "series": series.iter().map(|v| [r(v[0], 100.0), r(v[1], 10.0), r(v[2], 10.0)]).collect::<Vec<_>>(),
             "now": [r(now[0], 100.0), r(now[1], 1.0), r(now[2], 10.0)],
@@ -1556,6 +1613,9 @@ impl Frame {
             "type": "state",
             "version": env!("CARGO_PKG_VERSION"),
             "update": crate::update::json(),
+            "changes": crate::changes::json(),
+            "cleanup": crate::cleanup::json(),
+            "admin_keys": { "installed": crate::adminkeys::installed(), "available": crate::adminkeys::available() },
             "autostart": crate::autostart::on(),
             "plugins": self.plugins,
             "config": self.config,
@@ -1574,7 +1634,7 @@ impl Frame {
         let mut quiet = true;
         for text in crate::settings::take_messages() {
             let Ok(m) = serde_json::from_str::<Value>(&text) else { continue };
-            quiet &= m["cmd"] == "reach_preview" || m["cmd"] == "perf";
+            quiet &= m["cmd"] == "reach_preview" || m["cmd"] == "perf" || m["cmd"] == "round_preview" || m["cmd"] == "depth_preview";
             let st = |k: &str| m[k].as_str().unwrap_or("").to_string();
             match m["cmd"].as_str().unwrap_or("") {
                 "ready" => {
@@ -1601,9 +1661,58 @@ impl Frame {
                 "goto_done" => self.settings_goto = None,
                 // (the edge reach being dragged in the settings: its band on the screen itself, as it is moved)
                 "reach_preview" => self.show_reach(m["px"].as_f64().unwrap_or(0.0) as f32),
+                // (the roundness being dragged: everything drawn as it would be, not kept until it is let go)
+                // (the depths being dragged: every widget as deep as it would be, not kept until let go)
+                "depth_preview" => {
+                    let mut c = self.config.clone();
+                    if let Some(v) = m["small"].as_f64() {
+                        c.depth_small = v as f32;
+                    }
+                    if let Some(v) = m["large"].as_f64() {
+                        c.depth_large = v as f32;
+                    }
+                    self.set_config(c);
+                }
+                "round_preview" => {
+                    let mut c = self.config.clone();
+                    c.roundness = m["k"].as_f64().unwrap_or(1.0).clamp(0.0, 1.5) as f32;
+                    self.set_config(c);
+                }
                 // (a newer NADI: fetched and installed; or looked for again now)
                 "update" => crate::update::install(),
                 "update_check" => crate::update::check(),
+                // (Clean Up: how much, looked at as the settings open; cleaned when pressed)
+                "cleanup_look" => crate::cleanup::look(self.msg_hwnd),
+                "cleanup" => {
+                    crate::cleanup::clean(self.msg_hwnd);
+                    self.push_settings();
+                }
+                // (the Windows key over apps run as administrator: its helper set up the first time (Windows asks), then on or off)
+                "admin_keys" => {
+                    let on = m["on"] == true;
+                    self.change_config(|c| c.admin_keys = on);
+                    if on && !crate::adminkeys::installed() {
+                        crate::adminkeys::install(self.msg_hwnd);
+                    }
+                    self.push_settings();
+                }
+                // (another version: an older one asked about first (it may not suit the plugins), a newer one just installed)
+                "install_version" => {
+                    let v = st("version");
+                    let now = env!("CARGO_PKG_VERSION");
+                    if crate::update::parts(&v) < crate::update::parts(now) {
+                        let spec = json!({
+                            "icon": "back", "tone": "amber", "careful": true,
+                            "title": "Install an Older Version?",
+                            "change": [now, v],
+                            "text": "Newer plugins may stop working.",
+                            "buttons": [{ "label": "Cancel" }, { "label": "Install", "action": "nadi_install", "args": { "version": v }, "tone": "amber" }],
+                        });
+                        self.ask(spec, crate::builtin::PLUGIN.into(), None);
+                    } else {
+                        crate::update::install_version(&v);
+                    }
+                }
                 // (the Performance page open or shut, and over how long)
                 "perf" => {
                     self.perf_on = m["on"] == true;
@@ -1810,6 +1919,35 @@ impl Frame {
         let ib = self.input.as_mut()?;
         let said = ib.message(msg, wp, lp);
         let (key, plugin, action, live, text) = (ib.key.clone(), ib.plugin.clone(), ib.action.clone(), ib.live, ib.text.clone());
+        // (Edit Mode's Find: the shelf narrows as it is typed; Esc empties it first, then (the box gone) ends Edit Mode)
+        if key == edit::FIND_KEY {
+            match said {
+                Said::Changed | Said::Cleared => {
+                    self.set_find(text);
+                    let g = &self.g;
+                    if let Some(ib) = &self.input {
+                        ib.render(g, &self.pc);
+                    }
+                }
+                Said::Done | Said::Gone => {
+                    let esc = unsafe { GetAsyncKeyState(VK_ESCAPE.0 as i32) as u16 & 0x8000 != 0 };
+                    if esc && !text.is_empty() {
+                        // (emptied, and typed into again; this Esc does not end Edit Mode)
+                        self.esc_down = true;
+                        if let Some(ib) = &mut self.input {
+                            ib.text.clear();
+                        }
+                        self.set_find(String::new());
+                        self.open_find();
+                    } else if let Some(ib) = &mut self.input {
+                        ib.close();
+                    }
+                }
+                Said::Nothing => {}
+            }
+            self.commit();
+            return matches!(msg, WM_CHAR | WM_KEYDOWN).then_some(LRESULT(0));
+        }
         let handled = matches!(msg, WM_CHAR | WM_KEYDOWN);
         match said {
             Said::Nothing => {}
@@ -1823,7 +1961,9 @@ impl Frame {
                 }
             }
             Said::Done | Said::Gone => {
-                if matches!(said, Said::Done) && !text.trim().is_empty() || (matches!(said, Said::Done) && live) {
+                // (words of several lines are kept as they are, emptied too, however the box goes)
+                let area = self.input.as_ref().is_some_and(|i| i.area || i.in_card());
+                if area || (matches!(said, Said::Done) && !text.trim().is_empty()) || (matches!(said, Said::Done) && live) {
                     self.act(plugin, action, json!({ "text": text }));
                 }
                 if let Some(ib) = &mut self.input {
@@ -1877,7 +2017,7 @@ impl Frame {
     /// What the modal's window hears.
     pub fn modal_message(&mut self, msg: u32, wp: WPARAM, lp: LPARAM) -> Option<LRESULT> {
         let g = &self.g;
-        let r = self.modal.as_mut()?.message(msg, wp, lp, g, &self.pc);
+        let r = self.modal.as_mut()?.message(msg, wp, lp);
         if let Some(m) = &mut self.modal {
             m.render(g, &self.pc);
         }
@@ -2167,8 +2307,9 @@ impl Frame {
             return Some((crate::draw::accent2(), strength * (1.0 - ((e - 1.6).max(0.0) / 0.8)), true));
         }
         let g = &w.content["glow"];
-        // (every glow in the theme's colour, whatever its plugin asks; Claude's in Claude's own, as its banners are)
-        let theme = if w.plugin == "claude" { crate::draw::CLAUDE } else { crate::draw::accent() };
+        // (every glow in the theme's colour, whatever its plugin asks; one whose manifest names its own colour, in that, as its banners
+        // are)
+        let theme = self.plugin_accent(&w.plugin).unwrap_or_else(crate::draw::accent);
         let (c, style) = if g["from"].is_string() || g.is_object() {
             (if g["second"] == true { crate::draw::accent2() } else { theme }, g["style"].as_str().unwrap_or("steady"))
         } else if g.is_string() {
@@ -2207,7 +2348,7 @@ impl Frame {
         if self.large(k) && peek["tray"].is_object() {
             peek["tray"]["large"] = json!(true);
         } else if self.large(k) && peek.is_object() && !peek["dock"].is_object() {
-            peek["scale"] = json!(peek::LARGE);
+            peek["scale"] = json!((self.even_depth(k) / 32.0).clamp(1.0, 2.0));
         } else if peek.is_object() {
             if let Some(o) = peek.as_object_mut() {
                 o.remove("button");
@@ -2338,6 +2479,8 @@ impl Frame {
         // (its peek changed shape: laid out again only if that changed its size)
         let mut reshaped: Vec<String> = Vec::new();
         let mut bump_now: Vec<String> = Vec::new();
+        // (what each widget asks of its window, as it was and is now)
+        let mut windows_asked: Vec<(String, Option<Value>, Value)> = Vec::new();
         for u in ups {
             let t_up = Instant::now();
             let what = match &u {
@@ -2402,6 +2545,7 @@ impl Frame {
                             Some(w) if w.content["glow"] == content["glow"] => w.glow_at,
                             _ => Instant::now(),
                         };
+                        windows_asked.push((k.clone(), self.widgets.get(unpop(&k)).map(|w| w.content["window"].clone()), content["window"].clone()));
                         self.widgets.insert(k.clone(), Widget { plugin, id: widget, content, glow_at });
                         redraw.insert(k);
                     }
@@ -2409,6 +2553,19 @@ impl Frame {
                 Update::Say { plugin, say } => self.say(plugin, say),
                 Update::Cancel { plugin, key } => self.cancel(&plugin, &key),
                 Update::Modal { plugin, spec } => self.ask(spec, plugin, None),
+                // (what a plugin adds to the launcher's search)
+                Update::Apps { plugin, apps } => {
+                    // (its pictures of its own folder, found)
+                    let mut apps = Value::Array(apps);
+                    let hosts = self.plugins.iter().find(|p| p.id == plugin).map(|p| p.net.clone()).unwrap_or_default();
+                    own_pictures(&mut apps, &plugin, &hosts);
+                    crate::apps::set_from_plugin(&plugin, apps.as_array().map(|a| a.as_slice()).unwrap_or(&[]));
+                }
+                // (how far things are on the dock's apps, as a plugin tells it)
+                Update::Progress { plugin, items } => {
+                    crate::builtin::set_progress(&plugin, items);
+                    self.sync_builtins(true);
+                }
                 Update::Quiet { plugin, on } => {
                     if on {
                         self.quiet.insert(plugin);
@@ -2440,6 +2597,9 @@ impl Frame {
             }
         }
         self.prof_add("apply size check", t_size);
+        for (k, old, new) in windows_asked {
+            self.window_asked(&k, old, &new);
+        }
         let t_lay = Instant::now();
         // (a window popped out whose panel changed: as big as its panel now, whatever else is laid out)
         let popped_changed = redraw.iter().any(|k| self.popped(k));
@@ -2574,6 +2734,42 @@ impl Frame {
     }
 
     /// The same, drawing again only the pieces that are new, moved, or named in `dirty` (none named: all).
+    /// Make Room: each edge with widgets on it kept for them (maximized windows stop there), as deep as its deepest widget (and the
+    /// gap from the edge, for floating ones), or the depth of its own the setting says, and a gap more. Only while the widgets stay out
+    /// (Show Widgets: Always). `shrink`: the settings changed, every edge set anew; else a kept edge only grows (no jumping windows).
+    pub(super) fn sync_room(&mut self, shrink: bool) {
+        let on = self.config.make_room && (self.config.reveal.is_empty() || self.config.reveal == "all");
+        let mut want: Vec<(RECT, Edge, i32)> = Vec::new();
+        if on {
+            for sc in &self.screens {
+                let mut deep: [f32; 4] = [0.0; 4];
+                for (k, it) in &sc.items {
+                    if is_pop(k) || it.drag_place.is_some() {
+                        continue;
+                    }
+                    let edge = match it.slot.place {
+                        Place::Edge(e) => e,
+                        Place::Corner(Corner::TopLeft | Corner::TopRight) => Edge::Top,
+                        Place::Corner(_) => Edge::Bottom,
+                    };
+                    let d = if matches!(edge, Edge::Top | Edge::Bottom) { it.slot.h } else { it.slot.w } + if it.floating { FLOAT_OFF } else { 0.0 };
+                    let i = edge as usize;
+                    deep[i] = deep[i].max(d);
+                }
+                for (i, e) in [Edge::Top, Edge::Bottom, Edge::Left, Edge::Right].into_iter().enumerate() {
+                    let d = deep[e as usize];
+                    let _ = i;
+                    if d <= 0.0 {
+                        continue;
+                    }
+                    let room = if self.config.room_mode == "own" { self.config.room_own.clamp(16.0, 96.0) } else { d } + self.config.room_gap.clamp(0.0, 16.0);
+                    want.push((sc.ov.monitor.rect, e, (room * sc.s).round() as i32));
+                }
+            }
+        }
+        crate::room::set(&want, shrink || !on);
+    }
+
     fn relayout_with(&mut self, dirty: Option<&HashSet<String>>) {
         self.layout_pending = false;
         let m = Metrics::default();
@@ -2813,6 +3009,9 @@ impl Frame {
         self.hit_regions();
         self.commit();
         self.tick_rate();
+        // (the edges kept for the widgets, as they are laid out now)
+        let shrink = std::mem::take(&mut self.room_dirty);
+        self.sync_room(shrink);
     }
 
     pub fn commit(&mut self) {
@@ -2985,11 +3184,15 @@ impl Frame {
             };
             if (held && it.drag_float) || (!held && it.floating) {
                 let r = (b.w.min(b.h) / 2.0).min(depth / 2.0 + 2.0);
+                // (as round as the setting says, as the merged ones are)
+                let r = (r * crate::paint::roundness()).max(0.5);
                 drops.push((b, r));
                 drops_lit.push(lit);
                 continue;
             }
             let r = if open_panel { RADIUS_OPEN.min(b.w.min(b.h) / 2.0) } else { (depth.min(if place.horizontal() { b.h } else { b.w }) * 0.44).min(b.w.min(b.h) / 2.0) };
+            // (as round as the setting says; never quite square, or the liquid would read it as one with no corners at all)
+            let r = (r * crate::paint::roundness()).max(0.5);
             // (coming out or going back in: as it goes, it sinks past its edge too, further than the neck reaches, so it melts into
             // the edge and nothing is left of it there when it is gone)
             let sink = (1.0 - it.shown.now.clamp(0.0, 1.0)) * (liquid_neck(px) * 1.5 + 4.0);
@@ -3215,6 +3418,15 @@ impl Frame {
 
     /// The shape of an item now (physical px), and its box (logical, in the monitor).
     fn shape_now(&self, si: usize, it: &Item) -> windows::core::Result<(Shape, Bx)> {
+        self.shape_with(si, it, true)
+    }
+
+    /// Its shape as it would be not swollen (what its contents are laid out in: the swelling moves none of them).
+    fn shape_still(&self, si: usize, it: &Item) -> windows::core::Result<(Shape, Bx)> {
+        self.shape_with(si, it, false)
+    }
+
+    fn shape_with(&self, si: usize, it: &Item, swell: bool) -> windows::core::Result<(Shape, Bx)> {
         let s = self.screens[si].s;
         let m = Metrics::default();
         let t = it.open.now.clamp(0.0, 1.0);
@@ -3269,7 +3481,7 @@ impl Frame {
             b
         };
         // (the mouse on it: swollen a little, out of its edge and along it; none of it once its panel is open)
-        let sw = it.swell.now.clamp(-0.3, 1.4) * (1.0 - t);
+        let sw = if swell { it.swell.now.clamp(-0.3, 1.4) * (1.0 - t) } else { 0.0 };
         let b = if sw.abs() > 0.001 {
             let (out, along) = (SWELL_OUT * sw, SWELL_ALONG * sw);
             match it.slot.place {
@@ -3535,6 +3747,9 @@ impl Frame {
                 Err(_) => return,
             }
         };
+        // (swollen under the mouse: its ground swells, its contents stay where they were, laid out in its shape as it was)
+        let still = self.screens[si].items.get(k).filter(|it| it.swell.now.abs() > 0.001 && it.open.now < 0.01).and_then(|it| self.shape_still(si, it).ok());
+        let swell_off = still.as_ref().map_or((0.0, 0.0), |(_, sb)| (sb.x - b.x, sb.y - b.y));
         // (a hidden one's glow fades with it)
         let shown = self.screens[si].items.get(k).map_or(0.0, |i| i.shown.now.clamp(0.0, 1.0));
         let glow = self.glow_of(k).filter(|_| shown > 0.01 && !is_pop(k)).map(|(c, st, moves)| (c, st * shown, moves));
@@ -3605,6 +3820,13 @@ impl Frame {
         if pop_fill.is_some() {
             content["\u{0}liquid"] = json!(true);
         }
+        // (its ground: black, or the colour its widget asks for ("#rrggbb": a yellow note))
+        let pop_ground = content["window"]["ground"].as_str().filter(|g| g.len() == 7 && g.starts_with('#') && g[1..].chars().all(|c| c.is_ascii_hexdigit())).map(crate::paint::Color::hex).unwrap_or(FACE);
+        // (swollen: its ground drawn here, swollen; its contents over it, not)
+        let swell_ground = still.is_some() && content["\u{0}liquid"] != true;
+        if still.is_some() {
+            content["\u{0}liquid"] = json!(true);
+        }
         // (its window out: a dot in the middle of its stump)
         let dot = stump.then(|| {
             let bd = shape.body;
@@ -3671,7 +3893,10 @@ impl Frame {
             // (idle, shown only while editing: faded)
             let faded = idle_faded;
             if let Some(a) = pop_fill.filter(|a| *a > 0.0) {
-                let _ = fill_shape(dc, &shape, FACE.alpha(a));
+                let _ = fill_shape(dc, &shape, pop_ground.alpha(a));
+            }
+            if swell_ground {
+                let _ = fill_shape(dc, &shape, FACE);
             }
             // (a window that asks to be see-through (a map over a game): what is behind it shows through)
             let see = if is_pop(k) && content["see_through"] == true { 0.7 } else { 1.0 };
@@ -3683,11 +3908,12 @@ impl Frame {
                 let mut base = windows::Foundation::Numerics::Matrix3x2::default();
                 unsafe {
                     dc.GetTransform(&mut base);
-                    if top > 0.0 {
-                        dc.SetTransform(&(windows::Foundation::Numerics::Matrix3x2::translation(0.0, top * s) * base));
+                    if top > 0.0 || still.is_some() {
+                        dc.SetTransform(&(windows::Foundation::Numerics::Matrix3x2::translation(swell_off.0 * s, (top + swell_off.1) * s) * base));
                     }
                 }
-                (hits, buttons, alive, boxes) = paint_piece(&p, &self.g, dc, inner.as_ref().unwrap_or(&shape), &slot, &content, t, &open_set, &closed_set, scroll, content_h, bar, fade, floating, &mut under, &mut over);
+                let laid = inner.as_ref().or(still.as_ref().map(|(sh, _)| sh)).unwrap_or(&shape);
+                (hits, buttons, alive, boxes) = paint_piece(&p, &self.g, dc, laid, &slot, &content, t, &open_set, &closed_set, scroll, content_h, bar, fade, floating, &mut under, &mut over);
                 unsafe {
                     dc.SetTransform(&base);
                 }
@@ -3764,7 +3990,7 @@ impl Frame {
                                 let half = 1.5 * s;
                                 let dep = if matches!(e, Edge::Top | Edge::Bottom) { bd.h } else { bd.w };
                                 let along = if matches!(e, Edge::Top | Edge::Bottom) { bd.w } else { bd.h };
-                                let r = (dep * 0.44).min(along / 2.0) - half;
+                                let r = ((dep * 0.44).min(along / 2.0)) * crate::paint::roundness() - half;
                                 let rr = windows::Win32::Graphics::Direct2D::D2D1_ROUNDED_RECT {
                                     rect: windows::Win32::Graphics::Direct2D::Common::D2D_RECT_F { left: x + half, top: y + half, right: x + w - half, bottom: y + h - half },
                                     radiusX: r.max(0.0),
@@ -3798,6 +4024,22 @@ impl Frame {
             }
             for (_, r) in &mut boxes {
                 r.y += top;
+            }
+        }
+        // (swollen: its contents were laid out where they were before; what can be pressed, with them)
+        if still.is_some() {
+            let (dx, dy) = swell_off;
+            for h in &mut hits {
+                h.rect.x += dx;
+                h.rect.y += dy;
+            }
+            for (r, _) in &mut buttons {
+                r.x += dx;
+                r.y += dy;
+            }
+            for (_, r) in &mut boxes {
+                r.x += dx;
+                r.y += dy;
             }
         }
         // (the piece's offset: hits are in the piece's own space, the box in the monitor's)
@@ -4212,11 +4454,12 @@ impl Frame {
         }
         let p = self.painter(s);
         let _ = crate::draw::take_marquee();
-        // (a banner of Claude's: in Claude's own colour, not the theme's, which would say something else)
-        let was_accent = crate::draw::set_accent_now(self.banner.as_ref().filter(|b| b.plugin == "claude").map(|_| crate::draw::CLAUDE));
+        // (a banner of a plugin with its own colour: in that, not the theme's, which would say something else)
+        let own = self.banner.as_ref().and_then(|b| self.plugin_accent(&b.plugin));
+        let was_accent = crate::draw::set_accent_now(own);
         // (its border, bright as it comes out and settling, in its glow's colour; one that refuses the glow has none)
         let border = (say["glow"] != false && pill["glow"] != false).then(|| {
-            let c = if self.banner.as_ref().is_some_and(|b| b.plugin == "claude") { crate::draw::CLAUDE } else { crate::draw::accent() };
+            let c = own.unwrap_or_else(crate::draw::accent);
             let e = self.banner.as_ref().map_or(99.0, |b| b.born.elapsed().as_secs_f32());
             let st = GLOW_SETTLED + (GLOW_FRESH - GLOW_SETTLED) * (-e / GLOW_SETTLE_S).exp();
             c.alpha(((st - 0.5) / 1.5).clamp(0.3, 1.0))
@@ -4340,7 +4583,7 @@ impl Frame {
         let glows = say["glow"] != false && pill["glow"] != false && !self.glass_hidden;
         let glow_age = self.banner.as_ref().map_or(99.0, |b| b.born.elapsed().as_secs_f32());
         if glows {
-            let c = if self.banner.as_ref().is_some_and(|b| b.plugin == "claude") { crate::draw::CLAUDE } else { crate::draw::accent() };
+            let c = self.banner.as_ref().and_then(|b| self.plugin_accent(&b.plugin)).unwrap_or_else(crate::draw::accent);
             let strength = (GLOW_SETTLED + (GLOW_FRESH - GLOW_SETTLED) * (-glow_age / GLOW_SETTLE_S).exp()) * t;
             let m = (GLOW * s).round();
             let gneed = (shape.w.ceil() as u32 + 2 + 2 * m as u32, shape.h.ceil() as u32 + 2 + 2 * m as u32);
@@ -5006,6 +5249,8 @@ impl Frame {
         self.config = c;
         crate::draw::set_accent(&self.config.theme);
         crate::draw::set_accent2(&self.config.theme2);
+        crate::paint::set_roundness(self.config.roundness);
+        self.room_dirty = true;
         crate::keyhook::set_desk_keys(self.config.desk_keys);
         crate::keyhook::set_enabled(self.config.win_launcher());
         self.sync_tray();
@@ -5535,6 +5780,23 @@ impl Frame {
         }
     }
 
+    /// How deep a widget stands at rest: the settings' depth for its size, or its plugin's own (its peek's `depth`, else its manifest's).
+    fn even_depth(&self, k: &str) -> f32 {
+        let large = self.large(k);
+        let (small_d, large_d) = (self.config.depth_small.clamp(24.0, 48.0), self.config.depth_large.clamp(32.0, 64.0));
+        let even = if large { large_d.max(small_d) } else { small_d };
+        let pick = |v: &Value| -> Option<f32> {
+            let n = if v.is_object() { v[if large { "large" } else { "small" }].as_f64() } else { v.as_f64() };
+            n.map(|d| (d as f32).clamp(20.0, 120.0))
+        };
+        let Some(w) = self.widgets.get(unpop(k)) else { return even };
+        if let Some(d) = pick(&w.content["peek"]["depth"]) {
+            return d;
+        }
+        let spec = self.plugins.iter().find(|p| p.id == w.plugin).and_then(|p| p.widgets.iter().find(|s| s.names(&w.id)));
+        spec.and_then(|s| pick(&s.depth)).unwrap_or(even)
+    }
+
     /// A widget's size at a place: how long it is along that edge (its peek, measured for it; a square icon as long as it is deep;
     /// in a corner's own place at most so long), and how deep it stands out of it (the dock's own depth, large deeper).
     fn sized(&self, si: usize, p: &Painter, k: &str, look: Place, corner: bool) -> (f32, f32) {
@@ -5554,13 +5816,10 @@ impl Frame {
             } else {
                 DOCK_DEPTH
             }
-        } else if look.horizontal() {
-            m.depth_h
         } else {
-            m.depth_v
+            // (every widget as deep as the others of its size, on every edge: the settings' depth, or its plugin's own)
+            self.even_depth(k)
         };
-        // (a large one stands out further; the dock's own depths are already its large one's)
-        let base = if self.large(k) && !w.content["peek"]["dock"].is_object() { (base * peek::LARGE).round() } else { base };
         // (the desktops' map: as deep as its rows need, every one shown)
         let base = if w.content["peek"]["desks"].is_object() && !self.icon_alone(k) { base.max(peek::desk_depth(&self.peek_of(k), look.horizontal()).round()) } else { base };
         // (on the edge the taskbar stands on, under the widgets: as deep as it, over all of it)
@@ -5585,12 +5844,12 @@ impl Frame {
         let wordless = ["text", "sub", "clock", "bars", "vessel", "roll", "desks", "cells", "subtitle"].iter().all(|f| pk[*f].is_null() || pk[*f] == "");
         // (as deep as on a top or bottom edge, not the side's deeper strip: a square the same size on every edge)
         if !look.horizontal() && wordless && !(pk["dock"].is_object() || pk["tray"].is_object() || pk["face"].is_string() || pk["desks"].is_object()) {
-            let sq = if self.large(k) { (m.depth_h * peek::LARGE).round() } else { m.depth_h };
+            let sq = self.even_depth(k);
             return (sq, sq);
         }
         // (its icon alone: square, as long as it is deep; the same size on every edge, a side's too)
         if self.icon_alone(k) && !pk["face"].is_string() {
-            let base = if self.large(k) { (m.depth_h * peek::LARGE).round() } else { m.depth_h };
+            let base = self.even_depth(k);
             return (base, base);
         }
         let want = match self.screens.get(si) {
@@ -5909,9 +6168,11 @@ impl Frame {
 
     /// A box to type in, right over a field of a panel (`r`, in the panel at `b`); its widget stays open while it is.
     #[allow(clippy::too_many_arguments)]
-    fn open_field(&mut self, si: usize, k: &str, b: Bx, r: Rect, plugin: String, a: String, live: bool, hint: String, value: String, secret: bool) {
+    fn open_field(&mut self, si: usize, k: &str, b: Bx, r: Rect, plugin: String, a: String, live: bool, hint: String, value: String, secret: bool, look: Value) {
         let sc = &self.screens[si];
         let (s, m) = (sc.s, sc.ov.monitor.rect);
+        // (words of several lines: room for more as they are written)
+        let r = if look["area"] == true { Rect { h: r.h.max(140.0), ..r } } else { r };
         let at = RECT { left: m.left + ((b.x + r.x) * s).round() as i32, top: m.top + ((b.y + r.y) * s).round() as i32, right: m.left + ((b.x + r.x + r.w) * s).round() as i32, bottom: m.top + ((b.y + r.y + r.h) * s).round() as i32 };
         if self.input.is_none() {
             self.input = crate::inputbox::InputBox::new(&self.g).ok();
@@ -5923,6 +6184,7 @@ impl Frame {
         if let Some(ib) = &mut self.input {
             ib.open(g, at, s, k.to_string(), plugin, a, live, hint, value);
             ib.secret = secret;
+            ib.set_look(&look);
             ib.render(g, &self.pc);
         }
         self.commit();
@@ -5941,16 +6203,16 @@ impl Frame {
                     return None;
                 }
                 it.hits.iter().find_map(|h| match &h.press {
-                    Press::Field(a, live, hint, value, secret) if *a == action => Some((k.clone(), h.rect, *live, hint.clone(), value.clone(), *secret)),
+                    Press::Field(a, live, hint, value, secret, look) if *a == action => Some((k.clone(), h.rect, *live, hint.clone(), value.clone(), *secret, look.clone())),
                     _ => None,
                 })
             });
-            if let Some((k, r, live, hint, value, secret)) = found {
+            if let Some((k, r, live, hint, value, secret, look)) = found {
                 let Some(it) = self.screens[si].items.get(&k) else { return };
                 let Ok((_, b)) = self.shape_now(si, it) else { return };
                 let plugin = self.widgets.get(unpop(&k)).map(|w| w.plugin.clone()).unwrap_or_default();
                 self.focus_field = None;
-                self.open_field(si, &k, b, r, plugin, action, live, hint, value, secret);
+                self.open_field(si, &k, b, r, plugin, action, live, hint, value, secret, look);
                 return;
             }
         }
@@ -6272,8 +6534,8 @@ impl Frame {
                     let fr = ((lx - r.x) / r.w).clamp(0.0, 1.0);
                     self.act(plugin, a, json!({ "fraction": fr }));
                 }
-                Some((Press::Field(a, live, hint, value, secret), r)) => {
-                    self.open_field(si, &k, b, r, plugin, a, live, hint, value, secret);
+                Some((Press::Field(a, live, hint, value, secret, look), r)) => {
+                    self.open_field(si, &k, b, r, plugin, a, live, hint, value, secret, look);
                 }
                 // (a picture: its own presses are its drags, from the press down)
                 Some((Press::View(_), _)) => {}

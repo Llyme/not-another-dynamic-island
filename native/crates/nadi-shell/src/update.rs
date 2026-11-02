@@ -51,7 +51,7 @@ pub fn status() -> Status {
 }
 
 /// "1.10.2" as numbers, to be compared.
-fn parts(v: &str) -> Vec<u32> {
+pub fn parts(v: &str) -> Vec<u32> {
     v.trim_start_matches('v').split(['.', '-']).map(|p| p.parse().unwrap_or(0)).collect()
 }
 
@@ -66,13 +66,18 @@ pub fn check() {
         return;
     }
     set(Status::Looking);
-    std::thread::spawn(|| match nadi_core::repo::latest_nadi() {
-        Ok(Some((v, url))) if newer(&v) => {
-            *FOUND.lock().unwrap() = Some((v.clone(), url.clone()));
-            set(Status::Ready(v, url));
+    std::thread::spawn(|| {
+        let found = nadi_core::repo::latest_nadi();
+        // (every version's changes looked at too: a newer one's shown before it is installed)
+        crate::changes::refresh();
+        match found {
+            Ok(Some((v, url))) if newer(&v) => {
+                *FOUND.lock().unwrap() = Some((v.clone(), url.clone()));
+                set(Status::Ready(v, url));
+            }
+            Ok(_) => set(Status::Current),
+            Err(e) => set(Status::Failed(e)),
         }
-        Ok(_) => set(Status::Current),
-        Err(e) => set(Status::Failed(e)),
     });
 }
 
@@ -94,6 +99,19 @@ pub fn install() {
         return;
     }
     let Some((v, url)) = FOUND.lock().unwrap().clone() else { return };
+    run_installer(v, url);
+}
+
+/// Another version installed, an older one too (going back): its installer fetched and run, as an update's is.
+pub fn install_version(v: &str) {
+    if matches!(status(), Status::Fetching(_) | Status::Installing(_)) || v == env!("CARGO_PKG_VERSION") {
+        return;
+    }
+    let Some(tag) = crate::changes::tag_of(v) else { return };
+    run_installer(v.to_string(), nadi_core::repo::installer_url(&tag));
+}
+
+fn run_installer(v: String, url: String) {
     set(Status::Fetching(v.clone()));
     std::thread::spawn(move || {
         let r = (|| -> Result<(), String> {

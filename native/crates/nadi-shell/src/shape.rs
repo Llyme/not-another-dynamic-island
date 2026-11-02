@@ -90,7 +90,8 @@ fn turned(factory: &ID2D1Factory1, g: &ID2D1PathGeometry1, m: Matrix3x2) -> Resu
 /// screen, `fillet` is the curve into the edge (the box is `along + 2 × fillet` long).
 pub fn notch(factory: &ID2D1Factory1, edge: Edge, along: f32, across: f32, radius: f32, fillet: f32) -> Result<Shape> {
     let f = fillet.max(0.0);
-    let r = radius.min(along / 2.0).min((across - f).max(0.0)).max(0.0);
+    // (its corners as round as the setting says; its fillets into the edge as they are: the liquid's)
+    let r = (radius * crate::paint::roundness()).min(along / 2.0).min((across - f).max(0.0)).max(0.0);
     let (len, dep) = (along + 2.0 * f, across);
     // the canonical piece, on the top edge, traversed down its left side, along its bottom, up its right side
     let g = path(factory, |s| unsafe {
@@ -118,7 +119,7 @@ pub fn notch(factory: &ID2D1Factory1, edge: Edge, along: f32, across: f32, radiu
 /// `w + fillet` × `h + fillet`).
 pub fn corner(factory: &ID2D1Factory1, which: Corner, w: f32, h: f32, radius: f32, fillet: f32) -> Result<Shape> {
     let f = fillet.max(0.0);
-    let r = radius.min(w).min(h).max(0.0);
+    let r = (radius * crate::paint::roundness()).min(w).min(h).max(0.0);
     // the canonical piece, in the top-left corner, traversed along the top edge, down its right side, along its bottom, up the left edge
     let g = path(factory, |s| unsafe {
         s.BeginFigure(pt(0.0, 0.0), D2D1_FIGURE_BEGIN_FILLED);
@@ -142,7 +143,7 @@ pub fn corner(factory: &ID2D1Factory1, which: Corner, w: f32, h: f32, radius: f3
 
 /// A floating piece: its own rounded shape, `w` × `h`.
 pub fn floating(factory: &ID2D1Factory1, w: f32, h: f32, radius: f32) -> Result<Shape> {
-    let r = radius.min(w / 2.0).min(h / 2.0);
+    let r = crate::paint::rounded(radius.min(w / 2.0).min(h / 2.0), w, h);
     let g = unsafe { factory.CreateRoundedRectangleGeometry(&D2D1_ROUNDED_RECT { rect: D2D_RECT_F { left: 0.0, top: 0.0, right: w, bottom: h }, radiusX: r, radiusY: r })? };
     Ok(Shape { geometry: g.into(), w, h, body: Rect::new(0.0, 0.0, w, h) })
 }

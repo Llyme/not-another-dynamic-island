@@ -55,8 +55,29 @@ pub fn fill_shape_fade(dc: &ID2D1DeviceContext, shape: &Shape, c: Color, to_y: f
     Ok(())
 }
 
+/// How round everything is: every corner's radius, as NADI has it, times this (0 square, 1 as made, 1.5 rounder). Set from the config.
+static ROUNDNESS: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0x3f80_0000);
+
+pub fn set_roundness(k: f32) {
+    ROUNDNESS.store(k.clamp(0.0, 1.5).to_bits(), std::sync::atomic::Ordering::Relaxed);
+}
+
+pub fn roundness() -> f32 {
+    f32::from_bits(ROUNDNESS.load(std::sync::atomic::Ordering::Relaxed))
+}
+
+/// A corner of a `w` × `h` box, as round as the setting says (never past half its shorter side): a knob or a highlight rounded all
+/// the way squares off with the rest. (A circle drawn as one (`fill_circle`) stays one.)
+pub fn rounded(radius: f32, w: f32, h: f32) -> f32 {
+    if radius <= 0.0 {
+        return radius;
+    }
+    (radius * roundness()).min(w.min(h) / 2.0)
+}
+
 pub fn fill_round(dc: &ID2D1DeviceContext, r: Rect, radius: f32, c: Color) -> Result<()> {
     let b = brush(dc, c)?;
+    let radius = rounded(radius, r.w, r.h);
     unsafe { dc.FillRoundedRectangle(&D2D1_ROUNDED_RECT { rect: r.d2d(), radiusX: radius, radiusY: radius }, &b) };
     Ok(())
 }

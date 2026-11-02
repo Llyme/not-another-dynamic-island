@@ -49,6 +49,13 @@ pub struct InputBox {
     pub secret: bool,
     pub shown: bool,
     since: Instant,
+    /// how it looks: in a card's colours (its ground, its words), how big and bold its words, and words of several lines (Enter a
+    /// new line; Ctrl + Enter, Esc or a click elsewhere: given)
+    ground: Option<crate::paint::Color>,
+    ink: Option<crate::paint::Color>,
+    size: f32,
+    bold: bool,
+    pub area: bool,
 }
 
 unsafe extern "system" fn proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> LRESULT {
@@ -73,7 +80,7 @@ impl InputBox {
             let surface = g.surface(1, 1)?;
             visual.SetContent(&surface)?;
             target.SetRoot(&visual)?;
-            Ok(InputBox { hwnd, _target: target, visual, surface, s: 1.0, w: 0.0, h: 0.0, text: String::new(), placeholder: String::new(), key: String::new(), plugin: String::new(), action: String::new(), live: false, secret: false, shown: false, since: Instant::now() })
+            Ok(InputBox { hwnd, _target: target, visual, surface, s: 1.0, w: 0.0, h: 0.0, text: String::new(), placeholder: String::new(), key: String::new(), plugin: String::new(), action: String::new(), live: false, secret: false, shown: false, since: Instant::now(), ground: None, ink: None, size: 11.5, bold: false, area: false })
         }
     }
 
@@ -112,6 +119,21 @@ impl InputBox {
                 let _ = windows::Win32::System::Threading::AttachThreadInput(mine, theirs, false);
             }
         }
+    }
+
+    /// Written in a card (its colours): what is typed is kept however the box goes, as on paper.
+    pub fn in_card(&self) -> bool {
+        self.ground.is_some()
+    }
+
+    /// How it looks (see `Press::Field`); none: the plain box.
+    pub fn set_look(&mut self, look: &serde_json::Value) {
+        let hex = |k: &str| look[k].as_str().filter(|v| v.len() == 7 && v.starts_with('#')).map(crate::paint::Color::hex);
+        self.ground = hex("ground");
+        self.ink = hex("ink");
+        self.size = look["size"].as_f64().map_or(11.5, |v| v as f32).clamp(9.0, 20.0);
+        self.bold = look["bold"] == true;
+        self.area = look["area"] == true;
     }
 
     /// Its field moved (its panel grew or shrank): the box goes with it.
@@ -158,6 +180,13 @@ impl InputBox {
                 }
             }
             WM_ACTIVATE if (wp.0 & 0xffff) as u32 == WA_INACTIVE && self.shown => Said::Gone,
+            // (words of several lines: Enter a new line, Ctrl + Enter given)
+            WM_KEYDOWN if self.area && VIRTUAL_KEY(wp.0 as u16) == VK_RETURN && unsafe { GetKeyState(VK_CONTROL.0 as i32) } >= 0 => {
+                if self.text.chars().count() < 4000 {
+                    self.text.push('\n');
+                }
+                Said::Changed
+            }
             WM_KEYDOWN => match VIRTUAL_KEY(wp.0 as u16) {
                 VK_ESCAPE => Said::Gone,
                 VK_RETURN => Said::Done,
@@ -169,7 +198,7 @@ impl InputBox {
             },
             WM_CHAR => {
                 let c = char::from_u32(wp.0 as u32).unwrap_or('\0');
-                if !c.is_control() && self.text.chars().count() < 400 {
+                if !c.is_control() && self.text.chars().count() < if self.area { 4000 } else { 400 } {
                     self.text.push(c);
                     Said::Changed
                 } else {
@@ -187,6 +216,34 @@ impl InputBox {
         let (w, h) = (self.w, self.h);
         let text = if self.secret { "•".repeat(self.text.chars().count()) } else { self.text.clone() };
         let hint = self.placeholder.clone();
+        // (in a card's colours: its ground a little lighter, its words in its ink, no x)
+        if let (Some(ground), Some(ink)) = (self.ground, self.ink) {
+            let (size, bold, area) = (self.size, self.bold, self.area);
+            let _ = g.draw_surface(&self.surface, |_dc| {
+                p.round(Rect::new(0.0, 0.0, w, h), 6.0, ground);
+                p.round(Rect::new(0.0, 0.0, w, h), 6.0, crate::paint::Color(1.0, 1.0, 1.0, 0.06));
+                let x = 4.0;
+                if area {
+                    let units = text.encode_utf16().count();
+                    if text.is_empty() {
+                        p.text(&hint, x, 11.0, size, Weight::Regular, w - 8.0, ink.alpha(0.4));
+                        p.round(Rect::new(x, 4.0, 1.5, size + 4.0), 0.75, draw::accent());
+                    } else {
+                        p.paragraph_lit(&text, x, 2.0, size, w - 8.0, units, ink, ink, Some(draw::accent()));
+                    }
+                } else {
+                    let weight = if bold { Weight::Semibold } else { Weight::Regular };
+                    let tw = if text.is_empty() {
+                        p.text(&hint, x, h / 2.0, size, weight, w - 8.0, ink.alpha(0.4));
+                        0.0
+                    } else {
+                        p.text(&text, x, h / 2.0, size, weight, w - 12.0, ink)
+                    };
+                    p.round(Rect::new(x + tw + 1.0, h / 2.0 - size * 0.6, 1.5, size * 1.2), 0.75, draw::accent());
+                }
+            });
+            return;
+        }
         let _ = g.draw_surface(&self.surface, |_dc| {
             p.round(Rect::new(0.0, 0.0, w, h), 10.0, draw::FACE);
             p.round(Rect::new(0.0, 0.0, w, h), 10.0, crate::paint::Color(1.0, 1.0, 1.0, 0.12));

@@ -1,6 +1,6 @@
 //! GPU utilization for the hub's stat ring, from the Windows "GPU Engine"
 //! performance counters (the same source Task Manager uses) -- works for
-//! AMD/Intel/NVIDIA alike, unlike the Python version's nvidia-smi shell-out.
+//! every graphics card alike.
 //!
 //! Instance names look like `pid_123_luid_0x0_0x0000A1B2_phys_0_eng_0_engtype_3D`.
 //! Utilization is summed per (adapter, engine type), then the busiest engine

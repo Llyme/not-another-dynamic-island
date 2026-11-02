@@ -1,4 +1,4 @@
-//! What other apps notify: their Windows toasts (Discord, Viber, ...), read through the WinRT `UserNotificationListener`, for
+//! What other apps notify: their Windows toasts (chat apps, mail, ...), read through the WinRT `UserNotificationListener`, for
 //! a plugin that may see them (`notifications`). Polled every couple of seconds on a thread of its own, and only while such a
 //! plugin is on: nothing is asked of Windows otherwise. Windows asks the user once (Settings > Privacy & security >
 //! Notifications > "Let apps access your notifications"); until it is granted this retries quietly once a minute.

@@ -1,4 +1,4 @@
-//! What you play with, and how full its battery is: the controllers on (Xbox and other XInput ones: their battery as Windows
+//! What you play with, and how full its battery is: the controllers on (XInput ones: their battery as Windows
 //! tells it, or that they are wired), and the Bluetooth devices that tell their battery (a headset, a mouse, a keyboard). Read on a
 //! thread of its own (Bluetooth is slow to ask); what is known is told.
 

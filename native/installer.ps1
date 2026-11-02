@@ -12,7 +12,7 @@ try {
   }
   # (cargo writes its progress to stderr: not an error here)
   $ErrorActionPreference = "Continue"
-  cargo build --release -p nadi-shell
+  cargo build --release -p nadi-shell -p nadi-keys
   if ($LASTEXITCODE -ne 0) { throw "NADI did not build" }
   $env:NADI_EXE = $exe
   cargo build --release -p nadi-setup

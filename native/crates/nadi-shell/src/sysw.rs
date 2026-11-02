@@ -702,14 +702,14 @@ pub fn devices(s: &State, paired: &[crate::net::Paired], bt: Option<bool>) -> Va
 }
 
 /// What happens on the windows of every desktop (the frame knows it): a window asking for you (its taskbar button would flash), the
-/// programs making sound, and the count in a window's title ("(3) Discord").
+/// programs making sound, and the count in a window's title ("(3) Chat").
 #[derive(Default)]
 pub struct Activity {
     pub flashing: std::collections::HashSet<isize>,
     pub sounding: std::collections::HashSet<String>,
 }
 
-/// A count at the start of a window's title, as "(3) Discord".
+/// A count at the start of a window's title, as "(3) Chat".
 fn title_count(t: &str) -> Option<u64> {
     let rest = t.trim_start().strip_prefix('(')?;
     let n: String = rest.chars().take_while(|c| c.is_ascii_digit()).collect();

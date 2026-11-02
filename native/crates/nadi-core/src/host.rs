@@ -30,10 +30,7 @@ const UNSEEN_GAP: Duration = Duration::from_secs(1);
 const PROCESSES_EVERY: Duration = Duration::from_secs(2);
 const SYSTEM_EVERY: Duration = Duration::from_secs(2);
 const USAGE_EVERY: Duration = Duration::from_secs(1);
-const DOWNLOADS_EVERY: Duration = Duration::from_millis(1500);
-const STEAM_EVERY: Duration = Duration::from_secs(3);
 const GEAR_EVERY: Duration = Duration::from_secs(5);
-const CLAUDE_EVERY: Duration = Duration::from_secs(2);
 /// one banner every few seconds from a plugin, and the same one not again within a minute (one with a key of its own is the plugin's to repeat)
 const SAY_GAP: Duration = Duration::from_secs(3);
 const SAY_REPEAT: Duration = Duration::from_secs(60);
@@ -63,6 +60,10 @@ pub enum Update {
     Quiet { plugin: String, on: bool },
     /// it asks something in a modal (only as the answer to something pressed)
     Modal { plugin: String, spec: Value },
+    /// what it adds to the launcher's search now (each `{ id, name, image, open }`; none: nothing)
+    Apps { plugin: String, apps: Vec<Value> },
+    /// how far something is on apps' icons in the dock now (each its program's file name, lower case, and how far: 0..1)
+    Progress { plugin: String, items: Vec<(String, f32)> },
 }
 
 /// What the shell asks.
@@ -120,6 +121,8 @@ pub struct PluginInfo {
     /// the hosts it may reach (for the pictures on the web its widgets name)
     #[serde(skip)]
     pub net: Vec<String>,
+    /// its own colour, when its manifest names one
+    pub accent: Option<String>,
     pub banners: bool,
     /// a face's look ("eyes", "aura"), drawn by the frame while the plugin is on
     pub look: String,
@@ -155,20 +158,13 @@ struct Slot {
     last_proc: Option<Instant>,
     last_sys: Option<Instant>,
     toast_seen: Option<u64>,
-    downloads: sensors::downloadsensor::Sensor,
-    last_downloads: Option<Instant>,
-    last_steam: Option<Instant>,
     last_gear: Option<Instant>,
-    revealable: HashSet<String>,
-    last_claude: Option<Instant>,
     watch: Vec<u32>,
     meter: sensors::usage::Meter,
     last_usage: Option<Instant>,
     files: HashMap<PathBuf, SystemTime>,
     /// when its files were last looked at (once a second)
     last_files: Option<Instant>,
-    /// what it has been told of the browsers' pages, and which it watches
-    browser: sensors::browsersensor::Feed,
     /// what came back of its requests and commands, for its next call
     results: Arc<Mutex<Vec<Value>>>,
     said: HashMap<String, Instant>,
@@ -190,18 +186,12 @@ impl Slot {
             last_proc: None,
             last_sys: None,
             toast_seen: None,
-            downloads: sensors::downloadsensor::Sensor::default(),
-            last_downloads: None,
-            last_steam: None,
             last_gear: None,
-            revealable: HashSet::new(),
-            last_claude: None,
             watch: Vec::new(),
             meter: sensors::usage::Meter::default(),
             last_usage: None,
             files: HashMap::new(),
             last_files: None,
-            browser: Default::default(),
             results: Arc::default(),
             said: HashMap::new(),
             last_say: None,
@@ -222,6 +212,10 @@ struct Plugin {
     /// can any of its widgets be seen (till the shell says otherwise: yes)
     seen: bool,
     quiet: bool,
+    /// what it adds to the launcher's search, as last told
+    apps: Vec<Value>,
+    /// how far things are on the dock's apps, as last told
+    progress: Vec<(String, f32)>,
     /// its own program, while it is on, and its stops this minute (how many, since when)
     helper: Option<crate::helper::Helper>,
     helper_stops: (u32, Instant),
@@ -398,7 +392,7 @@ impl Host {
             if m.default_on && problem.is_none() && !self.is_on(&m.id) && !self.saved.off.contains(&m.id) {
                 self.saved.on.push(m.id.clone());
             }
-            let fresh = || Plugin { manifest: m.clone(), dir: dir.clone(), problem: problem.clone(), note: None, slot: None, widgets: BTreeMap::new(), pressed: VecDeque::new(), open: BTreeMap::new(), quiet: false, helper: None, helper_stops: (0, Instant::now()), subs: HashSet::new(), seen: true };
+            let fresh = || Plugin { manifest: m.clone(), dir: dir.clone(), problem: problem.clone(), note: None, slot: None, widgets: BTreeMap::new(), pressed: VecDeque::new(), open: BTreeMap::new(), quiet: false, apps: Vec::new(), progress: Vec::new(), helper: None, helper_stops: (0, Instant::now()), subs: HashSet::new(), seen: true };
             match self.plugins.iter().position(|p| p.manifest.id == m.id) {
                 Some(i) if self.plugins[i].manifest == m && self.plugins[i].problem == problem => {}
                 Some(i) => {
@@ -473,6 +467,14 @@ impl Host {
             self.out.push(Update::Quiet { plugin: id.to_string(), on: false });
         }
         let p = self.plugins.iter_mut().find(|p| p.manifest.id == id).unwrap();
+        if !std::mem::take(&mut p.apps).is_empty() {
+            self.out.push(Update::Apps { plugin: id.to_string(), apps: Vec::new() });
+        }
+        let p = self.plugins.iter_mut().find(|p| p.manifest.id == id).unwrap();
+        if !std::mem::take(&mut p.progress).is_empty() {
+            self.out.push(Update::Progress { plugin: id.to_string(), items: Vec::new() });
+        }
+        let p = self.plugins.iter_mut().find(|p| p.manifest.id == id).unwrap();
         for (w, _) in std::mem::take(&mut p.widgets) {
             self.out.push(Update::Widget { plugin: id.to_string(), widget: w, content: Value::Null });
         }
@@ -480,10 +482,6 @@ impl Host {
 
     /// what the sensors are wanted for, from the plugins that are on
     fn wants(&self) {
-        let reads = self.plugins.iter().any(|p| p.slot.is_some() && p.manifest.permissions.browser);
-        if !reads && !self.dry {
-            sensors::browsersensor::state().set_config(sensors::browsersensor::disabled());
-        }
         let any = |f: fn(&manifest::Permissions) -> bool| self.plugins.iter().any(|p| p.slot.is_some() && f(&p.manifest.permissions));
         self.pc.want.media.store(any(|p| p.media), Ordering::Relaxed);
         self.pc.want.media_art.store(any(|p| p.media_art), Ordering::Relaxed);
@@ -584,7 +582,7 @@ impl Host {
 
     pub fn set_open(&mut self, plugin: &str, widget: &str, open: bool) {
         let Some(p) = self.plugins.iter_mut().find(|p| p.manifest.id == plugin) else { return };
-        if !p.manifest.widgets.iter().any(|w| w.id == widget) {
+        if !p.manifest.widgets.iter().any(|w| w.names(widget)) {
             return;
         }
         if open {
@@ -624,6 +622,7 @@ impl Host {
                     needs: p.manifest.needs.clone(),
                     helper: p.manifest.helper_path().map(|h| json!({ "file": Path::new(h).file_name().map(|f| f.to_string_lossy().to_string()).unwrap_or_default(), "running": p.helper.is_some() })),
                     net: p.manifest.permissions.net.iter().filter(|h| !h.contains("{{")).cloned().collect(),
+                    accent: p.manifest.accent.clone().filter(|a| a.len() == 7 && a.starts_with('#') && a[1..].chars().all(|c| c.is_ascii_hexdigit())),
                     settings: p
                         .manifest
                         .settings
@@ -881,41 +880,11 @@ impl Host {
             timed.push(("usage", tu.elapsed().as_secs_f64() * 1000.0));
             out.push(("usage", json!({ "usage": list }), false));
         }
-        if perms.steam && s.last_steam.map_or(true, |t| t.elapsed() >= STEAM_EVERY) {
-            s.last_steam = Some(Instant::now());
-            out.push(("steam", sensors::steamlib::state(), false));
-        }
         if perms.gear && s.last_gear.map_or(true, |t| t.elapsed() >= GEAR_EVERY) {
             s.last_gear = Some(Instant::now());
             let tg = Instant::now();
             out.push(("gear", sensors::gear::state(), false));
             timed.push(("gear", tg.elapsed().as_secs_f64() * 1000.0));
-        }
-        if perms.downloads && s.last_downloads.map_or(true, |t| t.elapsed() >= DOWNLOADS_EVERY) {
-            s.last_downloads = Some(Instant::now());
-            let td = Instant::now();
-            let seen = s.downloads.poll();
-            timed.push(("downloads", td.elapsed().as_secs_f64() * 1000.0));
-            *pc.downloads.lock().unwrap() = (Some(Instant::now()), seen["observed"].as_array().cloned().unwrap_or_default());
-            for e in seen["ended"].as_array().into_iter().flatten() {
-                if let Some(path) = e["path"].as_str() {
-                    s.revealable.insert(path.to_string());
-                }
-            }
-            if s.revealable.len() > 200 {
-                s.revealable.clear();
-            }
-            out.push(("downloads", seen, false));
-        }
-        if perms.browser {
-            if let Some(b) = s.browser.poll(sensors::browsersensor::state()) {
-                out.push(("browser", json!({ "browser": b }), false));
-            }
-        }
-        if perms.claude && s.last_claude.map_or(true, |t| t.elapsed() >= CLAUDE_EVERY) {
-            s.last_claude = Some(Instant::now());
-            let hooks = if perms.claude_answer { sensors::claudehook::status() } else { Value::Null };
-            out.push(("claude", json!({ "claude": sensors::claudesensor::sessions(), "claude_hooks": hooks }), false));
         }
         let files_due = !perms.files.is_empty() && s.last_files.map_or(true, |t| t.elapsed() >= Duration::from_secs(1));
         if files_due {
@@ -1013,7 +982,11 @@ impl Host {
         let perms = self.plugins[i].manifest.permissions.clone();
         if let Some(ws) = o.get("widgets").and_then(|w| w.as_object()) {
             for (wid, content) in ws {
-                if !self.plugins[i].manifest.widgets.iter().any(|w| &w.id == wid) || weight(content) > MAX_JSON {
+                if !self.plugins[i].manifest.widgets.iter().any(|w| w.names(wid)) || weight(content) > MAX_JSON {
+                    continue;
+                }
+                // (one more of a `many` widget than it may have at once: not shown)
+                if wid.contains(':') && !self.plugins[i].widgets.contains_key(wid) && self.plugins[i].widgets.keys().filter(|k| k.contains(':')).count() >= crate::manifest::MANY {
                     continue;
                 }
                 let content = if content.as_object().is_some_and(|m| m.is_empty()) { Value::Null } else { content.clone() };
@@ -1070,6 +1043,52 @@ impl Host {
             if ok && !self.dry {
                 if let Some(d) = crate::paths::plugins_dir() {
                     let _ = std::fs::remove_file(d.join(&id).join(f));
+                }
+            }
+        }
+        // (what it adds to the launcher's search: each named, and opened only by an address it may open)
+        if perms.apps {
+            if let Some(list) = o.get("apps").and_then(|a| a.as_array()) {
+                let may = |url: &str| {
+                    let low = url.to_lowercase();
+                    url.len() <= 1000 && !url.chars().any(|c| c.is_control() || c == ' ') && perms.open.iter().any(|p| !p.is_empty() && low.starts_with(&p.to_lowercase()))
+                };
+                let apps: Vec<Value> = list
+                    .iter()
+                    .take(2000)
+                    .filter_map(|a| {
+                        let name = a.get("name")?.as_str()?.trim();
+                        let open = a.get("open")?.as_str()?;
+                        if name.is_empty() || name.chars().count() > 200 || !may(open) {
+                            return None;
+                        }
+                        let image = a.get("image").and_then(|v| v.as_str()).filter(|v| v.len() <= 2000).unwrap_or("");
+                        let badge = a.get("badge").and_then(|v| v.as_str()).filter(|v| v.len() <= 2000).unwrap_or("");
+                        let tip: String = a.get("tip").and_then(|v| v.as_str()).unwrap_or("").chars().take(60).collect();
+                        Some(json!({ "name": name, "open": open, "image": image, "badge": badge, "tip": tip }))
+                    })
+                    .collect();
+                if self.plugins[i].apps != apps {
+                    self.plugins[i].apps = apps.clone();
+                    self.out.push(Update::Apps { plugin: id.clone(), apps });
+                }
+            }
+        }
+        // (how far things are, on the dock's apps: each by its program's file name)
+        if perms.dock {
+            if let Some(list) = o.get("progress").and_then(|a| a.as_array()) {
+                let items: Vec<(String, f32)> = list
+                    .iter()
+                    .take(64)
+                    .filter_map(|it| {
+                        let p = it.get("program")?.as_str()?.trim().to_lowercase();
+                        let part = it.get("part")?.as_f64()? as f32;
+                        (!p.is_empty() && p.len() <= 260 && !p.contains(['\\', '/'])).then(|| (p, (part.clamp(0.0, 1.0) * 1000.0).round() / 1000.0))
+                    })
+                    .collect();
+                if self.plugins[i].progress != items {
+                    self.plugins[i].progress = items.clone();
+                    self.out.push(Update::Progress { plugin: id.clone(), items });
                 }
             }
         }
@@ -1205,75 +1224,6 @@ impl Host {
             let low = url.to_lowercase();
             if url.len() <= 1000 && !url.chars().any(|c| c.is_control() || c == ' ') && perms.open.iter().any(|p| !p.is_empty() && (low.starts_with(&p.to_lowercase()) || open_under(p, url))) {
                 crate::win::open_url(url);
-            }
-        }
-        if perms.browser {
-            if let Some(b) = o.get("browser").and_then(|b| b.as_object()) {
-                let ext = sensors::browsersensor::state();
-                if let Some(w) = b.get("watch").and_then(|w| w.as_array()) {
-                    if let Some(slot) = self.plugins[i].slot.as_mut() {
-                        slot.browser.watch = w.iter().filter_map(|p| Some((p.get(0)?.as_str()?.to_string(), p.get(1)?.as_str()?.to_string()))).collect();
-                    }
-                }
-                if let Some(c) = b.get("config") {
-                    // (what the extensions are told to read; the link is served from now on)
-                    ext.serve();
-                    ext.set_config(sensors::browsersensor::config_json(c));
-                }
-                // (a button pressed or a tab sent on waits for the browser: on a thread, and the answer is the plugin's next event)
-                if let Some(results) = self.plugins[i].slot.as_ref().map(|s| s.results.clone()) {
-                    for op in ["press", "go", "scroll"] {
-                        let Some(r) = b.get(op).cloned() else { continue };
-                        let q = results.clone();
-                        std::thread::spawn(move || {
-                            let s = |k: &str| r[k].as_str().unwrap_or("").to_string();
-                            let ext = sensors::browsersensor::state();
-                            let ok = ext.covers(&s("browser"))
-                                && match op {
-                                    "press" => ext.press(&s("browser"), &s("label")),
-                                    "scroll" => ext.scroll(&s("browser"), &s("title"), &s("heading")),
-                                    _ => ext.navigate(&s("browser"), &s("title"), &s("url")),
-                                };
-                            let mut q = q.lock().unwrap();
-                            q.push(json!({ "op": op, "id": s("id"), "ok": ok }));
-                            if q.len() > 16 {
-                                q.remove(0);
-                            }
-                        });
-                    }
-                }
-            }
-        }
-        if perms.downloads {
-            if let Some(path) = o.get("reveal").and_then(|r| r.as_str()) {
-                if self.plugins[i].slot.as_ref().is_some_and(|s| s.revealable.contains(path)) {
-                    crate::win::reveal_file(path);
-                }
-            }
-            // (a finished download opened, in the program that opens it: only one it was told of)
-            if let Some(path) = o.get("open_file").and_then(|r| r.as_str()) {
-                if self.plugins[i].slot.as_ref().is_some_and(|s| s.revealable.contains(path)) {
-                    crate::win::open_url(path);
-                }
-            }
-        }
-        if perms.claude_answer {
-            if let Some(a) = o.get("answer").and_then(|a| a.as_object()) {
-                let s = |k: &str, n: usize| a.get(k).and_then(|v| v.as_str()).unwrap_or("").chars().take(n).collect::<String>();
-                let (aid, behavior, text) = (s("id", 40), s("behavior", 10), s("text", 2000));
-                // (a question's answers: each question, the choice made)
-                let answers: serde_json::Map<String, Value> = a.get("answers").and_then(|v| v.as_object()).map(|m| m.iter().take(8).filter_map(|(k, v)| v.as_str().map(|v| (k.chars().take(500).collect(), Value::String(v.chars().take(1000).collect())))).collect()).unwrap_or_default();
-                if !aid.is_empty() {
-                    sensors::claudehook::answer_with(&aid, &behavior, &text, (!answers.is_empty()).then_some(Value::Object(answers)));
-                }
-            }
-            if let Some(h) = o.get("claude_hooks").and_then(|h| h.as_object()) {
-                let action = h.get("action").and_then(|v| v.as_str()).unwrap_or("");
-                // (only when the person pressed the button for it)
-                if by_user && matches!(action, "install" | "remove") {
-                    let flag = |k: &str| h.get(k).and_then(|v| v.as_bool()).unwrap_or(false);
-                    sensors::claudehook::set_up(action, flag("permission"), flag("stop"), h.get("wait_s").and_then(|v| v.as_u64()).unwrap_or(20));
-                }
             }
         }
         let results = self.plugins[i].slot.as_ref().map(|s| s.results.clone());

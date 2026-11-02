@@ -16,6 +16,10 @@ const EXTRA: &[(&str, &str)] = &[
     // (a cog: teeth round a ring, so it never reads as the sun)
     ("gear", "M12.68 6.55 14.27 6.73 14.27 9.27 12.68 9.45 12.33 10.29 13.33 11.54 11.54 13.33 10.29 12.33 9.45 12.68 9.27 14.27 6.73 14.27 6.55 12.68 5.71 12.33 4.46 13.33 2.67 11.54 3.67 10.29 3.32 9.45 1.73 9.27 1.73 6.73 3.32 6.55 3.67 5.71 2.67 4.46 4.46 2.67 5.71 3.67 6.55 3.32 6.73 1.73 9.27 1.73 9.45 3.32 10.29 3.67 11.54 2.67 13.33 4.46 12.33 5.71zM8 5.9a2.1 2.1 0 1 0 0 4.2 2.1 2.1 0 0 0 0-4.2z"),
     ("bolt", "M9 2.5 4.5 9h3.5l-1 4.5L11.5 7H8z"),
+    // (a note, its corner folded: Sticky Notes)
+    ("note", "M3.5 2.5h9v7l-4 4h-5zM8.5 13.5v-4h4"),
+    // (a plaster, lying across: a fix)
+    ("plaster", "M6.37 13.17 13.17 6.37A2.5 2.5 0 0 0 9.63 2.83L2.83 9.63A2.5 2.5 0 0 0 6.37 13.17zM7.2 7.2h.01M8.8 8.8h.01"),
     ("chev-down", "M4.5 6.5 8 10l3.5-3.5"),
     ("volume", "M2.5 6.2h2.3L8 3.6v8.8L4.8 9.8H2.5zM10.6 6a2.6 2.6 0 0 1 0 4M12.2 4.4a5 5 0 0 1 0 7.2"),
     ("volume-x", "M2.5 6.2h2.3L8 3.6v8.8L4.8 9.8H2.5zM10.5 6.5l3 3M13.5 6.5l-3 3"),
@@ -25,6 +29,11 @@ const EXTRA: &[(&str, &str)] = &[
     ("power", "M8 2.5V8M4.8 4.6a4.6 4.6 0 1 0 6.4 0"),
     ("search", "M7 3a4 4 0 1 1 0 8 4 4 0 0 1 0-8zM10 10l3.5 3.5"),
 ];
+
+/// The name of a known icon, as the icons have it (a plugin's badge naming one).
+pub fn known_static(name: &str) -> Option<&'static str> {
+    EXTRA.iter().chain(LINE.iter()).chain(FILLED.iter()).find(|(n, _)| *n == name).map(|(n, _)| *n)
+}
 
 fn line(name: &str) -> Option<&'static str> {
     EXTRA.iter().chain(LINE.iter()).find(|(n, _)| *n == name).map(|(_, d)| *d)

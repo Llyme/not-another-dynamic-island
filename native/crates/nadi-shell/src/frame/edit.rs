@@ -1,14 +1,26 @@
 //! Edit Mode: holding a widget (or Edit in its menu) puts the whole frame into it. Every widget comes out, the idle ones too (faded),
-//! the screen dims a little, and a tray in its middle holds what is not on screen: the hidden widgets, and the widgets of plugins
-//! that are off. A widget is placed by dragging it from the tray to an edge, and hidden by dragging it into the tray. The dock's apps
+//! the screen dims a little, and a shelf in its middle holds what is not on screen: the hidden widgets, then the widgets of plugins
+//! that are off (faded, a power mark on each), each a tile of its own peek, small, its name under it; with the dock out, a tile to
+//! pin an app. Over it, Find: typed into at once (Esc empties it, then ends Edit Mode); the tiles narrow to what it names, and, with
+//! the dock out, the apps it names come after them (pressed: pinned). A widget carried back toward it: the shelf rings in the theme
+//! colour and opens a slot. A widget is placed by dragging it from the tray to an edge, and hidden by dragging it into the tray. The dock's apps
 //! are moved, pinned and unpinned by dragging them. A click on an empty spot, Esc, or a minute untouched ends it. While it lasts,
 //! panels stay shut and banners wait.
 
 use super::*;
+use crate::paint::Color;
 
-const TRAY_W: f32 = 300.0;
+/// the shelf: four tiles a row, each so big, so far apart, in from its edges so far; the Find field over them; at most so many rows
+const TILE: f32 = 72.0;
+const TILE_GAP: f32 = 8.0;
+const COLS: usize = 4;
 const TRAY_P: f32 = 14.0;
+const TRAY_W: f32 = TRAY_P * 2.0 + TILE * COLS as f32 + TILE_GAP * (COLS as f32 - 1.0);
+const FIND_H: f32 = 30.0;
+const ROWS: usize = 4;
 const CHIP_H: f32 = 28.0;
+/// the Find field's box to type in (its key among the boxes)
+pub(super) const FIND_KEY: &str = "\u{0}edit-find";
 
 /// A widget the tray holds.
 #[derive(Clone, Debug)]
@@ -35,8 +47,12 @@ pub(super) struct Carry {
 
 pub(super) struct Edit {
     pub si: usize,
-    /// the field to find an app to pin to the dock (while the dock is on), in the tray
+    /// the Find field, in the shelf; what is typed in it
     pub field: Option<Rect>,
+    pub find: String,
+    /// apps found (with the dock out), each a tile (pressed: pinned to the dock); the tile to pin one from the launcher
+    pub apps: Vec<(Rect, crate::apps::App)>,
+    pub add: Option<Rect>,
     pub touched: Instant,
     pub dim: Option<Piece>,
     pub tray: Option<Piece>,
@@ -46,6 +62,8 @@ pub(super) struct Edit {
     pub carry: Option<Carry>,
     /// something held over the tray (it lights up: let go there, and it is hidden)
     pub over_tray: bool,
+    /// the edge something carried is nearest (its rail lit)
+    pub rail: Option<Edge>,
 }
 
 impl Frame {
@@ -71,18 +89,13 @@ impl Frame {
         // the dimmed screen, under the widgets
         let m = self.screens[si].ov.monitor.rect;
         let dim = self.screens[si].ov.piece_below(&self.g, (m.right - m.left) as u32, (m.bottom - m.top) as u32).ok();
-        if let Some(d) = &dim {
-            let surface = d.surface.clone();
-            let _ = self.g.draw_surface(&surface, |dc| unsafe {
-                if let Ok(b) = crate::paint::brush(dc, crate::paint::Color(0.02, 0.02, 0.04, 0.35)) {
-                    dc.FillRectangle(&windows::Win32::Graphics::Direct2D::Common::D2D_RECT_F { left: 0.0, top: 0.0, right: (m.right - m.left) as f32, bottom: (m.bottom - m.top) as f32 }, &b);
-                }
-            });
-        }
         let s = self.screens[si].s;
         let tray = self.screens[si].ov.piece(&self.g, (TRAY_W * s) as u32 + 4, (480.0 * s) as u32).ok();
-        self.edit = Some(Edit { si, field: None, touched: Instant::now(), dim, tray, at: Bx::default(), chips: Vec::new(), carry: None, over_tray: false });
+        self.edit = Some(Edit { si, field: None, find: String::new(), apps: Vec::new(), add: None, touched: Instant::now(), dim, tray, at: Bx::default(), chips: Vec::new(), carry: None, over_tray: false, rail: None });
+        self.render_edit_dim();
         self.render_edit_tray();
+        // (Find typed into at once)
+        self.open_find();
         // (the Tray widget shows every icon while editing)
         self.sync_tray_widget();
         self.relayout_with(Some(&HashSet::new()));
@@ -91,6 +104,9 @@ impl Frame {
 
     pub(super) fn leave_edit(&mut self) {
         let Some(e) = self.edit.take() else { return };
+        if let Some(ib) = self.input.as_mut().filter(|i| i.key == FIND_KEY) {
+            ib.close();
+        }
         if let Some(sc) = self.screens.get(e.si) {
             for p in [e.dim, e.tray, e.carry.map(|c| c.piece)].into_iter().flatten() {
                 let _ = sc.ov.remove(&p);
@@ -141,56 +157,204 @@ impl Frame {
     }
 
     /// Draw the tray: a chip for each widget not on screen (as many to a row as fit). Empty, it is a small place to drop one.
+    /// The dimmed screen, and a thin rail along each edge (where widgets can go); the one something carried is nearest, lit.
+    pub(super) fn render_edit_dim(&mut self) {
+        let Some(e) = &self.edit else { return };
+        let Some(d) = &e.dim else { return };
+        let (si, lit) = (e.si, e.rail);
+        let s = self.screens[si].s;
+        let p = self.painter(s);
+        let m = self.screens[si].ov.monitor.rect;
+        let (w, h) = ((m.right - m.left) as f32 / s, (m.bottom - m.top) as f32 / s);
+        let a = self.screens[si].area;
+        let surface = d.surface.clone();
+        let _ = self.g.draw_surface(&surface, |dc| {
+            unsafe {
+                dc.Clear(Some(&windows::Win32::Graphics::Direct2D::Common::D2D1_COLOR_F { r: 0.0, g: 0.0, b: 0.0, a: 0.0 }));
+            }
+            p.round(Rect::new(0.0, 0.0, w, h), 0.0, Color(0.02, 0.02, 0.04, 0.35));
+            let t = 3.0;
+            let inset = 6.0;
+            for e in [Edge::Top, Edge::Bottom, Edge::Left, Edge::Right] {
+                let r = match e {
+                    Edge::Top => Rect::new(a.x + 16.0, a.y + inset, a.w - 32.0, t),
+                    Edge::Bottom => Rect::new(a.x + 16.0, a.y + a.h - inset - t, a.w - 32.0, t),
+                    Edge::Left => Rect::new(a.x + inset, a.y + 16.0, t, a.h - 32.0),
+                    Edge::Right => Rect::new(a.x + a.w - inset - t, a.y + 16.0, t, a.h - 32.0),
+                };
+                if lit == Some(e) {
+                    p.round(Rect::new(r.x - 3.0, r.y - 3.0, r.w + 6.0, r.h + 6.0), 4.5, draw::accent().alpha(0.25));
+                    p.round(r, 1.5, draw::accent());
+                } else {
+                    p.round(r, 1.5, Color(1.0, 1.0, 1.0, 0.09));
+                }
+            }
+        });
+        self.commit();
+    }
+
+    /// Something carried at (x, y): the rail of the edge it is nearest lights (none, over the shelf).
+    fn light_rail(&mut self, si: usize, x: f32, y: f32) {
+        let a = self.screens[si].area;
+        let over = self.in_edit_tray(si, x, y);
+        let d = [(Edge::Top, y - a.y), (Edge::Bottom, a.y + a.h - y), (Edge::Left, x - a.x), (Edge::Right, a.x + a.w - x)];
+        let near = d.iter().copied().fold((Edge::Bottom, f32::MAX), |b, c| if c.1 < b.1 { c } else { b }).0;
+        let want = (!over).then_some(near);
+        if self.edit.as_ref().is_some_and(|e| e.rail != want) {
+            self.edit.as_mut().unwrap().rail = want;
+            self.render_edit_dim();
+        }
+    }
+
+    /// The box to type in over Find (live: the shelf narrows as it is typed).
+    pub(super) fn open_find(&mut self) {
+        let Some(e) = &self.edit else { return };
+        let (si, at, f, find) = (e.si, e.at, e.field, e.find.clone());
+        let Some(f) = f else { return };
+        let sc = &self.screens[si];
+        let (s, m) = (sc.s, sc.ov.monitor.rect);
+        let r = RECT { left: m.left + ((at.x + f.x) * s).round() as i32, top: m.top + ((at.y + f.y) * s).round() as i32, right: m.left + ((at.x + f.x + f.w) * s).round() as i32, bottom: m.top + ((at.y + f.y + f.h) * s).round() as i32 };
+        if self.input.is_none() {
+            self.input = crate::inputbox::InputBox::new(&self.g).ok();
+        }
+        let g = &self.g;
+        if let Some(ib) = &mut self.input {
+            ib.open(g, r, s, FIND_KEY.into(), String::new(), "find".into(), true, "Find".into(), find);
+            ib.set_look(&Value::Null);
+            ib.render(g, &self.pc);
+        }
+        self.commit();
+    }
+
+    /// What was typed in Find: the shelf narrows to it.
+    pub(super) fn set_find(&mut self, text: String) {
+        if let Some(e) = &mut self.edit {
+            e.find = text;
+            e.touched = Instant::now();
+        }
+        self.render_edit_tray();
+    }
+
     pub(super) fn render_edit_tray(&mut self) {
         let Some(e) = &self.edit else { return };
         let si = e.si;
         let s = self.screens[si].s;
         let p = self.painter(s);
-        let chips = self.edit_chips();
-        // where each chip goes
-        let mut boxes = Vec::new();
-        // (with the dock: a field first, to find an app to pin)
+        let find = e.find.trim().to_lowercase();
+        let names = |c: &Chip| -> bool {
+            find.is_empty() || c.label.to_lowercase().contains(&find) || c.plugin_off.as_deref().unwrap_or(c.key.split('/').next().unwrap_or("")).to_lowercase().contains(&find)
+        };
+        let chips: Vec<Chip> = self.edit_chips().into_iter().filter(|c| names(c)).collect();
+        // (with the dock out: the apps Find names, after the widgets; and a tile to pin one from the launcher)
         let dock_on = self.dock_placed();
-        let field = dock_on.then(|| Rect::new(TRAY_P, TRAY_P, TRAY_W - 2.0 * TRAY_P, 34.0));
-        let (mut x, mut y) = (TRAY_P, if dock_on { TRAY_P + 34.0 + 10.0 } else { TRAY_P });
-        for c in &chips {
-            let w = p.measure(&c.label, 11.5, Weight::Semibold, 200.0) + 24.0;
-            if x + w > TRAY_W - TRAY_P && x > TRAY_P {
-                x = TRAY_P;
-                y += CHIP_H + 8.0;
-            }
-            boxes.push(Rect::new(x, y, w, CHIP_H));
-            x += w + 8.0;
-        }
-        let (w, h) = if chips.is_empty() && field.is_none() { (120.0, 56.0) } else if chips.is_empty() { (TRAY_W, TRAY_P + 34.0 + TRAY_P) } else { (TRAY_W, y + CHIP_H + TRAY_P) };
+        let apps: Vec<crate::apps::App> = if dock_on && find.len() >= 2 { crate::apps::cached().into_iter().filter(|a| a.name.to_lowercase().contains(&find)).take(8).collect() } else { Vec::new() };
+        let add_tile = dock_on && find.is_empty();
+        let field = Rect::new(TRAY_P, TRAY_P, TRAY_W - 2.0 * TRAY_P, FIND_H);
+        let top = TRAY_P + FIND_H + 12.0;
+        let n = chips.len() + apps.len() + usize::from(add_tile) + usize::from(e.over_tray);
+        let slot = |i: usize| Rect::new(TRAY_P + (i % COLS) as f32 * (TILE + TILE_GAP), top + (i / COLS) as f32 * (TILE + TILE_GAP), TILE, TILE);
+        let rows = n.div_ceil(COLS).clamp(1, ROWS);
+        let (w, h) = (TRAY_W, top + rows as f32 * (TILE + TILE_GAP) - TILE_GAP + TRAY_P);
         let a = self.screens[si].area;
         let at = Bx { x: a.x + a.w / 2.0 - w / 2.0, y: a.y + a.h / 2.0 - h / 2.0, w, h };
         let over = e.over_tray;
-        let Ok(shape) = shape::floating(&self.g.d2d_factory, w * s, h * s, 20.0 * s) else { return };
+        let Ok(shape) = shape::floating(&self.g.d2d_factory, w * s, h * s, 22.0 * s) else { return };
         let Some(piece) = &e.tray else { return };
         let surface = piece.surface.clone();
+        let fits = |i: usize| i < ROWS * COLS;
+        // (each tile's look: its widget's peek, its icon alone, small)
+        let looks: Vec<Value> = chips.iter().map(|c| self.widgets.get(&c.key).map(|w| peek::icon_only(&w.content["peek"])).unwrap_or(Value::Null)).collect();
+        let mut chip_boxes = Vec::new();
+        let mut app_boxes = Vec::new();
+        let mut add_box = None;
         let _ = self.g.draw_surface(&surface, |dc| {
             let _ = fill_shape(dc, &shape, FACE);
+            // (a widget carried here: the shelf rings in the theme colour)
             if over {
-                let _ = fill_shape(dc, &shape, draw::FAINT);
+                p.outline(Rect::new(1.0, 1.0, w - 2.0, h - 2.0), 21.0, 1.5, draw::accent());
             }
-            if let Some(f) = field {
-                p.round(f, 12.0, draw::FAINT);
-                p.icon("search", f.x + 12.0, f.y + 10.0, 14.0, draw::DIM);
-                p.text("Apps", f.x + 34.0, f.y + f.h / 2.0, 12.0, Weight::Regular, f.w - 40.0, draw::DIM);
+            p.round(field, FIND_H / 2.0, Color(0.08, 0.08, 0.1, 1.0));
+            p.icon("search", field.x + 12.0, field.y + FIND_H / 2.0 - 6.5, 13.0, draw::DIM);
+            p.text(if e.find.is_empty() { "Find" } else { &e.find }, field.x + 32.0, field.y + FIND_H / 2.0, 12.0, Weight::Regular, field.w - 44.0, if e.find.is_empty() { draw::DIM } else { draw::TEXT });
+            let mut i = 0;
+            let tile = |r: Rect, faded: bool| {
+                p.round(r, 14.0, if faded { Color(0.07, 0.07, 0.085, 1.0) } else { Color(0.08, 0.082, 0.098, 1.0) });
+            };
+            for (c, look) in chips.iter().zip(&looks) {
+                if !fits(i) {
+                    break;
+                }
+                let r = slot(i);
+                let off = c.plugin_off.is_some();
+                tile(r, off);
+                // (its peek, small, in a little black piece of its own)
+                let mini = Rect::new(r.x + r.w / 2.0 - 15.0, r.y + 12.0, 30.0, 26.0);
+                p.round(mini, 9.0, FACE);
+                p.outline(mini, 9.0, 1.0, Color(1.0, 1.0, 1.0, 0.08));
+                let a = if off { 0.5 } else { 1.0 };
+                draw::faded(dc, a, || {
+                    if look.is_object() {
+                        let _ = peek::draw(&p, look, Rect::new(mini.x + 3.0, mini.y + 3.0, mini.w - 6.0, mini.h - 6.0), true, false);
+                    } else {
+                        p.icon(if off { "plug" } else { "grid" }, mini.x + 8.0, mini.y + 6.0, 14.0, draw::DIM);
+                    }
+                    let lw = p.measure(&c.label, 10.0, Weight::Regular, r.w - 8.0);
+                    p.text(&c.label, r.x + r.w / 2.0 - lw / 2.0, r.y + 54.0, 10.0, Weight::Regular, r.w - 8.0, draw::DIM);
+                });
+                // (its plugin off: a power mark in its corner)
+                if off {
+                    p.round(Rect::new(r.right() - 20.0, r.y + 6.0, 14.0, 14.0), 7.0, Color(0.15, 0.15, 0.18, 1.0));
+                    p.icon("power", r.right() - 18.0, r.y + 8.0, 10.0, draw::DIM);
+                }
+                chip_boxes.push(r);
+                i += 1;
             }
-            for (c, r) in chips.iter().zip(&boxes) {
-                p.round(*r, CHIP_H / 2.0, if c.plugin_off.is_some() { draw::FAINT } else { draw::SOFT });
-                p.text(&c.label, r.x + 12.0, r.y + CHIP_H / 2.0, 11.5, Weight::Semibold, r.w - 20.0, if c.plugin_off.is_some() { draw::DIM } else { draw::TEXT });
+            for app in &apps {
+                if !fits(i) {
+                    break;
+                }
+                let r = slot(i);
+                tile(r, false);
+                let img = Rect::new(r.x + r.w / 2.0 - 13.0, r.y + 12.0, 26.0, 26.0);
+                if !p.picture(&crate::launcher::app_image(&app.id), img, 6.0) {
+                    p.round(img, 6.0, draw::SOFT);
+                }
+                let lw = p.measure(&app.name, 10.0, Weight::Regular, r.w - 8.0);
+                p.text(&app.name, r.x + r.w / 2.0 - lw / 2.0, r.y + 54.0, 10.0, Weight::Regular, r.w - 8.0, draw::DIM);
+                app_boxes.push(r);
+                i += 1;
+            }
+            if add_tile && fits(i) {
+                let r = slot(i);
+                p.dashed(r, 14.0, 1.2, Color(1.0, 1.0, 1.0, 0.14));
+                p.icon("plus", r.x + r.w / 2.0 - 8.0, r.y + 18.0, 16.0, draw::DIM);
+                let lw = p.measure("App", 10.0, Weight::Regular, r.w);
+                p.text("App", r.x + r.w / 2.0 - lw / 2.0, r.y + 54.0, 10.0, Weight::Regular, r.w, draw::DIM);
+                add_box = Some(r);
+                i += 1;
+            }
+            // (where a widget carried here lands)
+            if over && fits(i) {
+                let r = slot(i);
+                p.round(r, 14.0, draw::accent().alpha(0.08));
+                p.dashed(r, 14.0, 1.5, draw::accent());
+            }
+            // (nothing found: a magnifier, crossed out)
+            if i == 0 && !e.find.is_empty() {
+                let cy = top + TILE / 2.0;
+                p.icon("search", w / 2.0 - 10.0, cy - 10.0, 20.0, draw::DIM);
+                p.line(&[(w / 2.0 - 13.0, cy + 13.0), (w / 2.0 + 13.0, cy - 13.0)], 1.6, draw::DIM);
             }
         });
         let e = self.edit.as_mut().unwrap();
-        e.field = field;
+        e.field = Some(field);
         if let Some(piece) = &mut e.tray {
             let _ = piece.place((at.x * s).round() as i32, (at.y * s).round() as i32);
         }
         e.at = at;
-        e.chips = boxes.into_iter().zip(chips).collect();
+        e.chips = chip_boxes.into_iter().zip(chips).collect();
+        e.apps = app_boxes.into_iter().zip(apps).collect();
+        e.add = add_box;
         self.hit_regions();
         self.commit();
     }
@@ -216,9 +380,26 @@ impl Frame {
         e.touched = Instant::now();
         if e.si == si && e.at.contains(x, y) {
             let (lx, ly) = (x - e.at.x, y - e.at.y);
-            // (the field: the launcher, to pick an app to pin)
-            if e.field.is_some_and(|f| lx >= f.x && lx < f.x + f.w && ly >= f.y && ly < f.y + f.h) {
+            let inside = |r: &Rect| lx >= r.x && lx < r.x + r.w && ly >= r.y && ly < r.y + r.h;
+            // (Find: typed into)
+            if e.field.is_some_and(|f| inside(&f)) {
+                self.open_find();
+                return true;
+            }
+            // (the tile to pin an app: the launcher, to pick one)
+            if e.add.is_some_and(|r| inside(&r)) {
                 self.open_launcher(true);
+                return true;
+            }
+            // (an app found: pinned to the dock, last)
+            if let Some((_, a)) = e.apps.iter().find(|(r, _)| inside(r)).cloned() {
+                self.change_config(|c| {
+                    if !c.pinned.iter().any(|p| p.id.eq_ignore_ascii_case(&a.id)) {
+                        c.pinned.push(config::Pin { name: a.name.clone(), id: a.id.clone(), icon: String::new() });
+                    }
+                });
+                self.sync_builtins(true);
+                self.render_edit_tray();
                 return true;
             }
             if let Some((_, c)) = e.chips.iter().find(|(r, _)| lx >= r.x && lx < r.x + r.w && ly >= r.y && ly < r.y + r.h).cloned() {
@@ -330,10 +511,14 @@ impl Frame {
         let Some(e) = &mut self.edit else { return false };
         e.touched = Instant::now();
         if e.carry.is_some() {
+            if !matches!(e.carry.as_ref().map(|c| &c.what), Some(Carried::App { .. } | Carried::TrayIcon { .. })) {
+                self.light_rail(si, x, y);
+            }
             self.render_carry(si, x, y);
             return true;
         }
         if self.drag.is_some() {
+            self.light_rail(si, x, y);
             let over = self.in_edit_tray(si, x, y);
             if self.edit.as_ref().is_some_and(|e| e.over_tray != over) {
                 self.edit.as_mut().unwrap().over_tray = over;
@@ -345,6 +530,11 @@ impl Frame {
 
     /// The button let go while editing. True: handled here.
     pub(super) fn edit_click(&mut self, si: usize, x: f32, y: f32) -> bool {
+        // (let go: no rail lit)
+        if self.edit.as_ref().is_some_and(|e| e.rail.is_some()) {
+            self.edit.as_mut().unwrap().rail = None;
+            self.render_edit_dim();
+        }
         let Some(e) = &self.edit else { return false };
         // what was carried: put down
         if e.carry.is_some() {

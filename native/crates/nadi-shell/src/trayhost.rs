@@ -466,8 +466,8 @@ pub fn click(owner: isize, uid: u32, how: Click, x: i32, y: i32) {
                 if it.version >= 4 {
                     say(WM_CONTEXTMENU_);
                 } else {
-                    // (an icon of the older kind may still be an app that only opens its menu for the newer word, as Qt's do
-                    // (qBittorrent): it is said that way too, with where; an older app does not know it, and lets it pass)
+                    // (an icon of the older kind may still be an app that only opens its menu for the newer word, as some
+                    // toolkits' do: it is said that way too, with where; an older app does not know it, and lets it pass)
                     let wp = WPARAM(((y as u32 & 0xffff) << 16 | (x as u32 & 0xffff)) as usize);
                     let lp = LPARAM(((it.uid & 0xffff) << 16 | WM_CONTEXTMENU_) as isize);
                     let _ = PostMessageW(h, it.callback, wp, lp);

@@ -1,6 +1,6 @@
 [package]
 name = "nadi-core"
-version = "1.2.0"
+version = "1.4.0"
 edition = "2021"
 
 [dependencies]
@@ -12,11 +12,8 @@ base64 = "0.22"
 sha2 = "0.10"
 getrandom = "0.2"
 flate2 = "1"
-tungstenite = { version = "0.24", default-features = false, features = ["handshake"] }
 png = "0.17"
-winreg = "0.52"
 ureq = { version = "2", features = ["json"] }
-rusqlite = { version = "0.32", features = ["bundled"] }
 chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
 windows = { version = "0.58", features = [
     "Foundation",

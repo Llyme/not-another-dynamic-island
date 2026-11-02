@@ -47,6 +47,9 @@ float smin(float a, float b, float k) {
 float4 main(float4 pos : SV_Position) : SV_Target {
     float2 p = pos.xy / info.z + info.xy;
     float k = max(info.w, 0.5);
+    // (widgets run into one another as round as the roundness setting says: square ones meet square, with no point at the seam;
+    // their necks into the edge stay as they are)
+    float kw = max(k * counts.w, 0.05);
     float da = 1e5;
     float de = 1e5;
     float db = 1e5;
@@ -60,7 +63,7 @@ float4 main(float4 pos : SV_Position) : SV_Target {
         float4 g = shapes[i * 2];
         float4 e = shapes[i * 2 + 1];
         float bd = box(p - g.xy, g.zw, e.x);
-        da = smin(da, bd, k);
+        da = smin(da, bd, kw);
         if (e.y > 0.5) lit = min(lit, bd); else unlit = min(unlit, bd);
     }
     [loop] for (int m = 0; m < ne; m++) {
@@ -73,10 +76,10 @@ float4 main(float4 pos : SV_Position) : SV_Target {
         float4 g = shapes[n * 2];
         float4 e = shapes[n * 2 + 1];
         float bd = box(p - g.xy, g.zw, e.x);
-        db = smin(db, bd, k);
+        db = smin(db, bd, kw);
         if (e.y > 0.5) lit = min(lit, bd); else unlit = min(unlit, bd);
     }
-    float d = min(smin(da, de, k), smin(da, db, k));
+    float d = min(smin(da, de, k), smin(da, db, kw));
     float a = saturate(0.5 - d * info.z);
     // (a line along the liquid's own edge, round the part of it that is the glowing one's: its sides, its necks into the edge and
     // into the ones beside it; mostly outside, so the widget's own face over it does not hide it)
@@ -164,6 +167,7 @@ impl LiquidGpu {
             }
             let (tex, rtv, _, _) = self.target.as_ref()?;
             let mut c = Consts { info: [origin.0, origin.1, s, k], counts: [0.0; 4], glow: [glow[0] * glow[3], glow[1] * glow[3], glow[2] * glow[3], glow[3]], shapes: [[0.0; 4]; MAX * 2] };
+            c.counts[3] = crate::paint::roundness();
             let mut n = 0;
             for (field, list) in [a, e, b].into_iter().enumerate() {
                 let mut count = 0;

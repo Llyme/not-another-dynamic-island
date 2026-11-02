@@ -46,18 +46,12 @@ pub struct Permissions {
     pub storage: bool,
     /// how much CPU and memory the programs it watches use
     pub usage: bool,
-    /// what the browsers, Steam and torrent clients download
-    pub downloads: bool,
-    /// the Claude Code sessions on this PC
-    pub claude: bool,
-    /// the Steam games installed, the one running, and their pictures
-    pub steam: bool,
+    /// things of its own in the launcher's search (each opened by an address it may open)
+    pub apps: bool,
+    /// how far something is, on an app's icon in the dock (by its program)
+    pub dock: bool,
     /// the controllers on, and the batteries of the Bluetooth devices
     pub gear: bool,
-    /// ... and answering what they ask
-    pub claude_answer: bool,
-    /// the pages open in the browsers (with the NADI extension)
-    pub browser: bool,
     /// commands it may run (each line as given, nothing else)
     pub run: Vec<String>,
     /// links it may open (they must start with one of these)
@@ -117,6 +111,20 @@ pub struct WidgetSpec {
     pub large: bool,
     /// its icon alone, always (it has nothing more to say at rest): the person cannot change it
     pub icon_only: bool,
+    /// the plugin may show many of it, each "<id>:<name>" (a note pinned to the screen each), up to `MANY` at once
+    pub many: bool,
+    /// how deep it stands out of its edge at rest, its own (a number, or `{ small, large }`), not the even depth the settings say
+    pub depth: serde_json::Value,
+}
+
+/// how many of a `many` widget a plugin may show at once
+pub const MANY: usize = 24;
+
+impl WidgetSpec {
+    /// Is `id` this widget, or (a `many` one) one of its own ("<id>:<name>")?
+    pub fn names(&self, id: &str) -> bool {
+        id == self.id || (self.many && id.strip_prefix(self.id.as_str()).and_then(|r| r.strip_prefix(':')).is_some_and(|n| !n.is_empty() && n.len() <= 64))
+    }
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
@@ -157,6 +165,8 @@ pub struct Manifest {
     pub default_on: bool,
     /// it says things in banners
     pub banners: bool,
+    /// its own colour ("#rrggbb"): its glows and banners in it, not the theme's (a plugin for an app whose colour says it)
+    pub accent: Option<String>,
     /// the plugins it takes the place of
     pub replaces: Vec<String>,
     /// the services it gives other plugins (name: version, "1.0")
@@ -279,7 +289,7 @@ pub fn permission_words(p: &Permissions) -> Vec<(String, String, String)> {
     for h in &p.net {
         out.push(("network".into(), h.clone(), "Reach this address on the internet.".into()));
     }
-    let flags: [(bool, &str, &str); 26] = [
+    let flags: [(bool, &str, &str); 23] = [
         (p.audio, "audio", "Hear what is playing, as a level and bands. Never the sound itself."),
         (p.viz, "sound bars", "Show what is playing as bars that move with the sound."),
         (p.battery, "battery", "See how full the battery is, the charger, the time left and the wear."),
@@ -297,12 +307,9 @@ pub fn permission_words(p: &Permissions) -> Vec<(String, String, String)> {
         (p.programs, "program details", "See a program's path and icon, and bring its window to the front."),
         (p.storage, "storage", "Keep a little of its own between runs."),
         (p.usage, "performance", "See how much CPU and memory the programs it watches use."),
-        (p.downloads, "downloads", "See what your browsers, Steam and torrent clients download."),
-        (p.claude, "claude sessions", "See your Claude Code sessions on this PC."),
-        (p.steam, "steam library", "See the Steam games installed and the one you play."),
+        (p.apps, "launcher", "Add things of its own to the launcher's search."),
+        (p.dock, "dock", "Show how far something is on an app's icon in the dock."),
         (p.gear, "controllers", "See your controllers and Bluetooth devices, and how full their batteries are."),
-        (p.claude_answer, "answer claude sessions", "Answer what a Claude Code session asks, from its card."),
-        (p.browser, "browser extension", "See the pages open in your browsers, with the NADI extension."),
         (!p.run.is_empty(), "commands", "Run the commands its manifest lists."),
         (p.microphone, "microphone", "Hear the microphone."),
         (p.system_audio, "system audio", "Hear what the computer plays."),
@@ -376,6 +383,6 @@ mod tests {
         let w = permission_words(&p);
         assert_eq!(w[0].0, "network");
         assert_eq!(w[1].0, "battery");
-        assert!(!unknown_permissions(&json!({ "permissions": { "battery": true, "claude_answer": true } })));
+        assert!(!unknown_permissions(&json!({ "permissions": { "battery": true, "apps": true } })));
     }
 }

@@ -18,6 +18,8 @@ use windows::Win32::UI::WindowsAndMessaging::{FindWindowW, GetWindowThreadProces
 
 /// NADI itself, carried inside
 static NADI: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/nadi.exe"));
+/// its Windows-key helper (set up from NADI's settings, as administrator, when wanted)
+static KEYS: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/nadi-keys.exe"));
 const VERSION: &str = env!("CARGO_PKG_VERSION");
 const RUN: PCWSTR = w!("Software\\Microsoft\\Windows\\CurrentVersion\\Run");
 const UNINSTALL: PCWSTR = w!("Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\NADI");
@@ -102,6 +104,8 @@ fn install(start: bool) -> Result<(), String> {
         std::fs::rename(&exe, &aside).map_err(|e| format!("NADI is in use and could not be replaced: {e}"))?;
         std::fs::write(&exe, NADI).map_err(|e| format!("Could not write {}: {e}", exe.display()))?;
     }
+    // (its Windows-key helper, beside it: what NADI's settings set up from)
+    let _ = std::fs::write(dir.join("nadi-keys.exe"), KEYS);
     // the uninstaller: this installer, kept beside it
     let me = std::env::current_exe().map_err(|e| e.to_string())?;
     let uninstaller = dir.join("uninstall.exe");
@@ -144,6 +148,7 @@ fn ask_uninstall() -> Result<(), String> {
 
 fn uninstall(dir: &Path) -> Result<(), String> {
     close_running();
+    remove_keys_helper();
     let _ = std::fs::remove_file(start_menu_link());
     unsafe {
         let _ = RegDeleteKeyValueW(HKEY_CURRENT_USER, RUN, w!("NADI"));
@@ -166,6 +171,37 @@ fn uninstall(dir: &Path) -> Result<(), String> {
         let _ = std::process::Command::new("cmd").args(["/c", "timeout", "/t", "2", ">nul", "&", "del", "/f", "/q"]).arg(&me).creation_flags(0x0800_0000).spawn();
     }
     Ok(())
+}
+
+/// The Windows-key helper, if it was set up (in Program Files, with a task): taken away by itself, as administrator (Windows asks).
+fn remove_keys_helper() {
+    use windows::Win32::UI::Shell::{ShellExecuteExW, SEE_MASK_NOCLOSEPROCESS, SHELLEXECUTEINFOW};
+    let exe = PathBuf::from(std::env::var_os("ProgramFiles").unwrap_or_else(|| "C:\\Program Files".into())).join("NADI").join("nadi-keys.exe");
+    if !exe.exists() {
+        return;
+    }
+    // (run from a copy: the one in Program Files is taken away)
+    let copy = std::env::temp_dir().join(format!("nadi-keys-remove-{}.exe", std::process::id()));
+    if std::fs::copy(&exe, &copy).is_err() {
+        return;
+    }
+    unsafe {
+        let file = HSTRING::from(copy.as_os_str());
+        let mut info = SHELLEXECUTEINFOW {
+            cbSize: std::mem::size_of::<SHELLEXECUTEINFOW>() as u32,
+            fMask: SEE_MASK_NOCLOSEPROCESS,
+            lpVerb: w!("runas"),
+            lpFile: PCWSTR(file.as_ptr()),
+            lpParameters: w!("--remove"),
+            nShow: 0,
+            ..Default::default()
+        };
+        if ShellExecuteExW(&mut info).is_ok() && !info.hProcess.is_invalid() {
+            WaitForSingleObject(info.hProcess, 30000);
+            let _ = CloseHandle(info.hProcess);
+        }
+    }
+    let _ = std::fs::remove_file(&copy);
 }
 
 /// A NADI that runs is asked to close (so it gives back what it holds: the taskbar, the tray), and waited for; ended if it does not.

@@ -20,15 +20,15 @@ pub const SOFT: Color = Color(1.0, 1.0, 1.0, 0.14);
 pub const GREEN: Color = Color(0.353, 0.784, 0.549, 1.0);
 pub const AMBER: Color = Color(0.910, 0.690, 0.290, 1.0);
 pub const RED: Color = Color(0.910, 0.478, 0.478, 1.0);
-/// Claude's own colour (a session at work)
-pub const CLAUDE: Color = Color(0.851, 0.467, 0.341, 1.0);
+/// a warm orange (something at work)
+pub const ORANGE: Color = Color(0.851, 0.467, 0.341, 1.0);
 
 /// the theme colour (the person's, in the settings): what is lit, chosen, now, and a glow that names no colour of its own
 static ACCENT: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0x5ac88c);
 static ACCENT2: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0xe8b04a);
 
 thread_local! {
-    /// the theme colour, for now, in its place (a banner of Claude's: Claude's own colour, not the theme's)
+    /// the theme colour, for now, in its place (a banner of a plugin with a colour of its own: that, not the theme's)
     static ACCENT_NOW: std::cell::Cell<Option<Color>> = const { std::cell::Cell::new(None) };
 }
 
@@ -108,7 +108,7 @@ pub fn color_of(v: &serde_json::Value, or: Color) -> Color {
 /// what a state looks like (a session's, a banner's tone)
 pub fn tone_color(tone: &str) -> Color {
     match tone {
-        "working" => CLAUDE,
+        "working" => ORANGE,
         "waiting" | "permission" | "reply" | "low" | "saver" | "hot" => AMBER,
         "finished" | "charging" | "full" | "ok" => GREEN,
         "stopped" | "critical" | "no" => RED,
@@ -714,7 +714,8 @@ impl<'a> Painter<'a> {
         let p = self.px(r);
         unsafe {
             let Ok(br) = brush(self.dc, c) else { return };
-            let rr = D2D1_ROUNDED_RECT { rect: p.d2d(), radiusX: radius * self.s, radiusY: radius * self.s };
+            let radius = crate::paint::rounded(radius * self.s, p.w, p.h);
+            let rr = D2D1_ROUNDED_RECT { rect: p.d2d(), radiusX: radius, radiusY: radius };
             self.dc.DrawRoundedRectangle(&rr, &br, width * self.s, None);
         }
     }
@@ -771,7 +772,8 @@ impl<'a> Painter<'a> {
             };
             let Ok(style) = self.g.d2d_factory.CreateStrokeStyle(&props, Some(&[3.0, 3.0])) else { return };
             let Ok(br) = brush(self.dc, c) else { return };
-            let rr = D2D1_ROUNDED_RECT { rect: p.d2d(), radiusX: radius * self.s, radiusY: radius * self.s };
+            let radius = crate::paint::rounded(radius * self.s, p.w, p.h);
+            let rr = D2D1_ROUNDED_RECT { rect: p.d2d(), radiusX: radius, radiusY: radius };
             self.dc.DrawRoundedRectangle(&rr, &br, width * self.s, &style);
         }
     }

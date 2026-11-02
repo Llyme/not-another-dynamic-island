@@ -41,6 +41,9 @@ pub struct WidgetConfig {
     pub pop_bg: Option<String>,
     /// where its window stood last, on each monitor (by name): its top left, logical
     pub pop_at: Option<BTreeMap<String, (f32, f32)>>,
+    /// its window is out, on this monitor (by name): kept only for a widget that asks for it (`window.remember`), so it comes out
+    /// there again when NADI starts
+    pub popped_on: Option<String>,
     /// its panel made bigger or smaller by hand: its width and height on its edge, and as a window (none: the size it asks for)
     pub panel_size: Option<(f32, f32)>,
     pub pop_size: Option<(f32, f32)>,
@@ -124,6 +127,23 @@ pub struct Config {
     pub launcher_reveal: bool,
     /// the newest version the person was told of (told once each)
     pub update_told: String,
+    /// the version that ran last (a newer one now: what is new in it is shown, once)
+    pub last_run: String,
+    /// the Windows key heard over apps run as administrator too (by NADI's helper, `adminkeys`)
+    pub admin_keys: bool,
+    /// how round everything is: every corner's radius times this (0 square, 1 as made, 1.5 rounder)
+    pub roundness: f32,
+    /// "Any Edge": an edge brings every widget out only when a widget on it is not idle (one showing something)
+    pub edge_busy_only: bool,
+    /// how deep every widget stands out of its edge at rest (its width on a side edge): small ones, and large ones
+    pub depth_small: f32,
+    pub depth_large: f32,
+    /// maximized windows kept out of the edges with widgets (Windows' app bars): how much (the widgets' depth, or `room_own`), and a
+    /// gap more
+    pub make_room: bool,
+    pub room_mode: String,
+    pub room_own: f32,
+    pub room_gap: f32,
     /// "Pin to NADI Dock" and "Pin to NADI Apps" in File Explorer's right-click menu
     pub explorer_menu: bool,
     /// how near an edge the mouse brings hidden widgets out (logical px, 2 to 64), and how long it rests there first (ms)
@@ -144,7 +164,7 @@ impl Config {
 
 impl Default for Config {
     fn default() -> Self {
-        Config { widgets: BTreeMap::new(), monitors: "follow".into(), taskbar: "keep".into(), scale: 1.0, auto_hide: "fullscreen".into(), pinned: Vec::new(), launcher_pins: None, launcher_foot: None, win_key: "auto".into(), reveal: "all".into(), hold_key: "none".into(), open_on: "hover".into(), tray_pinned: Vec::new(), quiet_full: true, quiet_banners: Vec::new(), liquid: 50.0, theme: "#5ac88c".into(), theme2: "#e8b04a".into(), desk_map: BTreeMap::new(), desk_keys: true, launcher_reveal: false, update_told: String::new(), explorer_menu: false, edge_reach: 6.0, edge_wait: 0 }
+        Config { widgets: BTreeMap::new(), monitors: "follow".into(), taskbar: "keep".into(), scale: 1.0, auto_hide: "fullscreen".into(), pinned: Vec::new(), launcher_pins: None, launcher_foot: None, win_key: "auto".into(), reveal: "all".into(), hold_key: "none".into(), open_on: "hover".into(), tray_pinned: Vec::new(), quiet_full: true, quiet_banners: Vec::new(), liquid: 50.0, theme: "#5ac88c".into(), theme2: "#e8b04a".into(), desk_map: BTreeMap::new(), desk_keys: true, launcher_reveal: false, update_told: String::new(), last_run: String::new(), admin_keys: false, roundness: 1.0, edge_busy_only: false, depth_small: 32.0, depth_large: 44.0, make_room: false, room_mode: "widgets".into(), room_own: 40.0, room_gap: 4.0, explorer_menu: false, edge_reach: 6.0, edge_wait: 0 }
     }
 }
 

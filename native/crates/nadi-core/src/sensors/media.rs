@@ -51,7 +51,7 @@ fn all_sessions() -> Vec<Session> {
         Err(_) => return Vec::new(),
     };
     // All sessions with usable metadata, not just the focused one --
-    // two players at once (e.g. Spotify + a browser) means two cards.
+    // two players at once (a music player and a browser) means two cards.
     let mut out = Vec::new();
     if let Ok(list) = manager.GetSessions() {
         for i in 0..list.Size().unwrap_or(0) {

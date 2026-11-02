@@ -445,9 +445,6 @@ pub fn get(dc: &ID2D1DeviceContext, pc: &Arc<Pc>, name: &str) -> Option<ID2D1Bit
             // (not here yet: asked again next time)
             _ => return None,
         }
-    } else if let Some(id) = name.strip_prefix("page:").and_then(|i| i.parse::<u64>().ok()) {
-        // (a page's main picture, as the browser extension sent it)
-        nadi_core::sensors::browsersensor::state().image(id)
     } else {
         None
     };
@@ -458,13 +455,7 @@ pub fn get(dc: &ID2D1DeviceContext, pc: &Arc<Pc>, name: &str) -> Option<ID2D1Bit
         CACHE.with(|c| c.borrow_mut().insert(name.to_string(), bmp.clone()));
         return bmp;
     }
-    let bmp = if let Some(id) = name.strip_prefix("steamart:").and_then(|i| i.parse::<u32>().ok()) {
-        // (a Steam game's cover, where Steam keeps it)
-        nadi_core::sensors::steamlib::art(id).and_then(|p| std::fs::read(p).ok()).and_then(|b| decode(dc, &b).ok())
-    } else if let Some(id) = name.strip_prefix("steamicon:").and_then(|i| i.parse::<u32>().ok()) {
-        // (a Steam game's small icon)
-        nadi_core::sensors::steamlib::icon(id).and_then(|p| std::fs::read(p).ok()).and_then(|b| decode(dc, &b).ok())
-    } else if let Some(path) = name.strip_prefix("shell:") {
+    let bmp = if let Some(path) = name.strip_prefix("shell:") {
         shell_icon(dc, path)
     } else if let Some(path) = name.strip_prefix("wall:") {
         wall_thumb(dc, path)
@@ -499,9 +490,9 @@ pub fn get(dc: &ID2D1DeviceContext, pc: &Arc<Pc>, name: &str) -> Option<ID2D1Bit
         })
     } else if let Some(h) = name.strip_prefix("hwnd:").and_then(|h| h.parse::<isize>().ok()) {
         window_icon(dc, h)
-    } else if let Some(id) = name.strip_prefix("app:").and_then(|i| i.strip_prefix(crate::apps::STEAM)).and_then(|i| i.parse::<u32>().ok()) {
-        // (a Steam game among the apps: its own icon)
-        nadi_core::sensors::steamlib::icon(id).and_then(|p| std::fs::read(p).ok()).and_then(|b| decode(dc, &b).ok())
+    } else if let Some(img) = name.strip_prefix("app:").and_then(crate::apps::plugin_image) {
+        // (an app a plugin added: the picture it gave)
+        return get(dc, pc, &img);
     } else if let Some(id) = name.strip_prefix("app:") {
         app_icon(dc, id)
     } else {

@@ -165,6 +165,116 @@ pub fn latest_nadi() -> Result<Option<(String, String)>, String> {
     }))
 }
 
+/// Where a release's installer is (tag "v1.2.0": `NADI-Setup-1.2.0.exe`).
+pub fn installer_url(tag: &str) -> String {
+    let v = tag.trim_start_matches('v');
+    format!("https://github.com/{NADI_REPO}/releases/download/{tag}/NADI-Setup-{v}.exe")
+}
+
+/// One of NADI's releases: its version, its tag, the day it came out ("2026-11-02"), its notes.
+#[derive(Clone, Debug)]
+pub struct NadiRelease {
+    pub version: String,
+    pub tag: String,
+    pub date: String,
+    pub body: String,
+}
+
+// (read from GitHub's feeds, not its API: the API allows a PC 60 questions an hour, shared with everything else asking from it)
+
+fn xml_unescape(s: &str) -> String {
+    s.replace("&lt;", "<").replace("&gt;", ">").replace("&quot;", "\"").replace("&#39;", "'").replace("&apos;", "'").replace("&amp;", "&")
+}
+
+/// The words between `<name ...>` and `</name>` in a bit of a feed.
+fn xml_text<'a>(chunk: &'a str, name: &str) -> Option<&'a str> {
+    let open = chunk.find(&format!("<{name}"))?;
+    let start = open + chunk[open..].find('>')? + 1;
+    let end = start + chunk[start..].find(&format!("</{name}>"))?;
+    Some(&chunk[start..end])
+}
+
+/// HTML as plain lines: paragraphs and breaks a line each, list items "- " lines, the rest of its tags taken out.
+fn html_lines(html: &str) -> String {
+    let mut t = html.replace("<li>", "\n- ").replace("</p>", "\n").replace("<br>", "\n").replace("<br/>", "\n").replace("<br />", "\n");
+    let mut out = String::new();
+    let mut inside = false;
+    for c in t.drain(..) {
+        match c {
+            '<' => inside = true,
+            '>' if inside => inside = false,
+            _ if !inside => out.push(c),
+            _ => {}
+        }
+    }
+    let out = xml_unescape(&out);
+    // (a long first line GitHub cut in two, "…" at the cut: put back together)
+    let c: Vec<char> = out.chars().collect();
+    let mut joined = String::new();
+    let mut i = 0;
+    while i < c.len() {
+        if c[i] == '\u{2026}' {
+            let mut k = i + 1;
+            while k < c.len() && c[k].is_whitespace() {
+                k += 1;
+            }
+            if k < c.len() && c[k] == '\u{2026}' {
+                i = k + 1;
+                continue;
+            }
+        }
+        joined.push(c[i]);
+        i += 1;
+    }
+    joined
+}
+
+fn entries(feed: &str) -> impl Iterator<Item = &str> {
+    feed.split("<entry>").skip(1)
+}
+
+/// NADI's releases on GitHub, newest first (its releases feed: the last ten or so).
+pub fn nadi_releases() -> Result<Vec<NadiRelease>, String> {
+    let bytes = http_get(&format!("https://github.com/{NADI_REPO}/releases.atom"), "application/atom+xml", 4 * 1024 * 1024).map_err(fetch_text)?;
+    let feed = String::from_utf8_lossy(&bytes);
+    Ok(entries(&feed)
+        .filter_map(|e| {
+            let tag = xml_text(e, "id")?.rsplit('/').next()?.trim().to_string();
+            ref_ok(&tag).then_some(())?;
+            Some(NadiRelease {
+                version: tag.trim_start_matches('v').to_string(),
+                date: xml_text(e, "updated").unwrap_or("").trim().chars().take(10).collect(),
+                body: html_lines(&xml_unescape(xml_text(e, "content").unwrap_or(""))),
+                tag,
+            })
+        })
+        .collect())
+}
+
+/// A tag's latest commits (its commits feed: the last twenty): each one's id and whole message, newest first.
+fn commits_of(tag: &str) -> Result<Vec<(String, String)>, String> {
+    let bytes = http_get(&format!("https://github.com/{NADI_REPO}/commits/{tag}.atom"), "application/atom+xml", 4 * 1024 * 1024).map_err(fetch_text)?;
+    let feed = String::from_utf8_lossy(&bytes);
+    Ok(entries(&feed)
+        .filter_map(|e| {
+            let sha = xml_text(e, "id")?.rsplit('/').next()?.trim().to_string();
+            let msg = html_lines(&xml_unescape(xml_text(e, "content").unwrap_or("")));
+            Some((sha, msg.trim().to_string()))
+        })
+        .collect())
+}
+
+/// The messages of the commits between two of NADI's tags, oldest first.
+pub fn nadi_commits(base: &str, head: &str) -> Result<Vec<String>, String> {
+    if !ref_ok(base) || !ref_ok(head) {
+        return Err("Not a tag.".into());
+    }
+    let stop = commits_of(base)?.into_iter().next().map(|(sha, _)| sha);
+    let mut out: Vec<String> = commits_of(head)?.into_iter().take_while(|(sha, _)| Some(sha) != stop.as_ref()).map(|(_, m)| m).collect();
+    out.reverse();
+    Ok(out)
+}
+
 /// A release's installer, fetched whole.
 pub fn fetch_installer(url: &str) -> Result<Vec<u8>, String> {
     http_get(url, "application/octet-stream", 200 * 1024 * 1024).map_err(fetch_text)

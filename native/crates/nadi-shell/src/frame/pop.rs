@@ -4,6 +4,12 @@
 //! picks its background: solid, see-through, or none. See-through and none let clicks through to what is under it until the mouse
 //! rests on it, or the hold key is held. Its close (top right, while the mouse is on it), or its widget pressed while it is in front, sends it back. Where
 //! it stood is kept for each widget and monitor.
+//!
+//! A plugin may ask for its widget's window itself, in its content: `window = { open, remember, ground }`. `open` set (or cleared)
+//! brings its window out (or sends it back), as if pressed; a widget with a panel and no peek is a window only, with no place on an
+//! edge. `remember`: out when NADI ends, it comes out again when it starts, on the same monitor, where it stood (others do not:
+//! a window is put back when NADI ends). `ground`: its solid background in that colour ("#rrggbb"), not black. When it is sent back
+//! (its close), its plugin hears its widget shut, as any panel's.
 
 use super::*;
 use windows::core::Interface;
@@ -108,7 +114,7 @@ pub(super) fn paint_marks(p: &Painter, w: f32, now: usize) {
     for (i, t) in toggles.iter().enumerate() {
         let cx = t.x + t.w / 2.0;
         if i == now {
-            p.circle(cx, c, 9.0, draw::accent().alpha(0.85));
+            p.round(Rect::new(cx - 9.0, c - 9.0, 18.0, 18.0), 9.0, draw::accent().alpha(0.85));
         }
         let r = Rect::new(cx - 5.0, c - 5.0, 10.0, 10.0);
         match i {
@@ -233,12 +239,44 @@ impl Frame {
         self.pop_layer(&pk);
         self.pop_top = Some(pk.clone());
         self.set_open(si, &pk, true);
+        self.keep_popped(&k, Some(mon));
         // (its widget on the edge: drawn again, with its dot, its panel shut)
         self.relayout_with(Some(&HashSet::from([k.clone(), pk.clone()])));
     }
 
+    /// What a widget asks of its window (see the top): as it asked before (`old`; none: it is new) and now.
+    pub(super) fn window_asked(&mut self, k: &str, old: Option<Value>, new: &Value) {
+        if !new.is_object() || self.screens.is_empty() {
+            return;
+        }
+        let first = old.is_none();
+        let was = old.as_ref().is_some_and(|o| o["open"] == true);
+        let now = new["open"] == true;
+        let remember = new["remember"] == true;
+        let kept_on = self.config.widgets.get(k).and_then(|c| c.popped_on.clone()).filter(|_| remember);
+        let out = (now && (first || !was)) || (first && kept_on.is_some());
+        if out && !self.popped(k) {
+            // (on the monitor it was out on, when it is kept; else the one the frame is on)
+            let si = kept_on.and_then(|n| self.screens.iter().position(|s| s.ov.monitor.name() == n)).unwrap_or(self.active.min(self.screens.len() - 1));
+            self.pop_out(si, k, None);
+        } else if was && !now && self.popped(k) {
+            self.pop_in(&pop_key(k));
+        }
+    }
+
+    /// A widget that asks to be remembered: its window out (on this monitor), or not.
+    fn keep_popped(&mut self, k: &str, on: Option<String>) {
+        let remember = self.widgets.get(k).is_some_and(|w| w.content["window"]["remember"] == true);
+        let has = self.config.widgets.get(k).and_then(|c| c.popped_on.clone());
+        if (remember || has.is_some()) && has != on {
+            let k = k.to_string();
+            self.change_config(|c| c.widgets.entry(k).or_default().popped_on = on);
+        }
+    }
+
     /// A window goes back into its widget: its words fade, and it falls back to its stump as a drop.
     pub(super) fn pop_in(&mut self, pk: &str) {
+        self.keep_popped(unpop(pk), None);
         let Some(si) = self.pops.get(pk).filter(|m| !matches!(m.anim, Some(PopAnim::Home { .. }))).map(|m| m.si) else { return };
         let Some(from) = self.screens[si].items.get(pk).map(|it| it.rest.now()) else { return };
         let k = unpop(pk);

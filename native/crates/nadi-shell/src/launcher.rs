@@ -506,7 +506,12 @@ pub struct Launcher {
     hold: Option<(usize, Instant)>,
     /// the one picked, since when (its tip comes after a moment), and how far its tip is out (springing)
     sel_at: Instant,
+    /// the window in front when it opened
+    before: isize,
     tip: f32,
+    /// the row pictogram under the mouse (the row, which from the right), and since when
+    side_hover: Option<(usize, usize)>,
+    side_at: Instant,
     tip_v: f32,
     /// a pin pressed (where), and, once moved, carried (where it is now)
     press: Option<(usize, f32, f32)>,
@@ -592,7 +597,10 @@ fn ago(t: SystemTime) -> String {
 }
 
 /// An app's picture's name (a program's icon, or a store app's).
-fn app_image(id: &str) -> String {
+pub fn app_image(id: &str) -> String {
+    if let Some(img) = apps::plugin_image(id) {
+        return img;
+    }
     if id.contains(":\\") && !id.contains('!') {
         format!("exe:{}", id.to_lowercase())
     } else {
@@ -650,6 +658,9 @@ impl Launcher {
                 hold: None,
                 sel_at: Instant::now(),
                 tip: 0.0,
+                before: 0,
+                side_hover: None,
+                side_at: Instant::now(),
                 tip_v: 0.0,
                 press: None,
                 drag: None,
@@ -811,7 +822,21 @@ impl Launcher {
 
     /// Whether the one picked shows its tip now (one of the foot's, picked a moment ago).
     fn tip_wanted(&self) -> bool {
-        self.shown && self.ctx.is_none() && self.drag.is_none() && !self.unlit && matches!(self.items.get(self.sel), Some((Hit::Sys(_) | Hit::FootPin(_), _, _))) && self.sel_at.elapsed().as_secs_f32() > 0.4 && self.opened.elapsed().as_secs_f32() > 0.5
+        let base = self.shown && self.ctx.is_none() && self.drag.is_none() && !self.unlit && self.opened.elapsed().as_secs_f32() > 0.5;
+        let foot = matches!(self.items.get(self.sel), Some((Hit::Sys(_) | Hit::FootPin(_), _, _))) && self.sel_at.elapsed().as_secs_f32() > 0.4;
+        let side = self.side_tip().is_some() && self.side_at.elapsed().as_secs_f32() > 0.4;
+        base && (foot || side)
+    }
+
+    /// The tip of the row pictogram under the mouse (on the one picked), and where that pictogram is.
+    fn side_tip(&self) -> Option<(String, Rect)> {
+        let (i, k) = self.side_hover?;
+        if i != self.sel {
+            return None;
+        }
+        let (hit, look, r) = self.items.get(i)?;
+        let (_, tip) = sides(hit, *look, &self.pins).into_iter().nth(k)?;
+        (!tip.is_empty()).then(|| (tip, side_box(r, k)))
     }
 
     /// Pick another (its tip starts again).
@@ -833,7 +858,7 @@ impl Launcher {
     /// Something in it moves (it springs out or away, its things pop in, the box round the one picked slides).
     pub fn moving(&self) -> bool {
         let hi_moves = self.hv.iter().any(|v| v.abs() > 0.5) || self.hi.iter().zip(self.target()).any(|(a, b)| (a - b).abs() > 0.3);
-        let tip_moves = (self.tip - if self.tip_wanted() { 1.0 } else { 0.0 }).abs() > 0.002 || self.tip_v.abs() > 0.02 || (self.shown && matches!(self.items.get(self.sel), Some((Hit::Sys(_) | Hit::FootPin(_), _, _))) && self.sel_at.elapsed().as_secs_f32() < 0.6);
+        let tip_moves = (self.tip - if self.tip_wanted() { 1.0 } else { 0.0 }).abs() > 0.002 || self.tip_v.abs() > 0.02 || (self.shown && matches!(self.items.get(self.sel), Some((Hit::Sys(_) | Hit::FootPin(_), _, _))) && self.sel_at.elapsed().as_secs_f32() < 0.6) || (self.shown && self.side_hover.is_some() && self.side_at.elapsed().as_secs_f32() < 0.6);
         (self.t != self.to || self.vel != 0.0) || (self.shown && self.opened.elapsed().as_secs_f32() < 0.9) || (self.shown && hi_moves) || (self.shown && tip_moves) || self.hold.is_some() || self.drag.is_some() || self.anim_live || (self.shown && self.alive)
     }
 
@@ -843,6 +868,9 @@ impl Launcher {
         log("reveal");
         let (x, y, w, h) = self.at;
         unsafe {
+            // (what was in front: given the focus back when it is put away)
+            let was = GetForegroundWindow();
+            self.before = if was != self.hwnd { was.0 as isize } else { 0 };
             let _ = SetWindowPos(self.hwnd, HWND_TOPMOST, x, y, w, h, SWP_SHOWWINDOW);
             // (Windows lets only the app in front take the focus: joined to its input for a moment, NADI may)
             let fg = GetForegroundWindow();
@@ -895,6 +923,18 @@ impl Launcher {
         if self.shown {
             unsafe {
                 let _ = SetWindowPos(self.hwnd, HWND_TOPMOST, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
+            }
+        }
+    }
+
+    /// Put away with nothing opened (Esc, the Windows key again): the focus back to what was in front before (a game among them,
+    /// which else would be left without it).
+    pub fn dismiss(&mut self) {
+        let back = HWND(std::mem::take(&mut self.before) as *mut _);
+        self.hide();
+        unsafe {
+            if !back.is_invalid() && GetForegroundWindow() == self.hwnd && IsWindow(back).as_bool() {
+                let _ = SetForegroundWindow(back);
             }
         }
     }
@@ -1934,7 +1974,7 @@ impl Launcher {
                         } else if self.view != View::Home {
                             self.back();
                         } else {
-                            self.hide();
+                            self.dismiss();
                         }
                     }
                     VK_RETURN => {
@@ -2025,6 +2065,26 @@ impl Launcher {
             }
             WM_MOUSEMOVE | WM_LBUTTONDOWN | WM_LBUTTONUP => {
                 let (x, y) = ((lp.0 & 0xffff) as i16 as f32 / self.s - M, ((lp.0 >> 16) & 0xffff) as i16 as f32 / self.s - M);
+                // (a row's pictogram under the mouse: its tip after a moment)
+                if msg == WM_MOUSEMOVE {
+                    let over = self.items.iter().enumerate().find_map(|(i, (h, look, r))| {
+                        if y < r.y || y >= r.bottom() || x < r.x || x >= r.right() {
+                            return None;
+                        }
+                        let n = sides(h, *look, &self.pins).len();
+                        (0..n).find(|k| {
+                            let b = side_box(r, *k);
+                            x >= b.x - 2.0 && x < b.right() + 2.0 && y >= b.y - 4.0 && y < b.bottom() + 4.0
+                        })
+                        .map(|k| (i, k))
+                    });
+                    if over != self.side_hover {
+                        self.side_hover = over;
+                        self.side_at = Instant::now();
+                        self.tip = 0.0;
+                        self.tip_v = 0.0;
+                    }
+                }
                 // (told when the mouse leaves)
                 if msg == WM_MOUSEMOVE {
                     let mut tme = TRACKMOUSEEVENT { cbSize: std::mem::size_of::<TRACKMOUSEEVENT>() as u32, dwFlags: TME_LEAVE, hwndTrack: self.hwnd, dwHoverTime: 0 };
@@ -2141,7 +2201,7 @@ impl Launcher {
         let p = Painter { g, dc: &g.dc, s, pc, t: age, viz: [0.0; 3] };
         let places = self.drawn_places();
         let onto = self.drag.as_ref().and_then(|(c, x, y)| self.aim_at(c, *x, *y).onto);
-        let view = Paint { places: &places, onto, query: &self.query, hi: self.hi, items: &self.items, deco: &self.deco, pins: &self.pins, foot: &self.foot, held: self.hold.map(|(i, at)| (i, (at.elapsed().as_secs_f32() / HOLD).min(1.0))), tip: (self.sel, self.tip), drag: self.drag.clone(), unlit: self.unlit, ctx: self.ctx.as_ref(), clip: self.clip, naming: self.naming.is_some() };
+        let view = Paint { places: &places, onto, query: &self.query, hi: self.hi, items: &self.items, deco: &self.deco, pins: &self.pins, foot: &self.foot, held: self.hold.map(|(i, at)| (i, (at.elapsed().as_secs_f32() / HOLD).min(1.0))), tip: (self.sel, self.tip), side_tip: self.side_tip(), drag: self.drag.clone(), unlit: self.unlit, ctx: self.ctx.as_ref(), clip: self.clip, naming: self.naming.is_some() };
         let _ = g.draw_surface(&self.surface, |dc| {
             paint(&p, dc, &shp, s, t, h, age, &view);
         });
@@ -2171,6 +2231,8 @@ struct Paint<'a> {
     foot: &'a [AppPin],
     held: Option<(usize, f32)>,
     tip: (usize, f32),
+    /// a row pictogram's tip, and where that pictogram is
+    side_tip: Option<(String, Rect)>,
     drag: Option<(Carry, f32, f32)>,
     ctx: Option<&'a CtxMenu>,
     /// what scrolls: its top and bottom, and the kind of thing in it
@@ -2352,9 +2414,9 @@ fn paint_inside(p: &Painter, age: f32, h: f32, v: &Paint) {
     let (ti, tg) = v.tip;
     if tg > 0.01 {
         let words = match v.items.get(ti) {
-            Some((Hit::Sys(x), _, r)) => Some((x.tip(), *r)),
+            Some((Hit::Sys(x), Look::Small | Look::Foot, r)) => Some((x.tip(), *r)),
             Some((Hit::FootPin(k), _, r)) => v.foot.get(*k).map(|p| (p.name.clone(), *r)),
-            _ => None,
+            _ => v.side_tip.clone(),
         };
         if let Some((words, r)) = words {
             let tw = p.measure(&words, 12.0, Weight::Semibold, 240.0) + 26.0;
@@ -2388,6 +2450,40 @@ fn paint_inside(p: &Painter, age: f32, h: f32, v: &Paint) {
             p.text(label, mx + 36.0, ry + CTX_ROW / 2.0, 12.0, Weight::Regular, CTX_W - 46.0, draw::TEXT);
         }
     }
+}
+
+/// What stands on the right of a row, right to left: pinned, a pin; where it is from (a plugin's badge); an open window or a setting,
+/// a pictogram saying so. Each with its tip (none: no tip).
+enum Side {
+    Icon(&'static str, crate::paint::Color),
+    Picture(String),
+}
+
+fn sides(hit: &Hit, look: Look, pins: &[AppPin]) -> Vec<(Side, String)> {
+    if look != Look::Row {
+        return Vec::new();
+    }
+    let mut out = Vec::new();
+    match hit {
+        Hit::App(a) => {
+            if pins.iter().any(|p| p.kind == "app" && p.id.eq_ignore_ascii_case(&a.id)) {
+                out.push((Side::Icon("pin", draw::accent()), "Pinned".to_string()));
+            }
+            if let Some((badge, tip)) = apps::plugin_badge(&a.id, &a.name) {
+                let side = if badge.contains(':') { Side::Picture(badge) } else { Side::Icon(crate::icons::known_static(&badge).unwrap_or("dot"), draw::DIM) };
+                out.push((side, tip));
+            }
+        }
+        Hit::Window(..) => out.push((Side::Icon("restore", draw::DIM), "Open Window".to_string())),
+        Hit::Setting(..) => out.push((Side::Icon("gear", draw::DIM), "Settings".to_string())),
+        _ => {}
+    }
+    out
+}
+
+/// Where a row's right-hand pictogram `i` (from the right) is.
+fn side_box(r: &Rect, i: usize) -> Rect {
+    Rect::new(r.right() - 28.0 - i as f32 * 24.0, r.y + ROW / 2.0 - 10.0, 20.0, 20.0)
 }
 
 fn paint_item(p: &Painter, hit: &Hit, look: Look, r: &Rect, ring: Option<f32>, pins: &[AppPin], foot: &[AppPin]) {
@@ -2514,10 +2610,10 @@ fn paint_item(p: &Painter, hit: &Hit, look: Look, r: &Rect, ring: Option<f32>, p
         }
     }
     let (image, name, side) = match hit {
-        Hit::App(a) => (app_image(&a.id), a.name.clone(), if pins.iter().any(|p| p.kind == "app" && p.id.eq_ignore_ascii_case(&a.id)) { "\u{1}pin".to_string() } else { String::new() }),
-        Hit::Window(hw, title, exe) => (if exe.is_empty() { format!("hwnd:{hw}") } else { format!("exe:{exe}") }, title.clone(), "Open Window".to_string()),
+        Hit::App(a) => (app_image(&a.id), a.name.clone(), String::new()),
+        Hit::Window(hw, title, exe) => (if exe.is_empty() { format!("hwnd:{hw}") } else { format!("exe:{exe}") }, title.clone(), String::new()),
         Hit::File(path, name, when) => (format!("shell:{path}"), name.clone(), ago(*when)),
-        Hit::Setting(name, _) => (String::new(), name.to_string(), "Settings".to_string()),
+        Hit::Setting(name, _) => (String::new(), name.to_string(), String::new()),
         _ => return,
     };
     // (half a row: what was used lately, its name and how long ago, one under the other)
@@ -2540,12 +2636,22 @@ fn paint_item(p: &Painter, hit: &Hit, look: Look, r: &Rect, ring: Option<f32>, p
     } else if !p.picture(&image, pr, 7.0) {
         p.round(pr, 7.0, draw::SOFT);
     }
-    // (on its right: pinned, a pin; else what it is, or how long ago)
-    let sw = if side.is_empty() { 0.0 } else if side == "\u{1}pin" { 24.0 } else { p.measure(&side, 11.0, Weight::Regular, 120.0) + 12.0 };
+    // (on its right: its pictograms (pinned, where it is from, a window or a setting); else how long ago)
+    let marks = sides(hit, look, pins);
+    let sw = if !marks.is_empty() { marks.len() as f32 * 24.0 + 4.0 } else if side.is_empty() { 0.0 } else { p.measure(&side, 11.0, Weight::Regular, 120.0) + 12.0 };
     p.text(&name, r.x + 8.0 + z + 12.0, r.y + ROW / 2.0, 13.0, Weight::Semibold, r.w - z - 32.0 - sw, draw::TEXT);
-    if side == "\u{1}pin" {
-        p.icon("pin", r.right() - 24.0, r.y + ROW / 2.0 - 7.0, 14.0, draw::accent());
-    } else if !side.is_empty() {
+    for (i, (m, _)) in marks.iter().enumerate() {
+        let b = side_box(r, i);
+        match m {
+            Side::Icon(name, c) => p.icon(name, b.x + 3.0, b.y + 3.0, 14.0, *c),
+            Side::Picture(pic) => {
+                if !p.picture(pic, Rect::new(b.x + 2.0, b.y + 2.0, 16.0, 16.0), 4.0) {
+                    p.icon("dot", b.x + 3.0, b.y + 3.0, 14.0, draw::DIM);
+                }
+            }
+        }
+    }
+    if marks.is_empty() && !side.is_empty() {
         p.text_end(&side, r.right() - 10.0, r.y + ROW / 2.0, 11.0, Weight::Regular, 120.0, draw::DIM);
     }
 }
@@ -2581,7 +2687,7 @@ pub fn preview(g: &Gfx, pc: &Arc<Pc>, query: &str) -> windows::core::Result<(u32
     let (pw, ph) = (((W + 2.0 * M) * s) as u32, ((H_MAX + 2.0 * M) * s) as u32);
     let hi = l.target();
     let places = l.drawn_places();
-    let v = Paint { places: &places, onto: None, query: &l.query, hi, items: &l.items, deco: &l.deco, pins: &l.pins, foot: &l.foot, held: None, tip: (0, 0.0), drag: None, ctx: l.ctx.as_ref(), clip: l.clip, naming: false, unlit: false };
+    let v = Paint { places: &places, onto: None, query: &l.query, hi, items: &l.items, deco: &l.deco, pins: &l.pins, foot: &l.foot, held: None, tip: (0, 0.0), side_tip: None, drag: None, ctx: l.ctx.as_ref(), clip: l.clip, naming: false, unlit: false };
     let px = g.snapshot(pw, ph, [0.17, 0.2, 0.3, 1.0], |dc| {
         paint(&p, dc, &shp, s, 1.0, l.h, 2.0, &v);
     })?;

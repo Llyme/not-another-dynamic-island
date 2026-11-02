@@ -1,6 +1,6 @@
 //! "Go to the source": clicking a hub card brings the app behind it to the
 //! front (the player for a media card, the game, the editor/browser for a
-//! work card, Discord/Viber for a notification).
+//! work card, the chat app for a notification).
 
 use crate::win::exe_path_for_pid;
 use std::collections::HashMap;
@@ -89,8 +89,7 @@ fn raise(h: HWND) {
     }
 }
 
-/// what an SMTC source id ("Spotify.exe", "Chrome", "MSEdge",
-/// "Microsoft.ZuneMusic_8wekyb3d8bbwe!App") is likely to be called as an exe
+/// what an SMTC source id (an exe's name, a browser's, or a store app's "<package>!App") is likely to be called as an exe
 fn source_token(source: &str) -> String {
     let s = source.to_lowercase();
     let s = s.split('!').next().unwrap_or(&s);

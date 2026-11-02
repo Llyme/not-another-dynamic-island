@@ -295,6 +295,11 @@ pub fn fronts() -> Vec<(isize, Front)> {
 /// Does Windows keep the keyboard of the window in front from NADI? So it is when that window's program runs as administrator and NADI
 /// does not, or when it lets no one look at it (a game's anti-cheat): NADI then cannot tell whether a key is held in it.
 pub fn keys_hidden_in_front() -> bool {
+    keys_hidden(unsafe { GetForegroundWindow() })
+}
+
+/// Does Windows keep the keyboard of this window from NADI? (as `keys_hidden_in_front`)
+pub fn keys_hidden(fg: HWND) -> bool {
     use windows::Win32::Security::*;
     use windows::Win32::System::Threading::*;
     fn elevated(process: HANDLE) -> Option<bool> {
@@ -310,7 +315,6 @@ pub fn keys_hidden_in_front() -> bool {
         }
     }
     unsafe {
-        let fg = GetForegroundWindow();
         if fg.is_invalid() {
             return false;
         }

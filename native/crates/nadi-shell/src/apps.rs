@@ -26,16 +26,71 @@ fn take(p: PWSTR) -> String {
 static CACHE: std::sync::Mutex<Option<(std::time::Instant, Vec<App>)>> = std::sync::Mutex::new(None);
 static LOADING: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
-/// The apps, as last found (finding them takes most of a second: it is done on a thread of its own, at the start and now and then).
+/// What the plugins add to the apps (by plugin): each one's name, the address that opens it (its id among the apps), its picture.
+/// An app a plugin adds: its name, its address, its picture, and its badge (where it is from: a picture of the plugin's, or a
+/// pictogram) with the badge's tip.
+#[derive(Clone)]
+struct PluginApp {
+    name: String,
+    open: String,
+    image: String,
+    badge: String,
+    tip: String,
+}
+
+static FROM_PLUGINS: std::sync::Mutex<std::collections::BTreeMap<String, Vec<PluginApp>>> = std::sync::Mutex::new(std::collections::BTreeMap::new());
+
+/// What a plugin adds to the apps now (`{ name, open, image, badge, tip }` each).
+pub fn set_from_plugin(plugin: &str, apps: &[serde_json::Value]) {
+    let s = |a: &serde_json::Value, k: &str| a[k].as_str().unwrap_or("").to_string();
+    let list: Vec<PluginApp> = apps
+        .iter()
+        .filter_map(|a| Some(PluginApp { name: a["name"].as_str()?.to_string(), open: a["open"].as_str()?.to_string(), image: s(a, "image"), badge: s(a, "badge"), tip: s(a, "tip") }))
+        .collect();
+    let mut all = FROM_PLUGINS.lock().unwrap();
+    if list.is_empty() {
+        all.remove(plugin);
+    } else {
+        all.insert(plugin.to_string(), list);
+    }
+}
+
+/// The picture a plugin gave one of its apps (by its address).
+pub fn plugin_image(id: &str) -> Option<String> {
+    FROM_PLUGINS.lock().unwrap().values().flatten().find(|a| a.open == id && !a.image.is_empty()).map(|a| a.image.clone())
+}
+
+/// The badge a plugin gave an app (by its address, or by its name: the PC's own entry for one of a plugin's), and its tip.
+pub fn plugin_badge(id: &str, name: &str) -> Option<(String, String)> {
+    FROM_PLUGINS.lock().unwrap().values().flatten().find(|a| !a.badge.is_empty() && (a.open == id || same_name(&a.name) == same_name(name))).map(|a| (a.badge.clone(), a.tip.clone()))
+}
+
+/// The apps, as last found (finding them takes most of a second: it is done on a thread of its own, at the start and now and then),
+/// with what the plugins add (one the PC has already, by its name, not twice).
 pub fn cached() -> Vec<App> {
-    let (fresh, list) = match &*CACHE.lock().unwrap() {
+    let (fresh, mut list) = match &*CACHE.lock().unwrap() {
         Some((at, list)) => (at.elapsed().as_secs() < 120, list.clone()),
         None => (false, Vec::new()),
     };
     if !fresh {
         refresh_in_background();
     }
+    let have: std::collections::HashSet<String> = list.iter().map(|a| same_name(&a.name)).collect();
+    for a in FROM_PLUGINS.lock().unwrap().values().flatten() {
+        if !have.contains(&same_name(&a.name)) {
+            list.push(App { name: a.name.clone(), id: a.open.clone() });
+        }
+    }
+    // (stable: the PC's own entry before a plugin's, the one kept)
+    list.sort_by_key(|a| same_name(&a.name));
+    // (one app once: by its address, or by its name (a game's shortcut and its Start menu entry; marks and spaces aside))
+    list.dedup_by(|a, b| a.id == b.id || same_name(&a.name) == same_name(&b.name));
     list
+}
+
+/// A name as it is compared: its letters and digits alone, small ("A Game: Part 3™" and "a game part 3" are one).
+pub fn same_name(name: &str) -> String {
+    name.chars().filter(|c| c.is_alphanumeric()).flat_map(char::to_lowercase).collect()
 }
 
 pub fn refresh_in_background() {
@@ -72,21 +127,11 @@ pub fn all() -> Vec<App> {
             }
         }
     }
-    // (the Steam games installed: Steam puts them in the Start menu only when asked to, so many are not there)
-    let have: std::collections::HashSet<String> = out.iter().map(|a| a.name.to_lowercase()).collect();
-    for g in nadi_core::sensors::steamlib::state()["games"].as_array().cloned().unwrap_or_default() {
-        let (Some(id), Some(name)) = (g["id"].as_u64(), g["name"].as_str()) else { continue };
-        if !have.contains(&name.to_lowercase()) {
-            out.push(App { name: name.to_string(), id: format!("{STEAM}{id}") });
-        }
-    }
     out.sort_by_key(|a| a.name.to_lowercase());
     out.dedup_by(|a, b| a.id == b.id);
     out
 }
 
-/// how a Steam game is named among the apps (run through Steam)
-pub const STEAM: &str = "steam://rungameid/";
 
 /// The shell item of an app (for its picture).
 pub fn item(id: &str) -> Option<IShellItem> {
@@ -95,7 +140,8 @@ pub fn item(id: &str) -> Option<IShellItem> {
 
 /// Launch an app by its id; a path (a program, a shortcut) is opened as it is.
 pub fn launch(id: &str) {
-    if id.starts_with(STEAM) {
+    // (an address (a plugin's, as `steam://...`): opened as one)
+    if id.contains("://") {
         return launch_uri(id);
     }
     let target = if id.contains(":\\") && !id.contains('!') { id.to_string() } else { format!("shell:AppsFolder\\{id}") };
@@ -138,7 +184,7 @@ pub fn score(name: &str, q: &str) -> u32 {
     if n.contains(&q) {
         return 50;
     }
-    // (the letters in order: "vsc" finds "Visual Studio Code")
+    // (the letters in order: "ntpd" finds "Notepad")
     let mut it = n.chars();
     if q.chars().all(|c| it.any(|x| x == c)) {
         return 20;
@@ -152,9 +198,9 @@ mod tests {
 
     #[test]
     fn what_was_typed_finds_names() {
-        assert!(score("Visual Studio Code", "vis") > score("Visual Studio Code", "code"));
-        assert!(score("Visual Studio Code", "code") > score("Visual Studio Code", "dio"));
-        assert!(score("Visual Studio Code", "vsc") > 0);
+        assert!(score("Vista Studio Code", "vis") > score("Vista Studio Code", "code"));
+        assert!(score("Vista Studio Code", "code") > score("Vista Studio Code", "dio"));
+        assert!(score("Vista Studio Code", "vsc") > 0);
         assert_eq!(score("Paint", "xyz"), 0);
     }
 }

@@ -5,9 +5,7 @@
 use crate::apps;
 use crate::config::{Config, Pin};
 use crate::winlist::{self, AppWindow};
-use nadi_core::pc::Pc;
 use serde_json::{json, Value};
-use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 pub const PLUGIN: &str = "nadi";
@@ -114,15 +112,7 @@ pub fn tray_words(i: &crate::trayhost::Icon) -> (String, String) {
     (name, status)
 }
 
-/// A menu's item for what a window works on: its folder opened, or its document shown in its folder (none: it is not found).
-fn context_item(w: &winlist::AppWindow) -> Option<Value> {
-    match crate::context::of(w.hwnd, &w.exe, &w.title)? {
-        crate::context::Context::Folder(_) => Some(json!({ "icon": "folder", "label": "Open Folder", "action": format!("ctx:{}", w.hwnd) })),
-        crate::context::Context::File(_) => Some(json!({ "icon": "file", "label": "Show Document", "action": format!("ctx:{}", w.hwnd) })),
-    }
-}
-
-/// A window's title less its app's name ("main.rs - NADI - Visual Studio Code" is "main.rs - NADI"); the name alone: nothing.
+/// A window's title less its app's name ("notes.txt - Folder - Editor" is "notes.txt - Folder"); the name alone: nothing.
 pub fn short_title(title: &str, app: &str) -> String {
     let t = title.trim();
     let low = t.to_lowercase();
@@ -210,34 +200,27 @@ fn mem_text(b: u64) -> String {
     }
 }
 
-/// How far what each program downloads is (by its file name, lower case: "chrome.exe"), all its downloads together; from the
-/// downloads sensor's last look (one older than a few seconds is gone: nothing reads it any more).
-fn downloads_by_program(pc: &Arc<Pc>) -> std::collections::HashMap<String, f32> {
-    let (at, list) = pc.downloads.lock().unwrap().clone();
-    let mut sums: std::collections::HashMap<String, (f64, f64)> = std::collections::HashMap::new();
-    if at.is_some_and(|t| t.elapsed() < Duration::from_secs(10)) {
-        for d in &list {
-            let Some(total) = d["total"].as_f64().filter(|t| *t > 0.0) else { continue };
-            let got = d["received"].as_f64().unwrap_or(0.0);
-            let programs: &[&str] = match d["source"].as_str().unwrap_or("") {
-                "Chrome" => &["chrome.exe"],
-                "Edge" => &["msedge.exe"],
-                "Brave" => &["brave.exe"],
-                "Vivaldi" => &["vivaldi.exe"],
-                "Opera" => &["opera.exe"],
-                "Firefox" => &["firefox.exe"],
-                "Steam" => &["steam.exe", "steamwebhelper.exe"],
-                "qBittorrent" => &["qbittorrent.exe"],
-                _ => &[],
-            };
-            for p in programs {
-                let e = sums.entry(p.to_string()).or_default();
-                e.0 += got;
-                e.1 += total;
-            }
-        }
+/// How far something is on each program's icon (by its file name, lower case: "chrome.exe"), as the plugins tell it (a plugin may
+/// show its downloads there, for one): of several, the furthest along.
+static PROGRESS: std::sync::Mutex<std::collections::BTreeMap<String, Vec<(String, f32)>>> = std::sync::Mutex::new(std::collections::BTreeMap::new());
+
+/// What a plugin shows on the dock's apps now.
+pub fn set_progress(plugin: &str, items: Vec<(String, f32)>) {
+    let mut all = PROGRESS.lock().unwrap();
+    if items.is_empty() {
+        all.remove(plugin);
+    } else {
+        all.insert(plugin.to_string(), items);
     }
-    sums.into_iter().map(|(k, (g, t))| (k, (g / t).clamp(0.0, 1.0) as f32)).collect()
+}
+
+fn progress_by_program() -> std::collections::HashMap<String, f32> {
+    let mut out: std::collections::HashMap<String, f32> = std::collections::HashMap::new();
+    for (p, part) in PROGRESS.lock().unwrap().values().flatten() {
+        let e = out.entry(p.clone()).or_insert(0.0);
+        *e = e.max(*part);
+    }
+    out
 }
 
 /// One app on the dock: pinned, open, or both.
@@ -410,11 +393,11 @@ impl Builtins {
     /// The dock, as a widget. Each running app: what it uses (its share of the processor, of the memory), how far what it
     /// downloads is, and the sound it makes. Open, its icons become their windows: each window
     /// its live picture, an app pinned with none its picture; the launcher first.
-    pub fn dock(&self, cfg: &Config, pc: &Arc<Pc>) -> Value {
+    pub fn dock(&self, cfg: &Config) -> Value {
         let apps = self.dock_apps(cfg);
         let used = |k: &str| self.usage.get(k).copied().unwrap_or_default();
         let total = crate::procstats::total_memory().max(1) as f64;
-        let progress = downloads_by_program(pc);
+        let progress = progress_by_program();
         let items: Vec<Value> = apps
             .iter()
             .map(|a| {
@@ -436,12 +419,6 @@ impl Builtins {
                     menu.push(json!({ "icon": "image", "label": "Change Icon", "action": format!("pinicon:dock:{}", a.open) }));
                     if a.image.starts_with("img:") {
                         menu.push(json!({ "icon": "reset", "label": "Reset Icon", "action": format!("pinreset:dock:{}", a.open) }));
-                    }
-                }
-                // (what its window works on: its folder, or its document, when it can be found)
-                if let Some(w) = a.windows.iter().find(|w| w.front).or(a.windows.first()) {
-                    if let Some(item) = context_item(w) {
-                        menu.push(item);
                     }
                 }
                 // (only an open one can be closed)
@@ -503,9 +480,6 @@ impl Builtins {
                     if a.image.starts_with("img:") {
                         menu.push(json!({ "icon": "reset", "label": "Reset Icon", "action": format!("pinreset:dock:{}", a.open) }));
                     }
-                }
-                if let Some(item) = context_item(w) {
-                    menu.push(item);
                 }
                 menu.push(json!({ "icon": "power", "label": "End Task", "action": format!("kill:{}", w.hwnd), "hold": true, "tone": "no", "confirm": "What it has not saved will be lost." }));
                 let file = a.key.rsplit(['\\', '/']).next().unwrap_or("").to_string();
@@ -590,15 +564,6 @@ impl Builtins {
         // (the second value: the config changed, and is kept)
         if action == "launcher" {
             return (Effect::Launcher, false);
-        }
-        // (what a window works on: its folder opened, or its document shown)
-        if let Some(h) = action.strip_prefix("ctx:").and_then(|h| h.parse::<isize>().ok()) {
-            if let Some(w) = apps.iter().flat_map(|a| a.windows.iter()).find(|w| w.hwnd == h) {
-                if let Some(c) = crate::context::of(w.hwnd, &w.exe, &w.title) {
-                    crate::context::open(&c);
-                }
-            }
-            return (Effect::None, false);
         }
         // (its program's file, chosen in a File Explorer window)
         if let Some(path) = action.strip_prefix("reveal:") {

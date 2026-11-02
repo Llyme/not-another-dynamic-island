@@ -17,9 +17,10 @@ pub enum Press {
     Toggle(String),
     /// a bar to seek on: the plugin is told where (`fraction`)
     Seek(String),
-    /// a field to type in: the plugin is told what was typed (`text`); live, at every change. Its hint, what it holds, and whether
-    /// it is secret (a password: dots shown, never what is typed)
-    Field(String, bool, String, String, bool),
+    /// a field to type in: the plugin is told what was typed (`text`); live, at every change. Its hint, what it holds, whether it is
+    /// secret (a password: dots shown, never what is typed), and how its box looks (`{ ground, ink, size, bold, area }`: in a card's
+    /// colours, words of several lines; none: the plain box)
+    Field(String, bool, String, String, bool, Value),
     /// a picture to look at closely (its name): the wheel zooms it, dragging moves it, a double-click fits it again
     View(String),
     /// a card that can be carried (held a moment, then dragged): pressed quickly, its action; its id
@@ -1558,6 +1559,159 @@ impl<'a, 'b> Ctx<'a, 'b> {
                 self.text(side, x + w - 10.0 - sw, y + 14.0, 10.5, Weight::Regular, w * 0.4, DIM);
                 28.0
             }
+            // (cards in two columns, each as tall as it needs, the next in the shorter column: notes on a wall. Each: `color` its ground,
+            // `ink` its words ("#rrggbb"), `title`, `text` (wrapped), `items` (a checklist: `state` "done" or not, each pressed: its
+            // `action`), `badge` (a picture or a pictogram in its corner: where it is from), `tip` (the badge's), `action` (pressed),
+            // `menu` (right-clicked))
+            "cards" => {
+                let gap = 8.0;
+                let n = b["columns"].as_u64().unwrap_or(2).clamp(1, 3) as usize;
+                let cw = ((w - gap * (n - 1) as f32) / n as f32).max(40.0);
+                let mut cols = vec![0.0f32; n];
+                let hex = |v: &str| (v.len() == 7 && v.starts_with('#') && v[1..].chars().all(|c| c.is_ascii_hexdigit())).then(|| crate::paint::Color::hex(v));
+                for card in b["cards"].as_array().cloned().unwrap_or_default() {
+                    let ink = hex(s(&card, "ink")).unwrap_or(TEXT);
+                    let ground = hex(s(&card, "color")).unwrap_or(FAINT);
+                    let pad = 10.0;
+                    let iw = cw - 2.0 * pad;
+                    let title = s(&card, "title");
+                    let text = s(&card, "text");
+                    let items = card["items"].as_array().cloned().unwrap_or_default();
+                    let badge = s(&card, "badge");
+                    // (being written: `edit = { title, text, item }` (actions), its title and words typed in where they are)
+                    let ed = &card["edit"];
+                    let editing = ed.is_object();
+                    let (title_size, text_lines) = if editing { (15.0, 24) } else { (12.5, 8) };
+                    // (how tall: its title, its words (up to 8 lines; written: room for three at least), its list, room for its badge)
+                    let th = if title.is_empty() && !editing { 0.0 } else if editing { 26.0 } else { 19.0 };
+                    let xh = if editing {
+                        (if text.is_empty() { 0.0 } else { self.p.paragraph(text, 0.0, 0.0, 12.5, iw, text_lines, ink, false) }).max(54.0) + 4.0
+                    } else if text.is_empty() {
+                        0.0
+                    } else {
+                        self.p.paragraph(text, 0.0, 0.0, 12.0, iw, text_lines, ink, false) + 2.0
+                    };
+                    let lh = items.len() as f32 * 20.0 + if editing && !s(ed, "item").is_empty() { 22.0 } else { 0.0 };
+                    let bh = if badge.is_empty() { 0.0 } else { 14.0 };
+                    let ch = (pad * 2.0 + th + xh + lh + bh).max(44.0);
+                    let col = (0..n).fold(0, |best, i| if cols[i] < cols[best] { i } else { best });
+                    let r = Rect::new(x + col as f32 * (cw + gap), y + cols[col], cw, ch);
+                    cols[col] += ch + gap;
+                    if self.draw {
+                        self.p.round(r, 12.0, ground);
+                        if hovered(r) {
+                            self.p.round(r, 12.0, crate::paint::Color(1.0, 1.0, 1.0, 0.05));
+                        }
+                    }
+                    let mut cy = r.y + pad;
+                    let style = |size: f32, bold: bool, area: bool| json!({ "ground": s(&card, "color"), "ink": s(&card, "ink"), "size": size, "bold": bold, "area": area });
+                    if editing {
+                        // (its title, else its hint, faint; pressed: typed in, in place)
+                        let tr = Rect::new(r.x + pad - 4.0, cy, iw + 8.0, th - 4.0);
+                        if title.is_empty() {
+                            self.text(if s(ed, "title_hint").is_empty() { "Title" } else { s(ed, "title_hint") }, r.x + pad, cy + 11.0, title_size, Weight::Semibold, iw, ink.alpha(0.4));
+                        } else {
+                            self.text(title, r.x + pad, cy + 11.0, title_size, Weight::Semibold, iw, ink);
+                        }
+                        if self.draw && hovered(tr) {
+                            self.p.round(tr, 6.0, crate::paint::Color(1.0, 1.0, 1.0, 0.05));
+                        }
+                        if !s(ed, "title").is_empty() {
+                            self.hit(tr, Press::Field(s(ed, "title").to_string(), false, "Title".into(), title.to_string(), false, style(title_size, true, false)));
+                        }
+                        cy += th;
+                        let xr = Rect::new(r.x + pad - 4.0, cy - 2.0, iw + 8.0, xh);
+                        if text.is_empty() {
+                            self.text(if s(ed, "text_hint").is_empty() { "Write something" } else { s(ed, "text_hint") }, r.x + pad, cy + 9.0, 12.5, Weight::Regular, iw, ink.alpha(0.4));
+                        } else if self.draw {
+                            self.p.paragraph(text, r.x + pad, cy, 12.5, iw, text_lines, ink, true);
+                        }
+                        if self.draw && hovered(xr) {
+                            self.p.round(xr, 6.0, crate::paint::Color(1.0, 1.0, 1.0, 0.05));
+                        }
+                        if !s(ed, "text").is_empty() {
+                            self.hit(xr, Press::Field(s(ed, "text").to_string(), false, "Write something".into(), text.to_string(), false, style(12.5, false, true)));
+                        }
+                        cy += xh;
+                    } else {
+                        if !title.is_empty() {
+                            self.text(title, r.x + pad, cy + 8.0, 12.5, Weight::Semibold, iw, ink);
+                            cy += th;
+                        }
+                        if !text.is_empty() {
+                            if self.draw {
+                                self.p.paragraph(text, r.x + pad, cy, 12.0, iw, text_lines, ink, true);
+                            }
+                            cy += xh;
+                        }
+                    }
+                    for it in &items {
+                        let done = s(it, "state") == "done";
+                        let ic = cy + 10.0;
+                        let c = if done { ink.alpha(0.5) } else { ink };
+                        if self.draw {
+                            let bx = Rect::new(r.x + pad, ic - 5.5, 11.0, 11.0);
+                            if done {
+                                self.p.round(bx, 3.0, c);
+                            } else {
+                                self.p.round(bx, 3.0, c.alpha(0.25));
+                                self.p.round(Rect::new(bx.x + 1.5, bx.y + 1.5, 8.0, 8.0), 2.0, ground);
+                            }
+                        }
+                        self.text(s(it, "text"), r.x + pad + 18.0, ic, 12.0, Weight::Regular, iw - 18.0, c);
+                        if !s(it, "action").is_empty() {
+                            self.hit(Rect::new(r.x + 4.0, cy, r.w - 8.0, 20.0), Press::Action(s(it, "action").to_string(), it["args"].clone()));
+                        }
+                        cy += 20.0;
+                    }
+                    // (being written: a line to add an item to its list)
+                    if editing && !s(ed, "item").is_empty() {
+                        let ar = Rect::new(r.x + 4.0, cy, r.w - 8.0, 20.0);
+                        if self.draw {
+                            self.icon("plus", r.x + pad, cy + 4.0, 12.0, ink.alpha(0.5));
+                            if hovered(ar) {
+                                self.p.round(ar, 6.0, crate::paint::Color(1.0, 1.0, 1.0, 0.05));
+                            }
+                        }
+                        self.text("Add an item", r.x + pad + 18.0, cy + 10.0, 12.0, Weight::Regular, iw - 18.0, ink.alpha(0.45));
+                        self.hit(ar, Press::Field(s(ed, "item").to_string(), false, "Add an item".into(), String::new(), false, style(12.0, false, false)));
+                    }
+                    if !badge.is_empty() {
+                        let br = Rect::new(r.right() - pad - 14.0, r.bottom() - pad - 14.0, 14.0, 14.0);
+                        if self.draw && (!badge.contains(':') || !self.p.picture(badge, br, 3.5)) {
+                            self.icon(if badge.contains(':') { "dot" } else { badge }, br.x, br.y, 14.0, ink.alpha(0.7));
+                        }
+                        if !card["tip"].is_null() {
+                            self.hit_tip(br, Press::Action(s(&card, "action").to_string(), card["args"].clone()), card["tip"].clone());
+                        }
+                    }
+                    if !s(&card, "action").is_empty() {
+                        self.hit(r, Press::Action(s(&card, "action").to_string(), card["args"].clone()));
+                        self.last_hit(false, card["menu"].clone());
+                    }
+                }
+                cols.iter().copied().fold(0.0f32, f32::max) - if b["cards"].as_array().is_some_and(|c| !c.is_empty()) { gap } else { 0.0 }
+            }
+            // (colours to pick from: a dot each (`color`), the one picked ringed; each pressed: its `action` with its `args`)
+            "colors" => {
+                let z = 18.0;
+                let mut cx = x + 3.0;
+                for it in b["items"].as_array().cloned().unwrap_or_default() {
+                    let c = s(&it, "color");
+                    let col = if c.len() == 7 && c.starts_with('#') { crate::paint::Color::hex(c) } else { FAINT };
+                    let r = Rect::new(cx, y + 5.0, z, z);
+                    if self.draw {
+                        if it["on"] == true {
+                            self.p.round(Rect::new(r.x - 3.0, r.y - 3.0, z + 6.0, z + 6.0), (z + 6.0) / 2.0, TEXT);
+                            self.p.round(Rect::new(r.x - 1.5, r.y - 1.5, z + 3.0, z + 3.0), (z + 3.0) / 2.0, FACE);
+                        }
+                        self.p.round(r, z / 2.0, col);
+                    }
+                    self.hit_tip(Rect::new(r.x - 3.0, r.y - 3.0, z + 6.0, z + 6.0), Press::Action(s(&it, "action").to_string(), it["args"].clone()), it["tip"].clone());
+                    cx += z + 12.0;
+                }
+                z + 10.0
+            }
             "checklist" => {
                 let mut h = 0.0;
                 if !s(b, "title").is_empty() {
@@ -1822,7 +1976,7 @@ impl<'a, 'b> Ctx<'a, 'b> {
                     }
                 }
                 if !s(b, "action").is_empty() {
-                    self.hit(r, Press::Field(s(b, "action").to_string(), b["live"] == true, hint.to_string(), s(b, "value").to_string(), b["secret"] == true));
+                    self.hit(r, Press::Field(s(b, "action").to_string(), b["live"] == true, hint.to_string(), s(b, "value").to_string(), b["secret"] == true, Value::Null));
                 }
                 30.0
             }

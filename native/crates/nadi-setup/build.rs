@@ -10,6 +10,10 @@ fn main() {
     let exe = std::env::var("NADI_EXE").map(PathBuf::from).expect("NADI_EXE: the nadi.exe to carry (build it with installer.ps1)");
     println!("cargo:rerun-if-changed={}", exe.display());
     std::fs::copy(&exe, out.join("nadi.exe")).expect("NADI_EXE: no such file");
+    // (its Windows-key helper: built beside it)
+    let keys = exe.with_file_name("nadi-keys.exe");
+    println!("cargo:rerun-if-changed={}", keys.display());
+    std::fs::copy(&keys, out.join("nadi-keys.exe")).expect("nadi-keys.exe: build it beside nadi.exe (installer.ps1 does)");
 
     let ico_path = "../nadi-shell/assets/nadi.ico";
     println!("cargo:rerun-if-changed={ico_path}");

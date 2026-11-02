@@ -5,7 +5,8 @@
 //! while one is out waits for it.
 //!
 //! What it asks is a `spec`: `{ icon, tone ("red" | "theme" | "amber"), title, text, field: { hint, secret, value }, countdown (s),
-//! buttons: [{ label, action, tone }] }`. A button with no action is Cancel. What was pressed comes back as (owner, action, args), the
+//! buttons: [{ label, action, tone }], careful (the focus on Cancel), change: [from, to] (two chips and an arrow between),
+//! list: [{ kind ("new" | "fix" | "fast" | "other"), text } | { sep }] (lines with a pictogram each, scrolling past eight) }`. A button with no action is Cancel. What was pressed comes back as (owner, action, args), the
 //! field's words in `args.text`; Cancel, for a plugin, as `modal:cancel`.
 
 use crate::draw::{self, Painter, FACE};
@@ -30,6 +31,23 @@ const RADIUS: f32 = 26.0;
 const BTN_H: f32 = 38.0;
 const ICON: f32 = 52.0;
 const FIELD_H: f32 = 40.0;
+/// a card with a list: wider; a line of it, and how many show before it scrolls
+const CW_LIST: f32 = 340.0;
+const ROW: f32 = 28.0;
+const ROWS: usize = 8;
+const CHANGE_H: f32 = 30.0;
+
+/// Where the card's things are (logical, in the monitor).
+struct Lay {
+    card: Rect,
+    icon: (f32, f32),
+    title_y: f32,
+    change_y: f32,
+    text_y: f32,
+    list: Option<Rect>,
+    field: Option<Rect>,
+    buttons: Vec<Rect>,
+}
 
 /// One asked, waiting for the one out.
 struct Asked {
@@ -67,6 +85,8 @@ pub struct Modal {
     keyed: bool,
     /// words in it too long for their room, scrolling: drawn again each frame
     marquee: bool,
+    /// its list scrolled this far down (logical px)
+    scroll: f32,
 }
 
 unsafe extern "system" fn proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> LRESULT {
@@ -125,6 +145,7 @@ impl Modal {
                 mouse: (-1.0, -1.0),
                 keyed: false,
                 marquee: false,
+                scroll: 0.0,
             })
         }
     }
@@ -150,7 +171,7 @@ impl Modal {
         self.field = self.spec["field"]["value"].as_str().unwrap_or("").to_string();
         // (the focus: on Cancel when the other one destroys something; else on the last, the one asked for)
         let n = self.buttons().len();
-        let red = self.buttons().iter().any(|b| b["tone"] == "red" || b["tone"] == "no");
+        let red = self.spec["careful"] == true || self.buttons().iter().any(|b| b["tone"] == "red" || b["tone"] == "no");
         self.focus = if red { self.buttons().iter().position(|b| b["action"].as_str().unwrap_or("").is_empty()).unwrap_or(0) } else { n.saturating_sub(1) };
         let (w, h) = ((a.mon.right - a.mon.left).max(1), (a.mon.bottom - a.mon.top).max(1));
         if let Ok(surface) = g.surface(w as u32, h as u32) {
@@ -166,6 +187,7 @@ impl Modal {
         self.opened = Instant::now();
         self.mouse = (-1.0, -1.0);
         self.keyed = false;
+        self.scroll = 0.0;
         unsafe {
             let _ = SetWindowPos(self.hwnd, HWND_TOPMOST, a.mon.left, a.mon.top, w, h, SWP_SHOWWINDOW);
             // (Windows lets only the app in front take the focus: joined to its input for a moment, NADI may)
@@ -266,42 +288,83 @@ impl Modal {
         true
     }
 
-    /// The card's box (logical, in the monitor), and where its things are: the icon's middle, the title's and text's lines, the
-    /// field, the buttons.
-    fn layout(&self, p: &Painter) -> (Rect, (f32, f32), f32, f32, Option<Rect>, Vec<Rect>) {
+    /// Its list's lines.
+    fn list(&self) -> Vec<Value> {
+        self.spec["list"].as_array().cloned().unwrap_or_default()
+    }
+
+    fn cw(&self) -> f32 {
+        if self.spec["list"].as_array().is_some_and(|l| !l.is_empty()) {
+            CW_LIST
+        } else {
+            CW
+        }
+    }
+
+    /// How far its list scrolls at most.
+    fn scroll_max(&self) -> f32 {
+        let n = self.list().len();
+        (n as f32 * ROW - n.min(ROWS) as f32 * ROW).max(0.0)
+    }
+
+    /// The card's box (logical, in the monitor), and where its things are: the icon's middle, the title's, chips' and text's lines,
+    /// the list, the field, the buttons.
+    fn layout(&self) -> Lay {
         let (mw, mh) = ((self.mon.right - self.mon.left) as f32 / self.s, (self.mon.bottom - self.mon.top) as f32 / self.s);
+        let cw = self.cw();
         let has_text = !self.spec["text"].as_str().unwrap_or("").is_empty() || (self.spec["countdown"].is_number() && self.spec["counting"].is_string());
         let has_field = self.spec["field"].is_object();
+        let has_change = self.spec["change"].as_array().is_some_and(|c| c.len() == 2);
+        let n = self.list().len();
+        let list_h = n.min(ROWS) as f32 * ROW;
         let mut h = PAD + ICON + 14.0 + 20.0;
+        if has_change {
+            h += CHANGE_H;
+        }
         if has_text {
             h += 22.0;
+        }
+        if n > 0 {
+            h += 10.0 + list_h;
         }
         if has_field {
             h += 10.0 + FIELD_H;
         }
         h += 18.0 + BTN_H + 16.0;
-        let card = Rect::new((mw - CW) / 2.0, (mh - h) / 2.0, CW, h);
-        let icon = (card.x + CW / 2.0, card.y + PAD + ICON / 2.0);
+        let card = Rect::new((mw - cw) / 2.0, (mh - h) / 2.0, cw, h);
+        let icon = (card.x + cw / 2.0, card.y + PAD + ICON / 2.0);
         let title_y = card.y + PAD + ICON + 14.0 + 10.0;
-        let text_y = title_y + 22.0;
-        let mut y = title_y + 10.0 + if has_text { 22.0 } else { 0.0 };
+        let mut y = title_y + 10.0;
+        let change_y = y + CHANGE_H / 2.0 + 2.0;
+        if has_change {
+            y += CHANGE_H;
+        }
+        let text_y = y + 12.0;
+        if has_text {
+            y += 22.0;
+        }
+        let list = (n > 0).then(|| {
+            y += 10.0;
+            let r = Rect::new(card.x + 12.0, y, cw - 24.0, list_h);
+            y += list_h;
+            r
+        });
         let field = has_field.then(|| {
             y += 10.0;
-            let r = Rect::new(card.x + 20.0, y, CW - 40.0, FIELD_H);
+            let r = Rect::new(card.x + 20.0, y, cw - 40.0, FIELD_H);
             y += FIELD_H;
             r
         });
         y += 18.0;
         let bs = self.buttons();
-        let n = bs.len() as f32;
-        let bw = (CW - 40.0 - (n - 1.0) * 8.0) / n;
+        let nb = bs.len() as f32;
+        let bw = (cw - 40.0 - (nb - 1.0) * 8.0) / nb;
         let buttons = (0..bs.len()).map(|i| Rect::new(card.x + 20.0 + i as f32 * (bw + 8.0), y, bw, BTN_H)).collect();
-        let _ = p;
-        (card, icon, title_y, text_y, field, buttons)
+        Lay { card, icon, title_y, change_y, text_y, list, field, buttons }
     }
 
     /// What its window hears.
-    pub fn message(&mut self, msg: u32, wp: WPARAM, lp: LPARAM, g: &Gfx, pc: &Arc<Pc>) -> Option<LRESULT> {
+    pub fn message(&mut self, msg: u32, wp: WPARAM, lp: LPARAM) -> Option<LRESULT> {
         if !self.shown {
             return None;
         }
@@ -339,14 +402,18 @@ impl Modal {
                 let (x, y) = ((lp.0 & 0xffff) as i16 as f32 / self.s, ((lp.0 >> 16) & 0xffff) as i16 as f32 / self.s);
                 self.mouse = (x, y);
                 if msg == WM_LBUTTONUP {
-                    let p = Painter { g, dc: &g.dc, s: self.s, pc, t: 0.0, viz: [0.0; 3] };
-                    let (card, _, _, _, _, buttons) = self.layout(&p);
-                    if let Some(i) = buttons.iter().position(|r| inside(r, x, y)) {
+                    let l = self.layout();
+                    if let Some(i) = l.buttons.iter().position(|r| inside(r, x, y)) {
                         self.press(i);
-                    } else if !inside(&card, x, y) {
+                    } else if !inside(&l.card, x, y) {
                         self.cancel();
                     }
                 }
+                Some(LRESULT(0))
+            }
+            WM_MOUSEWHEEL => {
+                let d = ((wp.0 >> 16) & 0xffff) as i16 as f32 / 120.0;
+                self.scroll = (self.scroll - d * ROW * 2.0).clamp(0.0, self.scroll_max());
                 Some(LRESULT(0))
             }
             WM_ACTIVATE => {
@@ -365,7 +432,9 @@ impl Modal {
         let s = self.s;
         let age = self.opened.elapsed().as_secs_f32();
         let p = Painter { g, dc: &g.dc, s, pc, t: age, viz: [0.0; 3] };
-        let (card, icon, title_y, text_y, field, buttons) = self.layout(&p);
+        let l = self.layout();
+        let (card, icon, title_y, text_y, field, buttons) = (l.card, l.icon, l.title_y, l.text_y, l.field, l.buttons.clone());
+        let (change_y, list_box, list, scroll, cw) = (l.change_y, l.list, self.list(), self.scroll, self.cw());
         let (mw, mh) = ((self.mon.right - self.mon.left) as f32 / s, (self.mon.bottom - self.mon.top) as f32 / s);
         let t = self.t.max(0.0);
         let Ok(shp) = shape::floating(&g.d2d_factory, card.w * s, card.h * s, RADIUS * s) else { return };
@@ -405,15 +474,58 @@ impl Modal {
                 p.icon(ic, icon.0 - 11.0, icon.1 - 11.0, 22.0, tone);
                 // (its question, and a line of what happens; counting down, how long is left)
                 let title = spec["title"].as_str().unwrap_or("");
-                let tw = p.measure(title, 15.0, Weight::Semibold, CW - 40.0);
-                p.text(title, card.x + CW / 2.0 - tw / 2.0, title_y, 15.0, Weight::Semibold, CW - 40.0, draw::TEXT);
+                let tw = p.measure(title, 15.0, Weight::Semibold, cw - 40.0);
+                p.text(title, card.x + cw / 2.0 - tw / 2.0, title_y, 15.0, Weight::Semibold, cw - 40.0, draw::TEXT);
+                // (from one to another: two chips and an arrow, the second in the modal's colour)
+                if let Some([a, b]) = spec["change"].as_array().map(|c| c.as_slice()) {
+                    let (a, b) = (a.as_str().unwrap_or(""), b.as_str().unwrap_or(""));
+                    let (aw, bw) = (p.measure(a, 11.5, Weight::Semibold, 120.0) + 16.0, p.measure(b, 11.5, Weight::Semibold, 120.0) + 16.0);
+                    let total = aw + 8.0 + 14.0 + 8.0 + bw;
+                    let mut x = card.x + cw / 2.0 - total / 2.0;
+                    p.round(Rect::new(x, change_y - 10.0, aw, 20.0), 10.0, Color(1.0, 1.0, 1.0, 0.07));
+                    p.text(a, x + 8.0, change_y, 11.5, Weight::Semibold, aw, Color(0.79, 0.79, 0.82, 1.0));
+                    x += aw + 8.0;
+                    p.line(&[(x, change_y), (x + 13.0, change_y)], 1.6, tone);
+                    p.line(&[(x + 9.0, change_y - 4.0), (x + 13.0, change_y), (x + 9.0, change_y + 4.0)], 1.6, tone);
+                    x += 14.0 + 8.0;
+                    p.round(Rect::new(x, change_y - 10.0, bw, 20.0), 10.0, tone.alpha(0.16));
+                    p.text(b, x + 8.0, change_y, 11.5, Weight::Semibold, bw, tone);
+                }
                 let mut text = spec["text"].as_str().unwrap_or("").to_string();
                 if let (Some(c), Some(word)) = (spec["countdown"].as_f64(), spec["counting"].as_str()) {
                     text = format!("{word} in {} s.", (c as f32 - age).ceil().max(0.0) as u32);
                 }
                 if !text.is_empty() {
-                    let xw = p.measure(&text, 12.0, Weight::Regular, CW - 40.0);
-                    p.text(&text, card.x + CW / 2.0 - xw / 2.0, text_y, 12.0, Weight::Regular, CW - 40.0, draw::DIM);
+                    let xw = p.measure(&text, 12.0, Weight::Regular, cw - 40.0);
+                    p.text(&text, card.x + cw / 2.0 - xw / 2.0, text_y, 12.0, Weight::Regular, cw - 40.0, draw::DIM);
+                }
+                // (its list: a pictogram of each line's kind, in its colour, and the line; a version's number over its own)
+                if let Some(lr) = list_box {
+                    use windows::Win32::Graphics::Direct2D::Common::D2D_RECT_F;
+                    use windows::Win32::Graphics::Direct2D::D2D1_ANTIALIAS_MODE_ALIASED;
+                    dc.PushAxisAlignedClip(&D2D_RECT_F { left: lr.x * s, top: lr.y * s, right: (lr.x + lr.w) * s, bottom: (lr.y + lr.h) * s }, D2D1_ANTIALIAS_MODE_ALIASED);
+                    for (i, item) in list.iter().enumerate() {
+                        let ry = lr.y + i as f32 * ROW - scroll;
+                        if ry + ROW < lr.y || ry > lr.y + lr.h {
+                            continue;
+                        }
+                        if let Some(v) = item["sep"].as_str() {
+                            let vw = p.measure(v, 11.0, Weight::Semibold, 80.0);
+                            p.text(v, lr.x + 8.0, ry + ROW / 2.0 + 3.0, 11.0, Weight::Semibold, 80.0, draw::DIM);
+                            p.round(Rect::new(lr.x + 16.0 + vw, ry + ROW / 2.0 + 3.0, (lr.w - 24.0 - vw).max(0.0), 1.0), 0.0, Color(0.118, 0.122, 0.145, 1.0));
+                            continue;
+                        }
+                        let (ic, c) = match item["kind"].as_str().unwrap_or("") {
+                            "new" => ("sparkle", draw::accent()),
+                            "fix" => ("plaster", draw::AMBER),
+                            "fast" => ("bolt", Color(0.5, 0.69, 1.0, 1.0)),
+                            _ => ("dot", draw::DIM),
+                        };
+                        p.round(Rect::new(lr.x + 8.0, ry + 3.0, 22.0, 22.0), 7.0, c.alpha(0.11));
+                        p.icon(ic, lr.x + 12.5, ry + 7.5, 13.0, c);
+                        p.text(item["text"].as_str().unwrap_or(""), lr.x + 40.0, ry + ROW / 2.0, 12.5, Weight::Regular, lr.w - 48.0, draw::TEXT);
+                    }
+                    dc.PopAxisAlignedClip();
                 }
                 // (its field: what is typed (dots for a password), else its hint; a caret)
                 if let Some(fr) = field {

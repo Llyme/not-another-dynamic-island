@@ -3,11 +3,6 @@
 pub mod apppower;
 pub mod audio;
 pub mod battery;
-pub mod browsersensor;
-pub mod browsers;
-pub mod claudehook;
-pub mod claudesensor;
-pub mod downloadsensor;
 pub mod exeinfo;
 pub mod fps;
 pub mod gear;
@@ -16,5 +11,4 @@ pub mod media;
 pub mod notifysensor;
 pub mod scan;
 pub mod stats;
-pub mod steamlib;
 pub mod usage;

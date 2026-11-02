@@ -35,8 +35,6 @@ pub struct Pc {
     pub gpu: crate::sensors::gpu::GpuState,
     /// the notifications of other apps, numbered, the last few
     pub toasts: Mutex<Vec<Value>>,
-    /// what is downloading now (as the downloads sensor last saw it, and when): the dock shows it on its app
-    pub downloads: Mutex<(Option<std::time::Instant>, Vec<Value>)>,
     pub toast_seq: AtomicU64,
     /// what each plugin has cost since NADI started (by its id; "~ name": a sensor gathered for them): ms gathering its events, ms
     /// running them, how many events
@@ -64,6 +62,4 @@ pub fn start(pc: &Arc<Pc>) {
     crate::sensors::media::spawn(pc.clone());
     crate::sensors::audio::spawn(pc.clone());
     crate::sensors::notifysensor::spawn(pc.clone());
-    // (the door Claude Code's hooks knock on, when answering is set up)
-    crate::sensors::claudehook::start();
 }

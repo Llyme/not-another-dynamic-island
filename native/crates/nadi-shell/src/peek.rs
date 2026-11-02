@@ -501,7 +501,6 @@ const DOCK_GAP: f32 = 8.0;
 
 /// How long the body of a peek is along its edge (logical px).
 /// How much bigger a large widget's peek is drawn.
-pub const LARGE: f32 = 1.375;
 
 /// a song at rest: its cover so big, its words at most so wide, its stacked covers so far apart
 const SONG_COVER: f32 = 24.0;

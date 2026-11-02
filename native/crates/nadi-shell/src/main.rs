@@ -9,7 +9,6 @@ mod apps;
 mod blocks;
 mod builtin;
 mod clip;
-mod context;
 mod aura;
 mod config;
 mod director;
@@ -18,6 +17,10 @@ mod events;
 mod eyes;
 mod frame;
 mod update;
+mod cleanup;
+mod room;
+mod adminkeys;
+mod changes;
 mod drop;
 mod recycle;
 mod perf;
@@ -145,6 +148,7 @@ fn run() -> windows::core::Result<()> {
                 drop::WM_DROP_HOVER => fr.drop_hover_changed(),
                 drop::WM_DROPPED => fr.dropped(),
                 update::WM_UPDATE => fr.update_changed(),
+                changes::WM_WHATS_NEW => fr.whats_new(),
                 tray::WM_PINS => fr.take_pins(),
                 frame::WM_JOB => fr.jobs_done(),
                 trayhost::WM_TRAY_CHANGED => fr.tray_changed(),
@@ -243,6 +247,8 @@ fn run() -> windows::core::Result<()> {
         }
     }
     tray::remove(msg_hwnd);
+    // (the edges kept for the widgets given back)
+    room::clear();
     // (the tray given back to Explorer)
     trayhost::stop();
     // (the taskbar is given back: NADI is gone)
@@ -358,6 +364,17 @@ fn main() {
         Some("--update-check") => {
             let r = nadi_core::repo::latest_nadi();
             println!("{r:?} newer: {:?}", r.as_ref().ok().and_then(|o| o.as_ref()).map(|(v, _)| update::newer(v)));
+            Ok(())
+        }
+        // (for checking: every version's changes, as GitHub gives them now; and the modal after an update from the version named)
+        Some("--changes") => {
+            changes::refresh();
+            println!("{}", serde_json::to_string_pretty(&changes::json()).unwrap_or_default());
+            if let Some(since) = std::env::args().nth(2) {
+                changes::after_update(windows::Win32::Foundation::HWND::default(), since);
+                std::thread::sleep(std::time::Duration::from_secs(4));
+                println!("{}", changes::take_modal().map(|m| m.to_string()).unwrap_or_else(|| "no modal".into()));
+            }
             Ok(())
         }
         Some("--bin-list") => {

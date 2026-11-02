@@ -11,20 +11,20 @@
 * { box-sizing: border-box; }
 html, body { margin: 0; height: 100%; background: var(--bg); color: var(--text); font: 13px/1.45 "Segoe UI Variable Text", "Segoe UI", sans-serif; user-select: none; }
 body { display: flex; overflow: hidden; }
-::-webkit-scrollbar { width: 10px; } ::-webkit-scrollbar-thumb { background: #26262c; border-radius: 6px; border: 3px solid var(--bg); }
+::-webkit-scrollbar { width: 10px; } ::-webkit-scrollbar-thumb { background: #26262c; border-radius: calc(6px * var(--rk, 1)); border: 3px solid var(--bg); }
 svg.i { width: 20px; height: 20px; fill: none; stroke: currentColor; stroke-width: 1.7; stroke-linecap: round; stroke-linejoin: round; display: block; }
 svg.s { width: 15px; height: 15px; }
 /* the rail: an icon a page; the page you are on marked in the theme colour */
 #rail { width: 64px; flex: none; background: var(--rail); border-right: 1px solid var(--line); display: flex; flex-direction: column; align-items: center; gap: 6px; padding: 14px 0; }
 #rail .logo { width: 28px; height: 28px; margin-bottom: 12px; }
-#rail button { all: unset; position: relative; display: grid; place-items: center; width: 40px; height: 40px; border-radius: 12px; color: var(--dim); }
+#rail button { all: unset; position: relative; display: grid; place-items: center; width: 40px; height: 40px; border-radius: calc(12px * var(--rk, 1)); color: var(--dim); }
 #rail button:hover { background: var(--hover); color: var(--text); }
 #rail button.on { color: var(--accent); }
-#rail button.on::before { content: ""; position: absolute; left: -12px; top: 12px; width: 3px; height: 16px; border-radius: 2px; background: var(--accent); }
+#rail button.on::before { content: ""; position: absolute; left: -12px; top: 12px; width: 3px; height: 16px; border-radius: calc(2px * var(--rk, 1)); background: var(--accent); }
 #rail .gap { flex: 1; }
 main { flex: 1; overflow-y: auto; padding: 22px 26px 60px; min-width: 0; }
 .grid2 { display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap: 12px; }
-.card { background: var(--card); border-radius: 14px; padding: 14px; display: flex; flex-direction: column; gap: 10px; }
+.card { background: var(--card); border-radius: calc(14px * var(--rk, 1)); padding: 14px; display: flex; flex-direction: column; gap: 10px; }
 .k { font-size: 11px; font-weight: 600; color: var(--faint); letter-spacing: .02em; }
 .row { display: flex; align-items: center; gap: 10px; min-height: 30px; }
 .grow { flex: 1; min-width: 0; }
@@ -34,92 +34,111 @@ main { flex: 1; overflow-y: auto; padding: 22px 26px 60px; min-width: 0; }
 .sub { color: var(--faint); font-size: 11px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 /* picture tiles: a choice among a few, each its little picture */
 .tiles { display: grid; gap: 8px; }
-.tile { all: unset; display: flex; flex-direction: column; align-items: center; gap: 6px; padding: 9px 6px 8px; border-radius: 10px; background: var(--card2); color: var(--dim); font-size: 11px; text-align: center; }
+.tile { all: unset; display: flex; flex-direction: column; align-items: center; gap: 6px; padding: 9px 6px 8px; border-radius: calc(10px * var(--rk, 1)); background: var(--card2); color: var(--dim); font-size: 11px; text-align: center; }
 .tile:hover { background: var(--hover); color: var(--text); }
 .tile.on { background: #24242a; color: var(--text); box-shadow: inset 0 0 0 1.5px var(--accent); }
 .tile svg { display: block; }
 /* toggle groups keep their track, the one chosen filled */
-.seg { display: inline-flex; background: var(--card2); border-radius: 10px; padding: 3px; gap: 2px; flex: none; }
-.seg button { all: unset; padding: 4px 11px; border-radius: 8px; color: var(--dim); font-size: 12px; }
+.seg { display: inline-flex; background: var(--card2); border-radius: calc(10px * var(--rk, 1)); padding: 3px; gap: 2px; flex: none; }
+.seg button { all: unset; padding: 4px 11px; border-radius: calc(8px * var(--rk, 1)); color: var(--dim); font-size: 12px; }
 .seg button:hover { color: var(--text); background: var(--hover); }
 .seg button.on { background: var(--text); color: #000; font-weight: 600; }
 /* ghost buttons: no ground until the mouse is on one */
-.gh { all: unset; display: inline-flex; align-items: center; gap: 6px; padding: 6px 10px; border-radius: 9px; font-size: 12px; font-weight: 600; color: var(--text); white-space: nowrap; flex: none; }
+.gh { all: unset; display: inline-flex; align-items: center; gap: 6px; padding: 6px 10px; border-radius: calc(9px * var(--rk, 1)); font-size: 12px; font-weight: 600; color: var(--text); white-space: nowrap; flex: none; }
 .gh:hover { background: var(--hover); }
 .gh.acc { color: var(--accent); }
 .gh.no { color: var(--red); }
+.gh.amb { color: var(--amber); }
+/* every version: a row each, folding open to its changes */
+.vers { gap: 2px; }
+.vrow { display: flex; align-items: center; gap: 10px; min-height: 36px; padding: 0 8px; border-radius: calc(10px * var(--rk, 1)); cursor: default; }
+.vrow:hover { background: var(--hover); }
+.vnum { font-weight: 600; font-variant-numeric: tabular-nums; min-width: 44px; }
+.vchip { padding: 1px 8px; border-radius: calc(9px * var(--rk, 1)); font-size: 11px; font-weight: 600; background: #ffffff10; color: #c9c9d1; }
+.vchip.new { background: #173a27; color: var(--accent); }
+.vdate { color: var(--faint); font-size: 11.5px; font-variant-numeric: tabular-nums; }
+.vdots { display: flex; gap: 4px; align-items: center; }
+.vdots i { width: 5px; height: 5px; border-radius: calc(3px * var(--rk, 1)); display: block; }
+.vrow .inst { opacity: 0; }
+.vrow:hover .inst { opacity: 1; }
+.vchev { color: var(--faint); display: flex; width: 15px; }
+.vlines { display: flex; flex-direction: column; gap: 1px; padding: 0 0 8px 62px; }
+.vline { display: flex; align-items: flex-start; gap: 10px; padding: 4px 6px; border-radius: calc(9px * var(--rk, 1)); font-size: 12px; color: #c9c9d1; }
+.vline .vk { width: 20px; height: 20px; border-radius: calc(6px * var(--rk, 1)); display: grid; place-items: center; flex: none; }
+.vline .vk svg { width: 12px; height: 12px; }
+.vline span { padding-top: 1px; }
 .gh[disabled] { opacity: .45; pointer-events: none; }
-.switch { position: relative; width: 34px; height: 20px; border-radius: 10px; background: #2a2a30; flex: none; transition: background .2s; }
-.switch::after { content: ""; position: absolute; left: 3px; top: 3px; width: 14px; height: 14px; border-radius: 50%; background: #fff; transition: transform .25s cubic-bezier(.3, 1.6, .5, 1); }
+.switch { position: relative; width: 34px; height: 20px; border-radius: calc(10px * var(--rk, 1)); background: #2a2a30; flex: none; transition: background .2s; }
+.switch::after { content: ""; position: absolute; left: 3px; top: 3px; width: 14px; height: 14px; border-radius: calc(7px * var(--rk, 1)); background: #fff; transition: transform .25s cubic-bezier(.3, 1.6, .5, 1); }
 .switch.on { background: var(--accent); }
 .switch.on::after { transform: translateX(14px); }
-input[type=text], input[type=number], select { all: unset; background: var(--card2); padding: 6px 10px; border-radius: 9px; min-width: 150px; color: var(--text); font-size: 12px; }
+input[type=text], input[type=number], select { all: unset; background: var(--card2); padding: 6px 10px; border-radius: calc(9px * var(--rk, 1)); min-width: 150px; color: var(--text); font-size: 12px; }
 select option { background: #1b1b20; }
 input[type=range] { accent-color: var(--accent); flex: 1; min-width: 80px; }
 .swatches { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
-.swatch { all: unset; width: 22px; height: 22px; border-radius: 11px; box-shadow: inset 0 0 0 1px rgba(255,255,255,.12); }
+.swatch { all: unset; width: 22px; height: 22px; border-radius: calc(11px * var(--rk, 1)); box-shadow: inset 0 0 0 1px rgba(255,255,255,.12); }
 .swatch.on { box-shadow: 0 0 0 2px var(--bg), 0 0 0 4px #f2f2f5; }
 .swatch-pick { width: 24px; height: 24px; border: none; padding: 0; background: none; }
-.swatch.pair { width: 28px; height: 28px; border-radius: 14px; }
-.wells { display: flex; gap: 6px; padding: 3px; border-radius: 12px; }
+.swatch.pair { width: 28px; height: 28px; border-radius: calc(14px * var(--rk, 1)); }
+.wells { display: flex; gap: 6px; padding: 3px; border-radius: calc(12px * var(--rk, 1)); }
 .wells.on { box-shadow: 0 0 0 2px #f2f2f5; }
-.well { position: relative; width: 28px; height: 28px; border-radius: 9px; box-shadow: inset 0 0 0 1.5px rgba(255,255,255,.18); display: grid; place-items: center; cursor: pointer; }
-.well span { width: 18px; height: 18px; border-radius: 5px; }
+.well { position: relative; width: 28px; height: 28px; border-radius: calc(9px * var(--rk, 1)); box-shadow: inset 0 0 0 1.5px rgba(255,255,255,.18); display: grid; place-items: center; cursor: pointer; }
+.well span { width: 18px; height: 18px; border-radius: calc(5px * var(--rk, 1)); }
 .well input { position: absolute; inset: 0; opacity: 0; cursor: pointer; }
 /* plugins */
-.search { display: flex; align-items: center; gap: 8px; flex: 1; height: 32px; padding: 0 12px; border-radius: 10px; background: var(--card2); color: var(--faint); }
+.search { display: flex; align-items: center; gap: 8px; flex: 1; height: 32px; padding: 0 12px; border-radius: calc(10px * var(--rk, 1)); background: var(--card2); color: var(--faint); }
 .search input { all: unset; flex: 1; color: var(--text); font-size: 12px; }
 .chips { display: flex; gap: 4px; flex-wrap: wrap; align-items: center; }
 .chip.on { background: #24242a; box-shadow: inset 0 0 0 1.5px var(--accent); }
 .chip .n { color: var(--faint); font-weight: 400; }
-.dot { width: 14px; height: 14px; border-radius: 7px; flex: none; }
+.dot { width: 14px; height: 14px; border-radius: calc(7px * var(--rk, 1)); flex: none; }
 .plugs { display: grid; grid-template-columns: repeat(auto-fill, minmax(230px, 1fr)); gap: 10px; }
-.pc { background: var(--card); border-radius: 14px; padding: 12px; display: flex; flex-direction: column; gap: 8px; cursor: pointer; transition: background .15s, box-shadow .15s; }
+.pc { background: var(--card); border-radius: calc(14px * var(--rk, 1)); padding: 12px; display: flex; flex-direction: column; gap: 8px; cursor: pointer; transition: background .15s, box-shadow .15s; }
 .pc:hover { background: #18181d; box-shadow: inset 0 0 0 1.5px #2e2e36; }
 .pc .foot { display: flex; align-items: flex-end; gap: 8px; }
 .pc .open { color: var(--faint); flex: none; transition: color .15s, transform .15s; }
 .pc:hover .open { color: var(--text); transform: translateX(2px); }
-.av { width: 36px; height: 36px; border-radius: 10px; display: grid; place-items: center; font-weight: 700; font-size: 15px; flex: none; }
-.av.big { width: 46px; height: 46px; border-radius: 12px; font-size: 19px; }
+.av { width: 36px; height: 36px; border-radius: calc(10px * var(--rk, 1)); display: grid; place-items: center; font-weight: 700; font-size: 15px; flex: none; }
+.av.big { width: 46px; height: 46px; border-radius: calc(12px * var(--rk, 1)); font-size: 19px; }
 .desc { color: var(--dim); font-size: 11.5px; line-height: 1.5; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
 .perm { display: flex; align-items: center; gap: 8px; font-size: 12px; }
 .tags { display: flex; gap: 6px; flex-wrap: wrap; }
-.tag { display: inline-flex; align-items: center; gap: 5px; padding: 2px 8px; border-radius: 7px; background: var(--card2); font-size: 10.5px; color: var(--dim); }
-.tag i { width: 6px; height: 6px; border-radius: 3px; background: var(--accent); }
+.tag { display: inline-flex; align-items: center; gap: 5px; padding: 2px 8px; border-radius: calc(7px * var(--rk, 1)); background: var(--card2); font-size: 10.5px; color: var(--dim); }
+.tag i { width: 6px; height: 6px; border-radius: calc(3px * var(--rk, 1)); background: var(--accent); }
 .tag.warn { color: var(--amber); }
-.note { padding: 9px 12px; border-radius: 10px; background: var(--card2); color: var(--dim); font-size: 12px; }
+.note { padding: 9px 12px; border-radius: calc(10px * var(--rk, 1)); background: var(--card2); color: var(--dim); font-size: 12px; }
 .note.bad { color: var(--red); background: rgba(232, 122, 122, .1); }
 .empty { color: var(--faint); padding: 18px 4px; }
 .spin { width: 13px; height: 13px; border-radius: 50%; border: 2px solid #333; border-top-color: var(--accent); animation: s .8s linear infinite; flex: none; }
 @keyframes s { to { transform: rotate(360deg); } }
-.wtile { all: unset; display: flex; flex-direction: column; align-items: center; gap: 6px; padding: 10px; border-radius: 10px; background: var(--card2); color: var(--dim); font-size: 11px; min-width: 110px; }
+.wtile { all: unset; display: flex; flex-direction: column; align-items: center; gap: 6px; padding: 10px; border-radius: calc(10px * var(--rk, 1)); background: var(--card2); color: var(--dim); font-size: 11px; min-width: 110px; }
 .wtile:hover { background: var(--hover); }
 .wtile.on { color: var(--text); }
 /* a sheet over the page */
 #sheet { position: fixed; inset: 0; background: rgba(0,0,0,.55); display: none; align-items: center; justify-content: center; }
 #sheet.on { display: flex; }
-#sheet .box { width: 400px; background: var(--card); border-radius: 16px; padding: 16px; display: flex; flex-direction: column; gap: 12px; box-shadow: 0 0 0 1px #24242a; }
-.tip { position: fixed; pointer-events: none; background: #26262c; color: var(--text); padding: 7px 10px; border-radius: 9px; font-size: 12px; max-width: 320px; opacity: 0; transition: opacity .15s; z-index: 9; white-space: pre-wrap; }
+#sheet .box { width: 400px; background: var(--card); border-radius: calc(16px * var(--rk, 1)); padding: 16px; display: flex; flex-direction: column; gap: 12px; box-shadow: 0 0 0 1px #24242a; }
+.tip { position: fixed; pointer-events: none; background: #26262c; color: var(--text); padding: 7px 10px; border-radius: calc(9px * var(--rk, 1)); font-size: 12px; max-width: 320px; opacity: 0; transition: opacity .15s; z-index: 9; white-space: pre-wrap; }
 .hint { text-decoration: underline dotted; text-decoration-color: var(--dim); text-underline-offset: 3px; cursor: help; flex: 0 1 auto; margin-right: auto; }
 /* the Performance page */
 .ptiles { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; }
-.ptile { background: var(--card); border-radius: 14px; padding: 12px 12px 6px; display: flex; flex-direction: column; gap: 6px; overflow: hidden; }
+.ptile { background: var(--card); border-radius: calc(14px * var(--rk, 1)); padding: 12px 12px 6px; display: flex; flex-direction: column; gap: 6px; overflow: hidden; }
 .ptile .th { display: flex; align-items: center; gap: 6px; color: var(--dim); }
 .ptile .tv { font-size: 22px; font-weight: 600; color: var(--text); font-variant-numeric: tabular-nums; }
 .ptile .tu { font-size: 12px; font-weight: 600; align-self: flex-end; margin-bottom: 4px; }
 .ptile svg.spark { width: 100%; height: 44px; display: block; }
 .prow { display: flex; align-items: center; gap: 10px; font-size: 12.5px; min-height: 26px; }
-.prow .av { width: 24px; height: 24px; border-radius: 7px; font-size: 12px; }
+.prow .av { width: 24px; height: 24px; border-radius: calc(7px * var(--rk, 1)); font-size: 12px; }
 .prow .pn { width: 130px; font-weight: 600; white-space: nowrap; overflow: hidden; display: flex; align-items: center; gap: 6px; }
-.pbar { flex: 1; height: 6px; border-radius: 3px; background: var(--card2); display: flex; overflow: hidden; }
+.pbar { flex: 1; height: 6px; border-radius: calc(3px * var(--rk, 1)); background: var(--card2); display: flex; overflow: hidden; }
 .pbar i { display: block; height: 100%; }
 .pv { width: 64px; text-align: right; font-variant-numeric: tabular-nums; font-weight: 600; }
 .pe { width: 40px; text-align: right; font-variant-numeric: tabular-nums; color: var(--faint); }
-.hotdot { width: 6px; height: 6px; border-radius: 3px; background: var(--amber); flex: none; }
+.hotdot { width: 6px; height: 6px; border-radius: calc(3px * var(--rk, 1)); background: var(--amber); flex: none; }
 .legend { display: flex; align-items: center; gap: 4px; margin-left: auto; }
-.legend i { width: 8px; height: 8px; border-radius: 2px; display: inline-block; margin-left: 8px; }
+.legend i { width: 8px; height: 8px; border-radius: calc(2px * var(--rk, 1)); display: inline-block; margin-left: 8px; }
 /* (the page, before its first numbers: its own shape, shimmering; each graph's line drawing itself in its colour) */
-.skel { border-radius: 5px; background: linear-gradient(90deg, var(--card2) 0%, rgba(255,255,255,.09) 50%, var(--card2) 100%); background-size: 200% 100%; animation: shimmer 1.3s ease-in-out infinite; }
+.skel { border-radius: calc(5px * var(--rk, 1)); background: linear-gradient(90deg, var(--card2) 0%, rgba(255,255,255,.09) 50%, var(--card2) 100%); background-size: 200% 100%; animation: shimmer 1.3s ease-in-out infinite; }
 @keyframes shimmer { 0% { background-position: 100% 0; } 100% { background-position: -100% 0; } }
 .ptile svg.draw path { stroke-dasharray: 420; stroke-dashoffset: 420; animation: drawline 1.8s ease-in-out infinite; }
 @keyframes drawline { 0% { stroke-dashoffset: 420; opacity: 1; } 70% { stroke-dashoffset: 0; opacity: 1; } 100% { stroke-dashoffset: 0; opacity: 0; } }
@@ -165,6 +184,15 @@ const ICONS = {
   bell: "M6 16v-5a6 6 0 0 1 12 0v5l1.5 2h-15zM10 20.5a2.2 2.2 0 0 0 4 0",
   folder: "M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z",
   grid: "M4 4h6v6H4zM14 4h6v6h-6zM4 14h6v6H4zM14 14h6v6h-6z",
+  maximize: "M4 5h16v14H4zM4 9h16",
+  trash: "M5 7h14M10 7V5h4v2M7 7l1 13h8l1-13",
+  spark: "M12 3l1.9 5.1L19 10l-5.1 1.9L12 17l-1.9-5.1L5 10l5.1-1.9z",
+  plaster: "M9.6 19.8 19.8 9.6a3.6 3.6 0 0 0-5.1-5.1L4.5 14.7a3.6 3.6 0 0 0 5.1 5.1zM10.8 10.8h.01M13.2 13.2h.01",
+  bolt: "M13.5 3 6 13.5h5.5L10 21l8-10.5h-5.5z",
+  dot: "M12 11.2a.8.8 0 1 0 0 1.6.8.8 0 0 0 0-1.6z",
+  goback: "M4 12a8 8 0 1 0 2.3-5.6M4 4v4.5h4.5M12 8v4l2.5 2.5",
+  chevr: "M10 7l5 5-5 5",
+  chevd: "M7 10l5 5 5-5",
 };
 const PAGES = [["plugins", "Plugins"], ["look", "Look"], ["perf", "Performance"]];
 const DEFAULT_REPO = "Llyme/nadi-plugins";
@@ -184,9 +212,18 @@ const el = (tag, cls, text) => { const e = document.createElement(tag); if (cls)
 const icon = (name, cls) => { const s = document.createElementNS("http://www.w3.org/2000/svg", "svg"); s.setAttribute("viewBox", "0 0 24 24"); s.setAttribute("class", "i" + (cls ? " " + cls : "")); const p = document.createElementNS("http://www.w3.org/2000/svg", "path"); p.setAttribute("d", ICONS[name] || name); s.append(p); return s; };
 const pic = (html, w, h) => { const d = el("div"); d.innerHTML = `<svg width="${w}" height="${h}" viewBox="0 0 64 40">${html}</svg>`; return d.firstChild; };
 // (a tip: beside it (`side`: "right", the rail's), else under it, or over it where there is no room under; always inside the window)
+// (the tip shown, and what it is the tip of: gone with it when that is taken away or pressed, or when the mouse is not on it any more
+// (a page drawn again takes the old one away without telling it the mouse left))
+let tipOwner = null;
+function tipHide() { const t = document.getElementById("tip"); if (t) t.style.opacity = 0; tipOwner = null; }
+document.addEventListener("mousemove", e => { if (tipOwner && (!tipOwner.isConnected || !tipOwner.contains(e.target))) tipHide(); });
+document.addEventListener("mouseleave", tipHide);
+window.addEventListener("blur", tipHide);
 function tipOn(node, text, side) {
   const t = document.getElementById("tip");
+  node.addEventListener("mousedown", tipHide);
   node.addEventListener("mouseenter", () => {
+    tipOwner = node;
     t.textContent = text; t.style.opacity = 1;
     const r = node.getBoundingClientRect(), tw = t.offsetWidth, th = t.offsetHeight;
     let x, y;
@@ -195,7 +232,7 @@ function tipOn(node, text, side) {
     t.style.left = Math.max(6, Math.min(x, innerWidth - tw - 6)) + "px";
     t.style.top = Math.max(6, Math.min(y, innerHeight - th - 6)) + "px";
   });
-  node.addEventListener("mouseleave", () => t.style.opacity = 0);
+  node.addEventListener("mouseleave", tipHide);
 }
 function seg(options, value, onPick) {
   const s = el("div", "seg");
@@ -244,6 +281,8 @@ function draw() {
   // (the Performance page: NADI measures what it costs only while it is open)
   perfWatch(page === "perf");
   ({ plugins: pagePlugins, look: pageLookAll, perf: pagePerf, about: pageAbout })[page](m);
+  // (a tip whose thing was drawn anew goes; the new one shows its own when the mouse comes on it)
+  if (tipOwner && !tipOwner.isConnected) tipHide();
   m.scrollTop = keep;
   if (focus) { const f = m.querySelector(`[data-keep="${focus}"]`); if (f) { f.focus(); f.setSelectionRange(f.value.length, f.value.length); } }
   drawSheet();
@@ -610,6 +649,23 @@ function pagePerf(root) {
     tile("drawing", P.now[2].toFixed(1), "ms/s", fr, "#4f8ff0", "Drawing: how long NADI spent on its widgets each second", 0, Math.max(5, mx(fr) * 1.25)));
   m.append(tiles);
   const blue = "#4f8ff0", purple = "#b57de6";
+  // (memory, each program apart: NADI, its settings window, each plugin's helper; the total over them)
+  const memory = P.memory || [];
+  if (memory.length) {
+    const c = el("div", "card");
+    const total = memory.reduce((a, x) => a + x.mb, 0);
+    const head = el("div", "row"); const hi = icon("mem", "s"); hi.style.color = "var(--dim)";
+    const tv = el("span", "sub", Math.round(total) + " MB"); tipOn(tv, "All of them together");
+    head.append(hi, el("span", "grow"), tv); c.append(head);
+    const top = Math.max(0.001, ...memory.map(x => x.mb));
+    for (const x of memory) {
+      const r = el("div", "prow");
+      const b = el("div", "pbar"); const i = el("i"); i.style.width = (x.mb / top * 100) + "%"; i.style.background = "#b57de6"; b.append(i);
+      const v = el("span", "pv", (x.mb < 10 ? x.mb.toFixed(1) : Math.round(x.mb)) + " MB");
+      r.append(avatar(x.name), el("span", "pn", x.name), b, v, el("span", "pe", "")); c.append(r);
+    }
+    m.append(c);
+  }
   // (each plugin: its time over the last minute, gathering (blue) and running (purple); its updates)
   const plugins = P.plugins || [];
   if (plugins.length) {
@@ -671,19 +727,28 @@ function pageLook(m) {
   if (own) { wells.classList.add("on"); }
   sws.append(wells);
   // (a slider, a picture at each end, and its value after it, as it is moved)
-  const slider = (min, max, step, value, put, lo, hi, fmt) => {
+  const slider = (min, max, step, value, put, lo, hi, fmt, live) => {
     const r = el("div", "row");
     const s = el("input"); s.type = "range"; s.min = min; s.max = max; s.step = step; s.value = value;
     const v = el("span", "sub", fmt(Number(value))); v.style.width = "40px"; v.style.textAlign = "right"; v.style.color = "var(--dim)";
-    s.oninput = () => v.textContent = fmt(Number(s.value));
+    s.oninput = () => { v.textContent = fmt(Number(s.value)); live && live(Number(s.value)); };
     s.onchange = () => put(Number(s.value));
     r.append(lo, s, hi, v); return r;
   };
   const liquidLo = pic(`<rect x="0" y="0" width="64" height="8" fill="#3a3a42"/><rect x="10" y="6" width="18" height="16" rx="7" fill="#3a3a42"/><rect x="36" y="6" width="18" height="16" rx="7" fill="#3a3a42"/>`, 40, 25);
   const liquidHi = pic(`<rect x="0" y="0" width="64" height="8" fill="${c.theme || "#5ac88c"}"/><path d="M6 6h52v6a10 10 0 0 1-10 10H16A10 10 0 0 1 6 12z" fill="${c.theme || "#5ac88c"}"/>`, 40, 25);
   const a = el("span", "faint", "A"), A = el("span", "faint", "A"); a.style.fontSize = "10px"; A.style.fontSize = "17px";
+  // (how round: a square corner and a round one; as it is dragged, NADI and this window round with it)
+  const sq = pic(`<rect x="14" y="4" width="36" height="32" rx="1" fill="none" stroke="#6d6d75" stroke-width="3"/>`, 30, 19);
+  const rd = pic(`<rect x="14" y="4" width="36" height="32" rx="14" fill="none" stroke="${c.theme || "#5ac88c"}" stroke-width="3"/>`, 30, 19);
+  // (how deep: a shallow widget on its edge, and a deep one)
+  const dLo = h => pic(`<rect x="0" y="36" width="64" height="4" fill="#3a3a42"/><rect x="14" y="${36 - h}" width="36" height="${h}" rx="4" fill="#3a3a42"/>`, 30, 19);
+  const dHi = h => pic(`<rect x="0" y="36" width="64" height="4" fill="#3a3a42"/><rect x="14" y="${36 - h * 1.8}" width="36" height="${h * 1.8}" rx="5" fill="${c.theme || "#5ac88c"}"/>`, 30, 19);
+  const roundLive = v => { document.documentElement.style.setProperty("--rk", v / 100); send("round_preview", { k: v / 100 }); };
   const grid = el("div", "grid2");
-  grid.append(card("Theme", sws), card("Liquid", slider(0, 100, 1, c.liquid ?? 50, v => set({ liquid: v }), liquidLo, liquidHi, v => v < 1 ? "Off" : String(Math.round(v))), el("div", "k", "Size"), slider(0.75, 1.5, 0.05, c.scale || 1, v => set({ scale: v }), a, A, v => Math.round(v * 100) + "%")));
+  grid.append(card("Theme", sws), card("Liquid", slider(0, 100, 1, c.liquid ?? 50, v => set({ liquid: v }), liquidLo, liquidHi, v => v < 1 ? "Off" : String(Math.round(v))), el("div", "k", "Size"), slider(0.75, 1.5, 0.05, c.scale || 1, v => set({ scale: v }), a, A, v => Math.round(v * 100) + "%"), el("div", "k", "Small Widgets"), slider(24, 48, 1, c.depth_small ?? 32, v => set({ depth_small: v }), dLo(8), dHi(14), v => v + " px", v => send("depth_preview", { small: v })),
+    el("div", "k", "Large Widgets"), slider(32, 64, 1, c.depth_large ?? 44, v => set({ depth_large: v }), dLo(12), dHi(20), v => v + " px", v => send("depth_preview", { large: v })),
+    el("div", "k", "Roundness"), slider(0, 150, 5, Math.round((c.roundness ?? 1) * 100), v => set({ roundness: v / 100 }), sq, rd, v => v + "%", roundLive)));
   m.append(grid);
 }
 
@@ -708,6 +773,52 @@ function pageFrame(m) {
   const grid = el("div", "grid2");
   const reveal = c.reveal || "all";
   // (how near an edge the mouse brings them out, shown on a little screen as a soft frame that thick; and how long it rests there first)
+  // (Make Room: maximized windows kept out of the edges with widgets; a small screen shows which edges, how deep, and a maximized
+  // window in what is left, as the sliders move)
+  const roomRows = () => {
+    const box = el("div"); box.style.display = "flex"; box.style.flexDirection = "column"; box.style.gap = "10px";
+    const on = !!c.make_room;
+    box.append(hintRow("Make Room", "Maximized windows stop at the widgets, as they stop at the taskbar. Full-screen apps still cover everything.", sw(on, v => set({ make_room: v })), "maximize"));
+    if (!on) return box;
+    const edges = new Set();
+    for (const w of S.widgets || []) {
+      const pl = String(w.place || "off");
+      if (pl === "off") continue;
+      if (pl.startsWith("top")) edges.add("top"); else if (pl.startsWith("bottom")) edges.add("bottom"); else edges.add(pl);
+    }
+    const scr = el("div"); scr.style.cssText = "position:relative;height:110px;border-radius:10px;overflow:hidden;background:linear-gradient(160deg,#13204a,#1c3270)";
+    const win = el("div");
+    const bands = {};
+    for (const e of ["top", "bottom", "left", "right"]) { bands[e] = el("div"); scr.append(bands[e]); }
+    scr.append(win);
+    let mode = c.room_mode || "widgets", own = c.room_own ?? 40, gap = c.room_gap ?? 4;
+    const k = 0.45;
+    const draw = () => {
+      const deep = (mode === "own" ? own : (c.depth_small ?? 32)) + gap;
+      const d = { top: 0, bottom: 0, left: 0, right: 0 };
+      for (const e of edges) d[e] = Math.max(3, deep * k);
+      const stripe = `repeating-linear-gradient(135deg,${lit}2a 0 5px,transparent 5px 10px)`;
+      bands.top.style.cssText = `position:absolute;left:0;right:0;top:0;height:${d.top}px;background:${stripe};border-bottom:${d.top ? 1.5 : 0}px solid ${lit}`;
+      bands.bottom.style.cssText = `position:absolute;left:0;right:0;bottom:0;height:${d.bottom}px;background:${stripe};border-top:${d.bottom ? 1.5 : 0}px solid ${lit}`;
+      bands.left.style.cssText = `position:absolute;top:0;bottom:0;left:0;width:${d.left}px;background:${stripe};border-right:${d.left ? 1.5 : 0}px solid ${lit}`;
+      bands.right.style.cssText = `position:absolute;top:0;bottom:0;right:0;width:${d.right}px;background:${stripe};border-left:${d.right ? 1.5 : 0}px solid ${lit}`;
+      win.style.cssText = `position:absolute;left:${d.left + 6}px;right:${d.right + 6}px;top:${d.top + 6}px;bottom:${d.bottom + 6}px;border-radius:5px;background:#2a2d3a;box-shadow:0 0 0 1px #3a3f55;transition:all .12s`;
+    };
+    draw();
+    const slide = (label, min, max, value, put, live) => {
+      const r = el("div", "row"); const kk = el("span", "grow", label);
+      const sl = el("input"); sl.type = "range"; sl.min = min; sl.max = max; sl.step = 1; sl.value = value; sl.style.width = "150px";
+      const v = el("span", "sub", value + " px"); v.style.width = "44px"; v.style.textAlign = "right"; v.style.color = "var(--dim)";
+      sl.oninput = () => { v.textContent = sl.value + " px"; live(Number(sl.value)); draw(); };
+      sl.onchange = () => put(Number(sl.value));
+      r.append(kk, sl, v); return r;
+    };
+    box.append(scr,
+      row("Room", seg([["widgets", "Widgets' Depth"], ["own", "Own"]], mode, v => set({ room_mode: v }))));
+    if (mode === "own") box.append(slide("Depth", 16, 96, own, v => set({ room_own: v }), v => own = v));
+    box.append(slide("Gap", 0, 16, gap, v => set({ room_gap: v }), v => gap = v));
+    return box;
+  };
   const reachRows = () => {
     const box = el("div"); box.style.display = "flex"; box.style.flexDirection = "column"; box.style.gap = "10px";
     const scr = el("div"); scr.style.cssText = "position:relative;height:96px;border-radius:10px;overflow:hidden;background:linear-gradient(160deg,#13204a,#1c3270)";
@@ -737,6 +848,8 @@ function pageFrame(m) {
       ["near", "Near Mouse", `${MINI}<rect x="24" y="34" width="9" height="5" rx="2" fill="${grey}"/><circle cx="29" cy="30" r="9" fill="none" stroke="#3a3a42" stroke-dasharray="2 2"/>${CUR(27, 24)}`],
     ], reveal, v => set({ reveal: v })),
     reachRows(),
+    ...(reveal === "all" ? [roomRows()] : []),
+    ...(reveal === "edges" || reveal === "all" ? [hintRow("Only Busy Edges", "An edge brings the widgets out only when one on it is showing something. Edges with only idle widgets, or none, bring nothing.", sw(!!c.edge_busy_only, on => set({ edge_busy_only: on })), "frame")] : []),
     row("Open Widgets On", seg([["hover", "Hover"], ["click", "Click"]], c.open_on || "hover", v => set({ open_on: v }))),
     row("Hold to Show", seg([["none", "None"], ["alt", "Alt"], ["ctrl", "Ctrl"]], c.hold_key || "none", v => set({ hold_key: v })))));
   const twin = (a, b, bar) => `<rect x="1" y="6" width="28" height="18" rx="3" fill="none" stroke="${a}" stroke-width="1.5"/><rect x="35" y="6" width="28" height="18" rx="3" fill="none" stroke="${b}" stroke-width="1.5"/>${bar}`;
@@ -757,6 +870,7 @@ function pageFrame(m) {
   grid.append(card("Windows",
     hintRow("Taskbar", "Keep: widgets stay clear of it. Under: widgets stand at the screen's edge, the taskbar under them. Hide: hidden.", seg([["keep", "Keep"], ["under", "Under"], ["hide", "Hide"]], c.taskbar || "keep", v => set({ taskbar: v })), "taskbar"),
     row("Windows Key", seg([["auto", "Auto"], ["launcher", "Launcher"], ["start", "Start"]], c.win_key || "auto", v => set({ win_key: v })), "win"),
+    ...((c.win_key || "auto") !== "start" && S.admin_keys && (S.admin_keys.available || S.admin_keys.installed) ? [hintRow("Over Admin Apps", "Games run as administrator keep the Windows key from NADI, so Start opens. On, a small helper catches it for NADI. Windows asks for administrator rights once, to set it up.", sw(!!c.admin_keys && S.admin_keys.installed, on => send("admin_keys", { on })), "shield")] : []),
     hintRow("Pin From File Explorer", "Adds Pin to NADI Dock and Pin to NADI Apps to the right-click menu of files and folders. On Windows 11, under Show more options.", sw(!!c.explorer_menu, on => set({ explorer_menu: on })), "folder"),
     hintRow("Launcher Shows Widgets", "Opening the launcher brings every widget out, over a game too.", sw(!!c.launcher_reveal, on => set({ launcher_reveal: on })), "grid"),
     row("Start With Windows", sw(!!S.autostart, on => send("autostart", { on })), "power")));
@@ -772,22 +886,87 @@ function pageAbout(m) {
   m.append(head);
   // (a newer NADI: fetched and installed from here, no browser; else up to date, looked for again with a press)
   const u = S.update || { state: "current" };
+  const vers = S.changes || [];
   const spin = () => el("span", "spin");
-  let urow;
-  if (u.state === "ready") urow = row(`Version ${u.version} Is Ready`, gh("Update", "acc", () => send("update"), "download"), "download");
+  // (a newer one known in the list: its row says so, with Update; else a row of where it stands)
+  const listed = u.state === "ready" && vers.some(v => v.version === u.version);
+  let urow = null;
+  if (u.state === "ready" && !listed) urow = row(`Version ${u.version} Is Ready`, gh("Update", "acc", () => send("update"), "download"), "download");
   else if (u.state === "fetching") urow = row(`Downloading Version ${u.version}`, spin(), "download");
   else if (u.state === "installing") urow = row(`Installing Version ${u.version}`, spin(), "download");
   else if (u.state === "looking") urow = row("Looking for a New Version", spin(), "refresh");
   else if (u.state === "failed") {
     urow = el("div"); urow.style.display = "flex"; urow.style.flexDirection = "column"; urow.style.gap = "8px";
     urow.append(el("div", "note bad", u.error || "Something went wrong."));
-    urow.append(u.version ? row(`Version ${u.version} Is Ready`, gh("Try Again", "acc", () => send("update"), "download"), "download") : row("Look Again", gh(null, "", () => send("update_check"), "refresh"), "refresh"));
-  } else {
+    urow.append(u.version ? row(`Version ${u.version}`, gh("Try Again", "acc", () => send("install_version", { version: u.version }), "download"), "download") : row("Look Again", gh(null, "", () => send("update_check"), "refresh"), "refresh"));
+  } else if (u.state === "current") {
     const again = gh(null, "", () => send("update_check"), "refresh"); tipOn(again, "Look Again");
     urow = row("Up to Date", again, "check");
   }
-  m.append(card(null, urow));
+  if (urow) m.append(card(null, urow));
+  if (vers.length) m.append(versionList(vers, u));
+  // (Clean Up: what NADI left behind (downloaded installers, old copies, plugin downloads, logs): how much, and a press to clean)
+  const cu = S.cleanup || {};
+  const mb = b => b >= 1048576 ? (b / 1048576).toFixed(b >= 10485760 ? 0 : 1) + " MB" : Math.max(1, Math.round(b / 1024)) + " KB";
+  let cleanCtl;
+  if (cu.busy) cleanCtl = el("span", "spin");
+  else if (cu.bytes == null) { cleanCtl = el("span", "spin"); if (!pageAbout.looked) { pageAbout.looked = true; send("cleanup_look"); } }
+  else if (cu.bytes === 0) { cleanCtl = icon("check", "s"); cleanCtl.style.color = "var(--accent)"; }
+  else { cleanCtl = el("div", "row"); cleanCtl.append(el("span", "sub", mb(cu.bytes)), gh("Clean Up", "acc", () => send("cleanup"), "trash")); }
+  m.append(card(null, row("Leftover Files", cleanCtl, "trash")));
   m.append(card(null, row("Plugins Folder", gh("Open", "", () => send("open", { what: "plugins" }), "folder")), row("Data Folder", gh("Open", "", () => send("open", { what: "data" }), "folder"))));
+}
+
+// (every version NADI knows of, newest first: a newer one marked New with Update, the one running marked Running; each folds open
+// to its changes, a dot of its kind's colour for each while shut; an older one (that can update itself) installed from its row)
+const KINDS = { new: ["spark", "var(--accent)"], fix: ["plaster", "var(--amber)"], fast: ["bolt", "#7fb0ff"], other: ["dot", "var(--dim)"] };
+let versOpen = null;
+function versionList(vers, u) {
+  const running = S.version || "";
+  const busy = u.state === "fetching" || u.state === "installing";
+  if (!versOpen) versOpen = new Set(u.state === "ready" ? [u.version] : []);
+  const c = el("div", "card vers");
+  const year = new Date().getFullYear();
+  for (const v of vers) {
+    const r = el("div", "vrow");
+    r.append(el("span", "vnum", v.version));
+    if (u.state === "ready" && v.version === u.version) r.append(el("span", "vchip new", "New"));
+    else if (v.version === running) r.append(el("span", "vchip", "Running"));
+    if (v.date) {
+      const d = new Date(v.date + "T12:00:00");
+      const o = d.getFullYear() === year ? { month: "short", day: "numeric" } : { month: "short", day: "numeric", year: "numeric" };
+      r.append(el("span", "vdate", d.toLocaleDateString(undefined, o)));
+    }
+    r.append(el("span", "grow"));
+    const open = versOpen.has(v.version) && v.lines.length > 0;
+    if (!open && v.lines.length) {
+      const dots = el("span", "vdots");
+      for (const l of v.lines.slice(0, 12)) { const i = el("i"); i.style.background = (KINDS[l.kind] || KINDS.other)[1]; dots.append(i); }
+      r.append(dots);
+    }
+    if (u.state === "ready" && v.version === u.version) r.append(gh("Update", "acc", () => send("update"), "download"));
+    else if (v.version !== running && !busy && !verLess(v.version, "1.2.0")) {
+      const b = gh("Install", "amb inst", () => send("install_version", { version: v.version }), "goback");
+      r.append(b);
+    }
+    const chev = el("span", "vchev");
+    if (v.lines.length) chev.append(icon(open ? "chevd" : "chevr", "s"));
+    r.append(chev);
+    if (v.lines.length) r.onclick = () => { if (versOpen.has(v.version)) versOpen.delete(v.version); else versOpen.add(v.version); draw(); };
+    c.append(r);
+    if (open) {
+      const ls = el("div", "vlines");
+      for (const l of v.lines) {
+        const [ic, col] = KINDS[l.kind] || KINDS.other;
+        const line = el("div", "vline");
+        const k = el("span", "vk"); k.style.color = col; k.style.background = `color-mix(in srgb, ${col} 12%, transparent)`; k.append(icon(ic, "s"));
+        line.append(k, el("span", null, l.text));
+        ls.append(line);
+      }
+      c.append(ls);
+    }
+  }
+  return c;
 }
 
 window.chrome.webview.addEventListener("message", e => {
@@ -795,6 +974,7 @@ window.chrome.webview.addEventListener("message", e => {
   if (msg.type === "state") {
     S = Object.assign(S, msg); S.busy = msg.busy || {}; S.errors = msg.errors || {};
     if (S.config && S.config.theme) document.documentElement.style.setProperty("--accent", S.config.theme);
+    if (S.config) document.documentElement.style.setProperty("--rk", S.config.roundness ?? 1);
     // (asked to open on a page: a plugin's own, from a widget's menu)
     if (msg.goto) {
       const [kind, id] = String(msg.goto).split(":");

@@ -45,6 +45,8 @@ with a `manifest.json`, up to three levels down, is a plugin.
   - `place` is where a widget goes the first time: `top`, `bottom`, `left`, `right`, `top-left`, `top-right`, `bottom-left` or `bottom-right`.
   - `rank` orders the widgets on one edge.
   - The person can move a widget, float it or hide it.
+  - `many: true`: the plugin may show many of it at once, each `"<id>:<name>"` (up to 24), such as a note pinned to the screen each.
+    The person does not place these: give them a panel and no peek, and ask for their window (see `window` below).
 
 ### Permissions
 
@@ -63,13 +65,11 @@ with a `manifest.json`, up to three levels down, is a plugin.
 | `programs` | their programs (path, name, full screen) |
 | `idle` | `idle_s` (seconds since the last input) |
 | `usage` | `usage` of the programs it `watch`es (CPU, memory, GPU, frames per second) |
-| `downloads` | `downloads` (browsers, Steam, qBittorrent); `reveal` a finished file |
-| `claude` | `claude` (Claude Code sessions) |
-| `claude_answer` | `answer` a session's request; `claude_hooks` (only when the person presses its button) |
-| `browser` | `browser` (pages the NADI browser extension describes); `browser` output: watch, press, go |
+| `apps` | `apps`: entries for the launcher's search (`{ name, open, image, badge, tip }`) |
+| `dock` | `progress`: how far along a program is, on its dock icon |
 | `storage` | `store` a value (sealed for this Windows user); it comes back in `start` as `store` |
 | `files` | `file` when a listed file changes (its last 256 KB) |
-| `net` | `fetch` from the listed hosts (`"{{settings.url}}"`: the host of that setting); the answer comes as `fetched` |
+| `net` | `fetch` (`GET`, `POST`, `PATCH`, `PUT`, `DELETE`) from the listed hosts (`"{{settings.url}}"`: the host of that setting); the answer comes as `fetched` |
 | `run` | `run` a command of a listed shape (`git -C * status`); its output comes as `command` |
 | `open` | `open` an address that starts with a listed prefix |
 
@@ -91,8 +91,8 @@ The events, and what each adds:
 - **`tick`**: `wake` (true when it is the answer to `wake_ms`).
 - **`action`**: `action`, `args`.
 - **`open`**: `widget`, `open`.
-- **The permissions' events:** `battery`, `system`, `audio`, `media` (`sessions`), `notifications`, `processes` (`windows`, `idle_s`), `usage`, `downloads` (`observed`, `ended`), `claude` (`claude`, `claude_hooks`), `browser`, `file` (`path`, `text`).
-- **Answers to what the plugin asked for:** `fetched` (`id`, `status`, `body`, `error`), `command` (`id`, `code`, `stdout`), `browser_done`.
+- **The permissions' events:** `battery`, `system`, `audio`, `media` (`sessions`), `notifications`, `processes` (`windows`, `idle_s`), `usage`, `file` (`path`, `text`), `helper` (`data`: a line from its helper program).
+- **Answers to what the plugin asked for:** `fetched` (`id`, `status`, `body`, `error`), `command` (`id`, `code`, `stdout`).
 
 ## The reply
 
@@ -108,7 +108,7 @@ return {
 }
 ```
 
-**Idle:** `idle = true` on a widget says nothing is going on (no music, no downloads, every session resting). NADI hides an idle
+**Idle:** `idle = true` on a widget says nothing is going on (nothing playing, nothing to show). NADI hides an idle
 widget unless the person asked to see it anyway (right-click: Hide When Idle), so send one rather than taking the widget away: it
 keeps its place, and its banners still come out there.
 
@@ -132,6 +132,11 @@ keeps its place, and its banners still come out there.
   - `bars = { { part, color } }`
   - `clock = { h24, date }`
 - With it, optionally: `text`, `label`, `color`, `viz`, `dot`, `button = { icon, label, action }`.
+
+**`window`:** `{ open, remember, ground }`: `open` set brings the widget's panel out as a window (cleared, sends it back), as if
+the person popped it out; it may have no peek, and then no place on an edge. `remember`: out when NADI ends, it comes out again when
+it starts, on the same monitor, where it stood (a window the person popped out is not remembered). `ground`: its solid background
+(`"#rrggbb"`). Its window closed, the plugin hears its widget shut (`open` with `open = false`).
 
 **`panel` (open):**
 - `title`, `sub`, `tile = { icon | image | text, color, ring, ring_color, vessel, bolt }`, `press` (the head's action), and `body`.
@@ -160,7 +165,8 @@ keeps its place, and its banners still come out there.
 | `choice` | `label`, `action`, `value`, `options` |
 | `slider` | `label`, `icon`, `value`, `text`, `action`, `press` |
 | `ask` | `label`, `side`, `icon`, `text`, `buttons`, `action` |
-| `field` | `placeholder`, `hint`, `action` |
+| `field` | `placeholder`, `hint`, `value`, `action` |
+| `cards` | `columns` (1 to 3, 2 at first), `cards = { { color, ink, title, text, items = { { state, text, action, args } }, badge, tip, action, args, menu } }` |
 | `head` | `title`, `prev`, `next`, `press` |
 | `grid` | `labels`, `cells = { { t, id, state, dots } }` |
 | `section` | `id`, `title`, `sub`, `tile`, `live`, `body`, `press` (opens and closes; the first is open) |
@@ -177,7 +183,6 @@ The `nadi` table holds:
 - **Time:** `duration(min)`, `time(ms, tz)`, `moment(y, m, d, h, mi, s, tz)`, `when(ms, all_day)`, `iso(s)`.
 - **Data:** `json.decode(text)`, `json.encode(v)`, `ics(text, now)`.
 - **Bytes:** `sha256(s)`, `random(n)`, `b64url(s)`, `urlencode(s)`.
-- **Pages:** `page_read(page, now)`, `page_private(title)`, `page_config(images)`.
 - **`null`:** a JSON null.
 
 ## Testing

@@ -1,4 +1,4 @@
-//! A calendar feed (`.ics`: Google Calendar, Outlook, iCloud), read into events: what a plugin gets from `nadi.ics(text, now)`.
+//! A calendar feed (`.ics`, as calendar services give), read into events: what a plugin gets from `nadi.ics(text, now)`.
 //!
 //! Minimal ICS: VEVENT DTSTART/DTEND/SUMMARY/UID plus a small RRULE subset (DAILY/WEEKLY+BYDAY/MONTHLY/YEARLY,
 //! INTERVAL, COUNT, UNTIL, EXDATE and RECURRENCE-ID overrides), expanded over a window around today.
@@ -16,7 +16,7 @@ pub struct CalendarEvent {
     /// exclusive end (== start for zero-length events)
     pub end_ms: i64,
     pub all_day: bool,
-    /// where it is (its LOCATION), and a link to join it when it has one (a Meet, Teams, Zoom or Webex address in its URL, LOCATION
+    /// where it is (its LOCATION), and a link to join it when it has one (a meeting service's address in its URL, LOCATION
     /// or DESCRIPTION; else its URL)
     pub location: String,
     pub link: String,
