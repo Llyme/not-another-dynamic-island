@@ -290,6 +290,9 @@ fn watchdog(pid: u32) {
 }
 
 fn main() {
+    // (what NADI starts gets the user's own surroundings, not those of what started NADI: started from inside an editor built on
+    // Electron, it would pass on the switch that makes every Electron app it opens run as a bare script, with no window)
+    std::env::remove_var("ELECTRON_RUN_AS_NODE");
     // (a panic: what and where, kept in NADI's folder, the newest last)
     std::panic::set_hook(Box::new(|info| {
         if let Some(p) = nadi_core::paths::data_dir().map(|d| d.join("crash.log")) {

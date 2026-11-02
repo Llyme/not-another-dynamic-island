@@ -485,18 +485,24 @@ impl Builtins {
                 let file = a.key.rsplit(['\\', '/']).next().unwrap_or("").to_string();
                 tiles.push(json!({ "key": a.key, "hwnd": if w.minimized { 0 } else { w.hwnd }, "image": a.image, "title": title, "short": short_title(&title, &a.name), "action": format!("win:{}", w.hwnd), "front": w.front, "cpu": u.cpu, "ram": (u.mem as f64 / total) as f32, "progress": progress.get(&file).copied(), "sound": self.sounding.contains(&a.key), "attention": self.flashing.contains(&w.hwnd), "menu": menu }));
             }
-            groups.push(json!({ "name": a.name, "image": a.image, "windows": tiles[first..].to_vec() }));
+            // (its card: what it uses, its sound and its own volume, how far its download is)
+            let u = used(&a.key);
+            let file = a.key.rsplit(['\\', '/']).next().unwrap_or("").to_string();
+            let vol = self.app_volumes.iter().find(|v| v.key.eq_ignore_ascii_case(&a.key));
+            groups.push(json!({
+                "key": a.key, "name": a.name, "image": a.image, "windows": tiles[first..].to_vec(),
+                "front": a.windows.iter().any(|w| w.front),
+                "cpu": u.cpu, "ram": (u.mem as f64 / total) as f32, "mem_text": mem_text(u.mem),
+                "sound": self.sounding.contains(&a.key),
+                "volume": vol.map(|v| v.volume), "muted": vol.is_some_and(|v| v.muted),
+                "progress": progress.get(&file).copied(),
+            }));
         }
-        // (open: each app its name over its windows, as wide as they are side by side, the apps in rows; its pinned ones closed at
-        // its foot)
-        let per = |g: &Value| {
-            let n = g["windows"].as_array().map_or(1, |w| w.len()) as f32;
-            n * crate::blocks::APPWIN_W + (n - 1.0) * 8.0
-        };
-        let total: f32 = groups.iter().map(per).sum::<f32>() + (groups.len().max(1) - 1) as f32 * 16.0;
-        // (the windows at their own size; the panel as wide as they are)
-        // (and room at both sides for the ring round the window you were in)
-        let width = (2.0 * 16.0 + 6.0 + total).clamp(200.0, 940.0);
+        // (open: every window a tile, in the dock's order (they stay where they are as another comes to the front); its pinned ones
+        // closed at its foot)
+        // (as wide as its tiles side by side, four at most a row; room at both sides for the ring round the window you were in)
+        let n = groups.iter().map(|g| g["windows"].as_array().map_or(0, |w| w.len())).sum::<usize>().clamp(1, 4) as f32;
+        let width = (2.0 * 16.0 + 6.0 + 4.0 + n * crate::blocks::TILE_W + (n - 1.0) * crate::blocks::TILE_GAP).clamp(400.0, 1100.0);
         json!({
             "peek": { "dock": { "items": items, "numbers": self.numbers } },
             "panel": { "width": width, "body": [{ "kind": "appwindows", "groups": groups, "pins": pins }] },
@@ -578,6 +584,15 @@ impl Builtins {
         // (the Now Card's cover: what plays there, paused or played)
         if let Some(source) = action.strip_prefix("mediatoggle:") {
             nadi_core::sensors::media::media_play_pause(Some(source.to_string()));
+            return (Effect::None, false);
+        }
+        // (a window's tile in the open dock: what it plays, back and next)
+        if let Some(source) = action.strip_prefix("mediaprev:") {
+            nadi_core::sensors::media::media_previous(Some(source.to_string()));
+            return (Effect::None, false);
+        }
+        if let Some(source) = action.strip_prefix("medianext:") {
+            nadi_core::sensors::media::media_next(Some(source.to_string()));
             return (Effect::None, false);
         }
         // a tray icon: its app hears the click, as from the taskbar

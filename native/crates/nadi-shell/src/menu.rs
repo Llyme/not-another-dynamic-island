@@ -89,9 +89,14 @@ pub fn draw_items(p: &Painter, items: &[serde_json::Value], hover: Option<usize>
         if let Some((_, f)) = held.filter(|(h, _)| *h == i) {
             p.round(Rect::new(r.x, r.y, r.w * f.clamp(0.0, 1.0), r.h), 10.0, red.alpha(0.28));
         }
+        // (on: its icon in the theme colour, a dot at its end)
+        let on = it["on"] == true;
         let c = if it["tone"] == "no" { red } else { draw::TEXT };
-        p.icon(it["icon"].as_str().unwrap_or("dot"), r.x + 12.0, r.y + MINI_ROW / 2.0 - 7.0, 14.0, c);
-        p.text(it["label"].as_str().unwrap_or(""), r.x + 36.0, r.y + MINI_ROW / 2.0, 12.0, Weight::Regular, r.w - 40.0, c);
+        p.icon(it["icon"].as_str().unwrap_or("dot"), r.x + 12.0, r.y + MINI_ROW / 2.0 - 7.0, 14.0, if on { draw::accent() } else { c });
+        p.text(it["label"].as_str().unwrap_or(""), r.x + 36.0, r.y + MINI_ROW / 2.0, 12.0, Weight::Regular, r.w - 40.0 - if on { 14.0 } else { 0.0 }, c);
+        if on {
+            p.circle(r.right() - 12.0, r.y + MINI_ROW / 2.0, 2.5, draw::accent());
+        }
         hits.push((r, Act::Item(i)));
         y += MINI_ROW + 2.0;
     }

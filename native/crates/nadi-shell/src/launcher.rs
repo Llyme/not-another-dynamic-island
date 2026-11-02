@@ -14,7 +14,7 @@ use crate::shape::{self, Rect};
 use crate::winlist;
 use nadi_core::pc::Pc;
 use std::sync::Arc;
-use std::time::{Instant, SystemTime};
+use std::time::{Duration, Instant, SystemTime};
 use windows::core::{w, HSTRING};
 use windows::Win32::Foundation::*;
 use windows::Win32::Graphics::DirectComposition::*;
@@ -24,6 +24,8 @@ use windows::Win32::UI::Input::KeyboardAndMouse::*;
 use windows::Win32::UI::WindowsAndMessaging::*;
 
 /// its width, and the most it is tall (logical px)
+/// how long after it comes out a focus it loses is taken back, not given up (a game takes it back as the Start menu closes)
+const GRACE: Duration = Duration::from_millis(900);
 const W: f32 = 460.0;
 const H_MAX: f32 = 600.0;
 /// room round it in its window: it springs a little past its size
@@ -883,7 +885,16 @@ impl Launcher {
             let was = GetForegroundWindow();
             self.before = if was != self.hwnd { was.0 as isize } else { 0 };
             let _ = SetWindowPos(self.hwnd, HWND_TOPMOST, x, y, w, h, SWP_SHOWWINDOW);
-            // (Windows lets only the app in front take the focus: joined to its input for a moment, NADI may)
+        }
+        self.take_focus();
+        self.since = Some(Instant::now());
+        self.clip();
+        self.free_mouse(x, y, w, h);
+    }
+
+    /// Take the keyboard. (Windows lets only the app in front take the focus: joined to its input for a moment, NADI may.)
+    fn take_focus(&self) {
+        unsafe {
             let fg = GetForegroundWindow();
             let theirs = GetWindowThreadProcessId(fg, None);
             let mine = windows::Win32::System::Threading::GetCurrentThreadId();
@@ -895,9 +906,12 @@ impl Launcher {
                 let _ = windows::Win32::System::Threading::AttachThreadInput(mine, theirs, false);
             }
         }
-        self.since = Some(Instant::now());
-        self.clip();
-        self.free_mouse(x, y, w, h);
+    }
+
+    /// Just come out: the focus it loses now is not given away by the user but taken back by what was in front (a game, as the Start
+    /// menu NADI shut for it closes); it takes it again instead of going.
+    fn in_grace(&self) -> bool {
+        self.since.is_some_and(|t| t.elapsed() < GRACE)
     }
 
     /// Over a game that holds the mouse (the pointer kept in its window, or hidden): let it go, and put the pointer in the middle of the
@@ -990,7 +1004,13 @@ impl Launcher {
                 return true;
             }
         }
-        if self.since.is_some_and(|t| t.elapsed().as_millis() > 600) && unsafe { GetForegroundWindow() } != self.hwnd {
+        let away = unsafe { GetForegroundWindow() } != self.hwnd;
+        // (just come out and the focus taken from it: it takes it again)
+        if away && self.in_grace() {
+            self.take_focus();
+            return false;
+        }
+        if self.since.is_some_and(|t| t.elapsed() >= GRACE) && away {
             self.hide();
             return true;
         }
@@ -1938,7 +1958,10 @@ impl Launcher {
         match msg {
             WM_ACTIVATE => {
                 if (wp.0 & 0xffff) as u32 == WA_INACTIVE && self.shown {
-                    self.hide();
+                    // (just come out: the focus taken back from it, it takes it again at its next check; else it goes)
+                    if !self.in_grace() {
+                        self.hide();
+                    }
                 }
                 None
             }

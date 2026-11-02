@@ -28,6 +28,10 @@ const EXTRA: &[(&str, &str)] = &[
     ("grid", "M3 3h4v4H3zM9 3h4v4H9zM3 9h4v4H3zM9 9h4v4H9z"),
     ("power", "M8 2.5V8M4.8 4.6a4.6 4.6 0 1 0 6.4 0"),
     ("search", "M7 3a4 4 0 1 1 0 8 4 4 0 0 1 0-8zM10 10l3.5 3.5"),
+    // (a window's backgrounds: solid (filled with lines), see-through (half), none (its corners alone))
+    ("bg-solid", "M3 3h10v10H3zM3 7 7 3M3 11 11 3M5 13 13 5M9 13 13 9"),
+    ("bg-see", "M3 3h10v10H3zM8 3v10M3 7 7 3M3 11 8 6M5 13 8 10"),
+    ("bg-none", "M3 6V3h3M10 3h3v3M13 10v3h-3M6 13H3v-3"),
 ];
 
 /// The name of a known icon, as the icons have it (a plugin's badge naming one).

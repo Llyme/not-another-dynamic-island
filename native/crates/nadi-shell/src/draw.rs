@@ -369,6 +369,23 @@ impl<'a> Painter<'a> {
         Rect::new(r.x * self.s, r.y * self.s, r.w * self.s, r.h * self.s)
     }
 
+    /// A box filled `c` at its top, fading smoothly to nothing at its foot.
+    pub fn fade_down(&self, r: Rect, c: Color) {
+        let q = self.px(r);
+        unsafe {
+            let stops = [
+                D2D1_GRADIENT_STOP { position: 0.0, color: D2D1_COLOR_F { r: c.0, g: c.1, b: c.2, a: c.3 } },
+                D2D1_GRADIENT_STOP { position: 0.55, color: D2D1_COLOR_F { r: c.0, g: c.1, b: c.2, a: c.3 * 0.35 } },
+                D2D1_GRADIENT_STOP { position: 1.0, color: D2D1_COLOR_F { r: c.0, g: c.1, b: c.2, a: 0.0 } },
+            ];
+            let Ok(coll) = self.dc.CreateGradientStopCollection(&stops, D2D1_COLOR_SPACE_SRGB, D2D1_COLOR_SPACE_SRGB, D2D1_BUFFER_PRECISION_8BPC_UNORM, D2D1_EXTEND_MODE_CLAMP, D2D1_COLOR_INTERPOLATION_MODE_STRAIGHT) else { return };
+            let Ok(coll) = windows::core::Interface::cast::<ID2D1GradientStopCollection>(&coll) else { return };
+            let props = D2D1_LINEAR_GRADIENT_BRUSH_PROPERTIES { startPoint: D2D_POINT_2F { x: q.x, y: q.y }, endPoint: D2D_POINT_2F { x: q.x, y: q.y + q.h.max(1.0) } };
+            let Ok(br) = self.dc.CreateLinearGradientBrush(&props, None, &coll) else { return };
+            self.dc.FillRectangle(&D2D_RECT_F { left: q.x, top: q.y, right: q.x + q.w, bottom: q.y + q.h }, &br);
+        }
+    }
+
     /// A ring round `cx`, `cy`: its track, and `part` of it lit from the top, clockwise (from `start`, 0..1, for one that turns).
     pub fn ring(&self, cx: f32, cy: f32, radius: f32, width: f32, part: f32, start: f32, c: Color, track: Color) {
         let s = self.s;
@@ -877,6 +894,33 @@ pub fn live_level(peak: f32) -> f32 {
 pub const FLAT: [f32; 3] = [0.18, 0.18, 0.18];
 
 /// How wide the three bars are, `h` tall.
+/// A grip, centred on (`cx`, `cy`): a pill that springs out of a dot (`show`, a spring, a little past 1 as it comes), wider and
+/// brighter under the mouse (`over`), the theme colour and glowing while held (`held`), stretched as it is dragged (`stretch`, px);
+/// `a` its opacity.
+pub fn grip(p: &Painter, cx: f32, cy: f32, g: [f32; 4], a: f32) {
+    let [show, over, held, stretch] = g;
+    if show <= 0.01 || a <= 0.01 {
+        return;
+    }
+    let over = over.clamp(0.0, 1.0);
+    let held = held.clamp(0.0, 1.0);
+    let w = (4.0 + 32.0 * show + 14.0 * over * (1.0 - held) + 6.0 * held + stretch.max(0.0)).max(2.0);
+    let h = 4.0 + over * (1.0 - held) + 2.0 * held;
+    let mix = |x: Color, y: Color, k: f32| Color(x.0 + (y.0 - x.0) * k, x.1 + (y.1 - x.1) * k, x.2 + (y.2 - x.2) * k, x.3 + (y.3 - x.3) * k);
+    let rest = DIM.alpha(0.85);
+    let lit = Color(0.9, 0.9, 0.92, 1.0);
+    let c = mix(mix(rest, lit, over), accent(), held);
+    let fade = (show * 3.0).clamp(0.0, 1.0) * a;
+    // (held: a soft glow round it)
+    if held > 0.01 {
+        let ac = accent();
+        for (grow, k) in [(8.0, 0.07), (4.0, 0.14)] {
+            p.round(Rect::new(cx - w / 2.0 - grow, cy - h / 2.0 - grow, w + 2.0 * grow, h + 2.0 * grow), h / 2.0 + grow, ac.alpha(k * held * fade));
+        }
+    }
+    p.round(Rect::new(cx - w / 2.0, cy - h / 2.0, w, h), h / 2.0, c.alpha(c.3 * fade));
+}
+
 pub fn bars_w(h: f32) -> f32 {
     3.0 * (h * 0.24).max(2.0) + 2.0 * (h * 0.16).max(1.5)
 }

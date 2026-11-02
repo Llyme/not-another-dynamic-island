@@ -53,9 +53,123 @@ pub struct Ctx<'a, 'b> {
 /// a window in the dock's row (its live picture's width, with its meters beside it) and the room between two
 pub const WIN_PIC: f32 = 132.0;
 pub const WIN_GAP: f32 = 12.0;
-/// the dock open: each window's picture so wide, so tall
-pub const APPWIN_W: f32 = 132.0;
-pub const APPWIN_H: f32 = 82.0;
+/// the open dock's tiles: how wide at least (wider to fill a row), how far apart
+pub const TILE_W: f32 = 210.0;
+pub const TILE_GAP: f32 = 12.0;
+
+thread_local! {
+    /// what is drawn over each window's live picture in the panel just drawn (Windows draws the pictures over the panel: these go on
+    /// the glass over it): its window, its box, its tile, its app
+    static OVERS: std::cell::RefCell<Vec<(isize, Rect, Value, Value)>> = const { std::cell::RefCell::new(Vec::new()) };
+}
+
+/// What was drawn over the live pictures of the panel just drawn (taken).
+pub fn take_overs() -> Vec<(isize, Rect, Value, Value)> {
+    OVERS.with(|o| std::mem::take(&mut *o.borrow_mut()))
+}
+
+/// A window's tile in the open dock, what goes over its picture: a dark fade down from its top, its app's icon and its title at its
+/// top left; what its app uses at its top right (two thin bars: the processor, the memory); at its foot, how far its download is, or,
+/// making sound, its volume (how loud it is now lighter over it, as the mixer shows it); the mouse on it, that grows into a bar: a
+/// speaker that mutes it, its volume to drag, and what it plays, back, play or pause, next. (`hover`: where the mouse is, in the
+/// same space.)
+pub fn tile_over(p: &crate::draw::Painter, r: Rect, it: &Value, g: &Value, hover: Option<(f32, f32)>) {
+    let on = hover.is_some_and(|(x, y)| x >= r.x && x < r.x + r.w && y >= r.y && y < r.y + r.h);
+    let black = |a: f32| crate::paint::Color(0.0, 0.0, 0.0, a);
+    // (its corners rounded: Windows draws its picture square, over the panel; the panel's colour laid over the picture's corners)
+    let rad = crate::paint::rounded(12.0, r.w, r.h);
+    if rad > 0.5 {
+        let band = 6.0;
+        for (cx, cy, a0) in [(r.x + rad, r.y + rad, 180.0f32), (r.right() - rad, r.y + rad, 270.0), (r.right() - rad, r.bottom() - rad, 0.0), (r.x + rad, r.bottom() - rad, 90.0)] {
+            let pts: Vec<(f32, f32)> = (0..=12).map(|i| {
+                let a = (a0 + i as f32 * 7.5).to_radians();
+                (cx + (rad + band / 2.0) * a.cos(), cy + (rad + band / 2.0) * a.sin())
+            }).collect();
+            p.line(&pts, band, FACE);
+        }
+    }
+    // (the one you were in: its ring, over its picture's corners)
+    if it["front"] == true {
+        p.outline(Rect::new(r.x - 1.5, r.y - 1.5, r.w + 3.0, r.h + 3.0), 13.5, 2.0, accent());
+    }
+    // (the fade, darkest at its top)
+    p.fade_down(Rect::new(r.x, r.y, r.w, (r.h * 0.5).round()), black(0.75));
+    let busy = g["cpu"].is_number();
+    // its use: two thin bars lying down, on a dark chip
+    if busy {
+        let c = Rect::new(r.right() - 6.0 - 44.0, r.y + 6.0, 44.0, 18.0);
+        p.round(c, 9.0, black(0.8));
+        let cpu = s_num(g, "cpu");
+        let ram = s_num(g, "ram");
+        for (j, (v, col)) in [((cpu / 0.4).min(1.0), crate::peek::load_color(cpu)), ((ram / 0.25).min(1.0), crate::paint::Color(0.71, 0.49, 0.9, 1.0))].into_iter().enumerate() {
+            let y = c.y + 5.5 + j as f32 * 5.0;
+            p.round(Rect::new(c.x + 7.0, y, c.w - 14.0, 3.0), 1.5, crate::paint::Color(1.0, 1.0, 1.0, 0.15));
+            p.round(Rect::new(c.x + 7.0, y, ((c.w - 14.0) * v).max(3.0), 3.0), 1.5, col);
+        }
+    }
+    // its icon and its title
+    let pic = Rect::new(r.x + 8.0, r.y + 7.0, 16.0, 16.0);
+    if !p.picture(s(it, "image"), pic, 4.0) {
+        p.round(pic, 4.0, GROUND);
+    }
+    let t = if s(it, "short").is_empty() { s(it, "title") } else { s(it, "short") };
+    p.text(t, pic.right() + 6.0, pic.y + 8.0, 11.0, Weight::Semibold, (r.right() - 8.0 - if busy { 50.0 } else { 0.0 } - pic.right() - 6.0).max(20.0), TEXT);
+    // its foot
+    if let Some(f) = g["progress"].as_f64() {
+        let lr = Rect::new(r.x + 8.0, r.bottom() - 9.0, r.w - 16.0, 3.0);
+        p.round(lr, 1.5, crate::paint::Color(1.0, 1.0, 1.0, 0.16));
+        p.round(Rect::new(lr.x, lr.y, lr.w * (f as f32).clamp(0.0, 1.0), 3.0), 1.5, crate::paint::Color(0.31, 0.56, 0.94, 1.0));
+        return;
+    }
+    if g["sound"] != true || !g["volume"].is_number() {
+        return;
+    }
+    let key = s(g, "key");
+    let action = format!("appvol:{key}");
+    let v = sliding(&action).unwrap_or(s_num(g, "volume")).clamp(0.0, 1.0);
+    let muted = g["muted"] == true;
+    let live = if muted { 0.0 } else { (live_level(meter(&format!("app:{key}"))) * v).clamp(0.0, v) };
+    let line = |p: &crate::draw::Painter, lr: Rect| {
+        p.round(lr, lr.h / 2.0, crate::paint::Color(1.0, 1.0, 1.0, 0.2));
+        if v > 0.0 {
+            p.round(Rect::new(lr.x, lr.y, (lr.w * v).max(lr.h), lr.h), lr.h / 2.0, if muted { SLIDER_DIM } else { accent() });
+        }
+        if live > 0.005 {
+            p.round(Rect::new(lr.x, lr.y, (lr.w * live).max(lr.h), lr.h), lr.h / 2.0, LIVE);
+        }
+    };
+    if !on {
+        line(p, Rect::new(r.x + 8.0, r.bottom() - 9.0, r.w - 16.0, 3.0));
+        return;
+    }
+    let (bar, mute, track, media) = tile_bar(r, g);
+    p.round(bar, bar.h / 2.0, black(0.8));
+    p.icon(if muted { "volume-x" } else { "volume" }, mute.x + 4.0, mute.y + 4.0, 14.0, if muted { RED } else { TEXT });
+    line(p, Rect::new(track.x + SEEK_INSET, track.y + track.h / 2.0 - 2.0, track.w - 2.0 * SEEK_INSET, 4.0));
+    p.circle(track.x + SEEK_INSET + (track.w - 2.0 * SEEK_INSET) * v, track.y + track.h / 2.0, 5.0, if muted { DIM } else { TEXT });
+    if let Some([prev, play, next]) = media {
+        let playing = g["media"]["playing"] == true;
+        for (b, icon) in [(prev, "prev"), (play, if playing { "pause" } else { "play" }), (next, "next")] {
+            p.icon(icon, b.x + 3.0, b.y + 3.0, 14.0, TEXT);
+        }
+    }
+}
+
+/// A tile's bar while the mouse is on it: the bar, its speaker, its volume's track, and what it plays (back, play, next), if it does.
+fn tile_bar(r: Rect, g: &Value) -> (Rect, Rect, Rect, Option<[Rect; 3]>) {
+    let bar = Rect::new(r.x + 6.0, r.bottom() - 36.0, r.w - 12.0, 30.0);
+    let cy = bar.y + bar.h / 2.0;
+    let mute = Rect::new(bar.x + 6.0, cy - 11.0, 22.0, 22.0);
+    let media = g["media"]["source"].is_string();
+    let end = if media { bar.right() - 6.0 - 3.0 * 20.0 } else { bar.right() - 8.0 };
+    let track = Rect::new(mute.right() + 2.0, cy - 10.0, (end - mute.right() - 4.0).max(20.0), 20.0);
+    let buttons = media.then(|| [0, 1, 2].map(|i| Rect::new(end + i as f32 * 20.0, cy - 10.0, 20.0, 20.0)));
+    (bar, mute, track, buttons)
+}
+
+fn s_num(v: &Value, k: &str) -> f32 {
+    v[k].as_f64().unwrap_or(0.0) as f32
+}
 const SP: f32 = 10.0;
 
 fn s<'v>(v: &'v Value, k: &str) -> &'v str {
@@ -3172,116 +3286,85 @@ impl<'a, 'b> Ctx<'a, 'b> {
             // (the dock open: each app, its name over its windows (each its live picture, its title under it), the apps in rows; at
             // the foot, its pinned ones that are closed)
             "appwindows" => {
+                // every window a tile, its live picture filling it; what is drawn over the picture (its name, its use, its sound) is
+                // kept for the glass over the panel, where Windows does not draw over it; here too, for while the pictures are not out
+                // yet. Its pinned ones, closed, at its foot
                 // (room at both sides for the ring round the window you were in)
                 let (x, w) = (x + 3.0, w - 6.0);
                 let groups = b["groups"].as_array().cloned().unwrap_or_default();
                 let pins = b["pins"].as_array().cloned().unwrap_or_default();
-                let gw = |g: &Value| {
-                    let n = g["windows"].as_array().map_or(1, |w| w.len()) as f32;
-                    n * APPWIN_W + (n - 1.0) * 8.0
-                };
-                let head = 22.0;
-                let row_h = head + APPWIN_H + 22.0;
-                // (the apps in rows, each row in the middle: a panel wider than its windows has no gap at one side)
-                let mut starts: Vec<f32> = Vec::new();
-                {
-                    let (mut used, mut first) = (0.0f32, true);
-                    let mut row: Vec<f32> = Vec::new();
-                    for g in &groups {
-                        let w_g = gw(g);
-                        if !first && used + 16.0 + w_g > w {
-                            row.push(used);
-                            used = w_g;
-                        } else {
-                            used = if first { w_g } else { used + 16.0 + w_g };
+                let tiles: Vec<(Value, Value)> = groups.iter().flat_map(|g| g["windows"].as_array().cloned().unwrap_or_default().into_iter().map(move |t| (t, g.clone()))).collect();
+                let cols = (((w + TILE_GAP) / (TILE_W + TILE_GAP)).floor() as usize).max(1).min(tiles.len().max(1));
+                let tw = ((w - (cols - 1) as f32 * TILE_GAP) / cols as f32).floor();
+                let th = (tw * 0.62).round();
+                let rows = tiles.len().div_ceil(cols);
+                let top = y + 3.0;
+                for (i, (it, g)) in tiles.iter().enumerate() {
+                    let (row, col) = (i / cols, i % cols);
+                    let r = Rect::new(x + col as f32 * (tw + TILE_GAP), top + row as f32 * (th + TILE_GAP), tw, th);
+                    let hwnd = it["hwnd"].as_i64().unwrap_or(0) as isize;
+                    if self.draw {
+                        if it["attention"] == true {
+                            self.p.round(Rect::new(r.x - 4.0, r.y - 4.0, r.w + 8.0, r.h + 8.0), 15.0, crate::draw::AMBER.alpha(0.35));
                         }
-                        first = false;
-                    }
-                    row.push(used);
-                    for u in row {
-                        starts.push(x + ((w - u) / 2.0).max(0.0));
-                    }
-                }
-                let mut row_i = 0;
-                let (mut cx, mut cy) = (starts.first().copied().unwrap_or(x), y);
-                for g in &groups {
-                    let w_g = gw(g);
-                    if cx > starts.get(row_i).copied().unwrap_or(x) && cx + w_g > x + w {
-                        row_i += 1;
-                        cx = starts.get(row_i).copied().unwrap_or(x);
-                        cy += row_h + 14.0;
-                    }
-                    // its name
-                    let pic = Rect::new(cx, cy + 2.0, 16.0, 16.0);
-                    if self.draw && !self.p.picture(s(g, "image"), pic, 4.0) {
-                        self.round(pic, 4.0, GROUND);
-                    }
-                    self.text(s(g, "name"), cx + 22.0, cy + 10.0, 11.5, Weight::Semibold, (w_g - 22.0).max(40.0), TEXT);
-                    // its windows
-                    let mut wx = cx;
-                    for it in g["windows"].as_array().cloned().unwrap_or_default() {
-                        let r = Rect::new(wx, cy + head, APPWIN_W, APPWIN_H);
-                        if self.draw {
-                            if it["attention"] == true {
-                                self.p.round(Rect::new(r.x - 4.0, r.y - 4.0, r.w + 8.0, r.h + 8.0), 13.0, crate::draw::AMBER.alpha(0.35));
-                            }
-                            // (the one you were in: ringed in the theme's colour)
-                            if it["front"] == true {
-                                self.p.round(Rect::new(r.x - 2.5, r.y - 2.5, r.w + 5.0, r.h + 5.0), 12.0, accent());
-                                self.p.round(Rect::new(r.x - 0.5, r.y - 0.5, r.w + 1.0, r.h + 1.0), 10.0, FACE);
-                            }
-                            if hovered(r) {
-                                self.p.round(Rect::new(r.x - 1.0, r.y - 1.0, r.w + 2.0, r.h + 2.0), 10.0, LIT);
-                            }
-                            self.p.round(r, 10.0, GROUND);
+                        // (the one you were in: ringed in the theme's colour)
+                        if it["front"] == true {
+                            self.p.round(Rect::new(r.x - 2.5, r.y - 2.5, r.w + 5.0, r.h + 5.0), 14.0, accent());
+                            self.p.round(Rect::new(r.x - 0.5, r.y - 0.5, r.w + 1.0, r.h + 1.0), 12.0, FACE);
                         }
-                        let hwnd = it["hwnd"].as_i64().unwrap_or(0) as isize;
+                        self.p.round(r, 12.0, if hovered(r) { LIT } else { GROUND });
                         if hwnd != 0 {
-                            if self.draw {
-                                self.thumbs.push((hwnd, Rect::new(r.x + 2.0, r.y + 2.0, r.w - 4.0, r.h - 4.0)));
+                            self.thumbs.push((hwnd, r));
+                        } else {
+                            // (put away: no picture, its app's icon in its middle)
+                            let z = 34.0;
+                            let pr = Rect::new(r.x + r.w / 2.0 - z / 2.0, r.y + r.h * 0.58 - z / 2.0, z, z);
+                            if !self.p.picture(s(it, "image"), pr, 8.0) {
+                                self.icon("dot", pr.x + 9.0, pr.y + 9.0, 16.0, DIM);
                             }
-                        } else if self.draw {
-                            let z = 32.0;
-                            let pr = Rect::new(r.x + r.w / 2.0 - z / 2.0, r.y + r.h / 2.0 - z / 2.0, z, z);
-                            if !self.p.picture(s(&it, "image"), pr, 8.0) {
-                                self.icon("dot", pr.x + 8.0, pr.y + 8.0, 16.0, DIM);
-                            }
                         }
-                        // (working hard: its use stands up on its edge)
-                        if self.draw && it["cpu"].as_f64().unwrap_or(0.0) >= 0.10 {
-                            crate::peek::use_bars(self.p, &it, r.right() - 13.0, r.bottom() - 5.0, r.h - 14.0);
+                        tile_over(self.p, r, it, g, HOVER.with(|h| h.get()));
+                        if hwnd != 0 {
+                            OVERS.with(|o| o.borrow_mut().push((hwnd, r, it.clone(), g.clone())));
                         }
-                        // its title (without its app's name), scrolling when long; its sound at its end
-                        let t = if s(&it, "short").is_empty() { s(&it, "title") } else { s(&it, "short") };
-                        let mw = if it["audio"].is_array() { 16.0 } else { 0.0 };
-                        self.text(t, r.x + 2.0, r.bottom() + 11.0, 10.5, Weight::Regular, r.w - 4.0 - mw, DIM);
-                        if let (Some(v), true) = (it["audio"].as_array(), self.draw) {
-                            crate::peek::sound_bars(self.p, v, r.right() - 6.0, r.bottom() + 11.0, 8.0);
-                        }
-                        self.hit_tip(r, Press::Action(s(&it, "action").to_string(), Value::Null), it["title"].clone());
-                        self.last_hit(false, it["menu"].clone());
-                        wx += APPWIN_W + 8.0;
                     }
-                    cx += w_g + 16.0;
+                    // (making sound: its bar's speaker, volume, what it plays; before the tile, so they are found first)
+                    if g["sound"] == true && g["volume"].is_number() && g["progress"].is_null() {
+                        let key = s(g, "key");
+                        let (_, mute, track, media) = tile_bar(r, g);
+                        if self.draw {
+                            note_slider(&format!("appvol:{key}"), s_num(g, "volume"));
+                        }
+                        let muted = g["muted"] == true;
+                        self.hit_tip(mute, Press::Action(format!("appmute:{key}"), Value::Null), Value::String(if muted { "Unmute" } else { "Mute" }.into()));
+                        self.hit(track, Press::Seek(format!("appvol:{key}")));
+                        if let Some([prev, play, next]) = media {
+                            let src = s(&g["media"], "source");
+                            self.hit(prev, Press::Action(format!("mediaprev:{src}"), Value::Null));
+                            self.hit(play, Press::Action(format!("mediatoggle:{src}"), Value::Null));
+                            self.hit(next, Press::Action(format!("medianext:{src}"), Value::Null));
+                        }
+                    }
+                    self.hit_tip(r, Press::Action(s(it, "action").to_string(), Value::Null), it["title"].clone());
+                    self.last_hit(false, it["menu"].clone());
                 }
-                let mut h = if groups.is_empty() { 0.0 } else { cy - y + row_h };
-                // its pinned ones, closed: a row of icons, under a thin line
+                let mut h = if tiles.is_empty() { 0.0 } else { 3.0 + rows as f32 * th + (rows - 1) as f32 * TILE_GAP + 3.0 };
+                // its pinned ones, closed: rows of icons, as many as they need
                 if !pins.is_empty() {
-                    if !groups.is_empty() {
-                        self.round(Rect::new(x, y + h + 6.0, w, 1.0), 0.5, TRACK);
-                        h += 14.0;
+                    if !tiles.is_empty() {
+                        h += 10.0;
                     }
-                    let mut px = x;
-                    for p in &pins {
-                        let r = Rect::new(px, y + h, 30.0, 30.0);
+                    let per = (((w - 4.0 + 10.0) / 40.0).floor() as usize).max(1);
+                    let prow = pins.len().div_ceil(per);
+                    for (i, p) in pins.iter().enumerate() {
+                        let r = Rect::new(x + 4.0 + (i % per) as f32 * 40.0, y + h + (i / per) as f32 * 40.0, 30.0, 30.0);
                         self.ghost(Rect::new(r.x - 3.0, r.y - 3.0, r.w + 6.0, r.h + 6.0), 9.0);
                         if self.draw && !self.p.picture(s(p, "image"), Rect::new(r.x + 3.0, r.y + 3.0, 24.0, 24.0), 6.0) {
                             self.round(Rect::new(r.x + 3.0, r.y + 3.0, 24.0, 24.0), 6.0, GROUND);
                         }
                         self.hit_tip(r, Press::Action(s(p, "action").to_string(), Value::Null), p["name"].clone());
-                        px += 40.0;
                     }
-                    h += 30.0;
+                    h += 30.0 + (prow - 1) as f32 * 40.0;
                 }
                 h
             }

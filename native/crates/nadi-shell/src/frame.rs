@@ -26,6 +26,7 @@ use windows::Win32::UI::Input::KeyboardAndMouse::*;
 use windows::Win32::UI::WindowsAndMessaging::*;
 
 mod edit;
+mod grip;
 mod pop;
 mod size;
 use pop::{is_pop, pop_key, unpop, PopMarks, PopMeta, POP_TOP};
@@ -289,6 +290,10 @@ struct Item {
     /// where its panel wants live pictures of windows (window, box: logical, in the piece), and the ones made (window, picture)
     thumb_boxes: Vec<(isize, Rect)>,
     thumbs: Vec<(isize, isize)>,
+    /// what goes over its windows' live pictures (window, box, tile, app), where the mouse was then, and the glass it is drawn on
+    overs: Vec<(isize, Rect, Value, Value)>,
+    over_hover: Option<(f32, f32)>,
+    over_piece: Option<Piece>,
     sections_open: HashSet<String>,
     sections_closed: HashSet<String>,
     hover_since: Option<Instant>,
@@ -496,6 +501,8 @@ pub struct Frame {
     /// the panels popped out as windows (by their pieces' keys), the one in front, the one held by its grip (screen, key, where it
     /// is held), an open panel pressed that may be pulled off its edge (screen, key, where), and the grip and switch shown
     pops: BTreeMap<String, PopMeta>,
+    /// each grip shown (a window's, a panel's handle): its springs
+    grips: HashMap<String, grip::GripAnim>,
     pop_top: Option<String>,
     pop_drag: Option<(usize, String, f32, f32)>,
     tear: Option<(usize, String, f32, f32)>,
@@ -687,6 +694,7 @@ impl Frame {
             drag_at: None,
             drag_join: None,
             pops: BTreeMap::new(),
+            grips: HashMap::new(),
             pop_top: None,
             pop_drag: None,
             tear: None,
@@ -935,9 +943,18 @@ impl Frame {
         for it in content["peek"]["dock"]["items"].as_array_mut().into_iter().flatten() {
             live(it);
         }
+        // (the dock open: each app's card its sound, and what it plays)
+        let cards = content["panel"]["body"].as_array().is_some_and(|b| b.iter().any(|b| b["groups"].is_array()));
+        let sessions = if cards { self.pc.media_seen.lock().unwrap().clone() } else { Value::Null };
         for b in content["panel"]["body"].as_array_mut().into_iter().flatten() {
             for it in b["items"].as_array_mut().into_iter().flatten() {
                 live(it);
+            }
+            for g in b["groups"].as_array_mut().into_iter().flatten() {
+                live(g);
+                if let Some(m) = media_of(&sessions, g) {
+                    g["media"] = m;
+                }
             }
         }
     }
@@ -1311,6 +1328,18 @@ impl Frame {
         // (a newer NADI, from its banner: fetched and installed)
         if action == "nadi_update" {
             crate::update::install();
+            return;
+        }
+        // (a window's menu: its background, or back into its widget)
+        if let Some((bg, k)) = action.strip_prefix("popbg:").and_then(|r| r.split_once(':')) {
+            self.set_pop_bg(k, bg);
+            return;
+        }
+        if let Some(k) = action.strip_prefix("popin:") {
+            let pk = pop::pop_key(k);
+            if self.pops.contains_key(&pk) {
+                self.pop_in(&pk);
+            }
             return;
         }
         // (its installer coming down: stopped)
@@ -2920,6 +2949,9 @@ impl Frame {
                     if let Some(g) = &it.glow {
                         self.screens[si].ov.remove_glass(g);
                     }
+                    if let Some(p) = &it.over_piece {
+                        self.screens[si].ov.remove_top(p);
+                    }
                     for (_, th) in &it.thumbs {
                         crate::thumbs::unregister(*th);
                     }
@@ -2972,6 +3004,9 @@ impl Frame {
                             buttons: Vec::new(),
                             thumb_boxes: Vec::new(),
                             thumbs: Vec::new(),
+                            overs: Vec::new(),
+                            over_hover: None,
+                            over_piece: None,
                             sections_open: HashSet::new(),
                             sections_closed: HashSet::new(),
                             hover_since: None,
@@ -3371,7 +3406,17 @@ impl Frame {
     /// The same; `kept`: the size made by hand over it, when there is one (taller than its content: what fills it gets the rest).
     fn panel_size_as(&self, s: f32, area: Bx, k: &str, place: Place, kept: bool) -> (f32, f32, f32) {
         let Some(w) = self.widgets.get(unpop(k)) else { return (PANEL_W, 100.0, 0.0) };
-        let panel = &w.content["panel"];
+        // (the dock: measured as it is drawn, what its apps play in it too)
+        let live;
+        let content = if w.content["peek"]["dock"].is_object() {
+            let mut c = w.content.clone();
+            self.dock_live(&mut c);
+            live = c;
+            &live
+        } else {
+            &w.content
+        };
+        let panel = &content["panel"];
         let side = matches!(place, Place::Edge(Edge::Left | Edge::Right));
         // (a panel may ask to be narrower: the tray's grid of icons)
         let pw = if side { PANEL_W_SIDE } else { PANEL_W };
@@ -3858,11 +3903,8 @@ impl Frame {
         // (open on its edge: room for its handle over its content, the handle shown while the mouse is on it)
         let handle = if is_pop(k) { 0.0 } else { HANDLE };
         content["\u{0}top"] = json!(handle);
-        let pulled = self.tear.as_ref().is_some_and(|(ts, tk, ..)| *ts == si && tk == k);
-        if handle > 0.0 && (pulled || self.hover.as_ref().is_some_and(|(hs, hk)| *hs == si && hk == k)) {
-            let since = self.screens[si].items.get(k).and_then(|it| it.hover_since).map_or(1.0, |t| t.elapsed().as_secs_f32());
-            content["\u{0}handle"] = json!(if pulled { 1.0 } else { (since / 0.12).min(1.0) });
-            content["\u{0}handle_w"] = json!(if pulled { (32.0 - self.tear_pull * 0.5).max(12.0) } else { 32.0 });
+        if let Some(g) = self.grips.get(k).filter(|g| handle > 0.0 && g.shown()) {
+            content["\u{0}grip"] = json!(g.now());
         }
         let held_here = self.hold.as_ref().filter(|h| h.si == si && h.key.as_deref() == Some(k)).map(|h| (h.rect, 0.0));
         let idle_faded = self.edit.is_some() && content["idle"] == true;
@@ -3877,12 +3919,15 @@ impl Frame {
         let inner = if top > 0.0 { shape::floating(&self.g.d2d_factory, shape.w, (shape.h - top * s).max(8.0), RADIUS_OPEN * s).ok() } else { None };
         // (a window going back: its content fading)
         let content_a = self.pops.get(k).map_or(1.0, |m| m.content_a);
-        let marks = self.pops.get(k).map(|m| m.strip_a * m.content_a).filter(|a| top > 0.0 && *a > 0.01).map(|a| (pop::bg_index(self.pop_bg(k)), a));
+        // (a window's grip, as its springs have it now)
+        let marks = self.grips.get(k).filter(|g| top > 0.0 && g.shown()).map(|g| (g.now(), self.pops.get(k).map_or(1.0, |m| m.content_a)));
         let vis_h = inner.as_ref().map_or(shape.body.h, |i| i.body.h);
         // (words too long for their room scroll: whether any did, from here)
         let _ = crate::draw::take_marquee();
         // (the mouse on its open panel: where, in the panel's own space, for its ghost buttons)
         let hover_at = (t > 0.5 && self.hover.as_ref().is_some_and(|(hs, hk)| *hs == si && hk == k) && self.mouse.0 == si).then(|| (self.mouse.1 - b.x, self.mouse.2 - b.y - top));
+        // (what goes over live pictures: only this panel's, from here)
+        let _ = blocks::take_overs();
         let drawn = self.g.draw_surface(&surface, |dc| {
             let mut under = |p: &Painter, body: Rect| {
                 if lit {
@@ -3932,9 +3977,10 @@ impl Frame {
             // (a side the mouse is near, to resize it by: lit faintly)
             if lit != 0 && t > 0.9 {
                 let bd = shape.body;
-                let (x0, y0, w0, h0) = (bd.x / s, bd.y / s + top, bd.w / s, bd.h / s - top);
+                // (a window: its whole side, its grip's strip too (it is part of it))
+                let (x0, y0, w0, h0) = (bd.x / s, bd.y / s, bd.w / s, bd.h / s);
                 let c = draw::accent().alpha(0.5);
-                let r = RADIUS_OPEN;
+                let r = crate::paint::rounded(RADIUS_OPEN, w0, h0);
                 if lit & size::LEFT != 0 {
                     p.round(Rect::new(x0 + 1.0, y0 + r, 2.0, h0 - 2.0 * r), 1.0, c);
                 }
@@ -3956,8 +4002,8 @@ impl Frame {
                     p.circle(cx, cy, 2.5, draw::accent());
                 }
             }
-            if let Some((now, ma)) = marks {
-                with_opacity(dc, &self.g, ma, || pop::paint_marks(&p, shape.w / s, now));
+            if let Some((g, ma)) = marks {
+                draw::grip(&p, shape.w / s / 2.0, pop::POP_TOP / 2.0 + 1.0, g, ma);
             }
             // (held: its ring filling round it)
             if let Some((r, frac)) = held_here {
@@ -4080,6 +4126,8 @@ impl Frame {
             }
         }
         it.thumb_boxes = if t < 0.35 { pictures.into_iter().filter_map(|(r, a)| a[6..].parse::<isize>().ok().map(|h| (h, r))).collect() } else { boxes };
+        it.overs = blocks::take_overs();
+        it.over_hover = hover_at;
         it.visible = vis_h / s - 2.0 * PAD - handle;
         let stick = w_stick && !self.wheeled.contains_key(k);
         if stick {
@@ -4170,6 +4218,10 @@ impl Frame {
             keep
         });
         if !show {
+            // (and what was drawn over them, with them)
+            if let Some(p) = it.over_piece.take() {
+                self.screens[si].ov.remove_top(&p);
+            }
             return;
         }
         for (w, r) in it.thumb_boxes.clone() {
@@ -4187,6 +4239,49 @@ impl Frame {
             let covered = menu.is_some_and(|m| m.x < b.x + r.x + r.w && b.x + r.x < m.x + m.w && m.y < b.y + r.y + r.h && b.y + r.y < m.y + m.h);
             crate::thumbs::place(th, px, !covered);
         }
+        self.draw_overs(si, k, b);
+    }
+
+    /// What goes over a panel's live pictures (a tile's name, its use, its sound), on the glass over the frame: Windows draws the
+    /// pictures over the panel itself. Gone when its pictures are.
+    fn draw_overs(&mut self, si: usize, k: &str, b: Bx) {
+        let s = self.screens[si].s;
+        let menu = self.menu.as_ref().filter(|m| m.si == si).map(|m| m.at);
+        let Some(it) = self.screens[si].items.get(k) else { return };
+        // (only over the pictures out, and not under a menu)
+        let shown: Vec<(Rect, Value, Value)> = it
+            .overs
+            .iter()
+            .filter(|(w, r, ..)| it.thumbs.iter().any(|(x, _)| x == w) && it.thumb_boxes.iter().any(|(x, _)| x == w) && !menu.is_some_and(|m| m.x < b.x + r.x + r.w && b.x + r.x < m.x + m.w && m.y < b.y + r.y + r.h && b.y + r.y < m.y + m.h))
+            .map(|(_, r, t, g)| (*r, t.clone(), g.clone()))
+            .collect();
+        let hover = it.over_hover;
+        if shown.is_empty() {
+            if let Some(p) = self.screens[si].items.get_mut(k).and_then(|it| it.over_piece.take()) {
+                self.screens[si].ov.remove_top(&p);
+            }
+            return;
+        }
+        let need = ((b.w * s).ceil() as u32 + 2, (b.h * s).ceil() as u32 + 2);
+        let fits = it.over_piece.as_ref().is_some_and(|p| p.alloc.0 >= need.0 && p.alloc.1 >= need.1);
+        if !fits {
+            if let Some(p) = self.screens[si].items.get_mut(k).and_then(|it| it.over_piece.take()) {
+                self.screens[si].ov.remove_top(&p);
+            }
+            let Ok(p) = self.screens[si].ov.top_piece(&self.g, need.0 + 32, need.1 + 32) else { return };
+            if let Some(it) = self.screens[si].items.get_mut(k) {
+                it.over_piece = Some(p);
+            }
+        }
+        let Some(piece) = self.screens[si].items.get_mut(k).and_then(|it| it.over_piece.as_mut()) else { return };
+        let _ = piece.place((b.x * s).round() as i32, (b.y * s).round() as i32);
+        let surface = piece.surface.clone();
+        let p = self.painter(s);
+        let _ = self.g.draw_surface(&surface, |_| {
+            for (r, t, g) in &shown {
+                blocks::tile_over(&p, *r, t, g, hover);
+            }
+        });
     }
 
     /// The mouse reaches the windows only over the pieces.
@@ -4735,6 +4830,8 @@ impl Frame {
                 self.render(*si, k);
             }
         }
+        // the grips, while they spring
+        self.step_grips(dt);
         // a scrollbar, while it shows or fades
         if let Some((si, k)) = self.scrollbar_moves() {
             self.render(si, &k);
@@ -4862,7 +4959,8 @@ impl Frame {
         // the Volume Mixer's meters: how loud the output, the microphone and each program are now, springing (up at once, down
         // slowly); only while it is seen
         let qk = key(crate::builtin::PLUGIN, crate::builtin::QUICK);
-        if self.place_of(crate::builtin::PLUGIN, crate::builtin::QUICK).is_some() && self.seen_anywhere(&qk) {
+        let dock_open = self.screens.iter().any(|sc| sc.items.get(&key(crate::builtin::PLUGIN, crate::builtin::DOCK)).is_some_and(|it| it.open.now > 0.5));
+        if (self.place_of(crate::builtin::PLUGIN, crate::builtin::QUICK).is_some() && self.seen_anywhere(&qk)) || dock_open {
             let (out, mic) = crate::volume::peaks();
             let mut raw: HashMap<String, f32> = self.bi.audio.peaks().into_iter().map(|(k, v)| (format!("app:{k}"), v)).collect();
             raw.insert("master".into(), out);
@@ -4885,7 +4983,7 @@ impl Frame {
         let dock_seen = self.dock_placed() && self.seen_anywhere(&key(crate::builtin::PLUGIN, crate::builtin::DOCK));
         // (the dock at its largest, out: what plays is looked at, for its card)
         let card = dock_seen && self.large(&key(crate::builtin::PLUGIN, crate::builtin::DOCK));
-        self.pc.want.shell_media.store(card, Ordering::Relaxed);
+        self.pc.want.shell_media.store(card || dock_open, Ordering::Relaxed);
         // quick settings, placed and seen without the dock: its sound looked at with the windows
         if !dock_seen && self.place_of(crate::builtin::PLUGIN, crate::builtin::QUICK).is_some() && self.seen_anywhere(&key(crate::builtin::PLUGIN, crate::builtin::QUICK)) {
             self.sync_builtins(false);
@@ -5453,7 +5551,7 @@ impl Frame {
                 let rb = it.rest.now();
                 let rest_box = vec![rb.x, rb.y, rb.w, rb.h];
                 let buttons: Vec<Value> = it.buttons.iter().map(|(r, a)| json!([r.x, r.y, r.w, r.h, a])).collect();
-                list.push(json!({ "key": k, "monitor": sc.ov.monitor.name(), "place": place, "rank": self.place_of(&w.plugin, &w.id).map(|(_, r)| r).unwrap_or(0), "open": it.open.to == 1.0, "dot": it.slot.dot, "floating": it.floating, "shown": it.shown.now, "drag": it.drag_place.map(|p| p.name()), "drag_float": it.drag_float, "drag_down": it.drag_down, "drag_head": it.drag_head, "shape_box": self.shape_now(0, it).ok().map(|(_, b)| vec![b.x, b.y, b.w, b.h]), "in_liquid": self.in_liquid(it), "box": rest_box, "buttons": buttons, "content": w.content }));
+                list.push(json!({ "key": k, "monitor": sc.ov.monitor.name(), "place": place, "rank": self.place_of(&w.plugin, &w.id).map(|(_, r)| r).unwrap_or(0), "open": it.open.to == 1.0, "dot": it.slot.dot, "floating": it.floating, "shown": it.shown.now, "drag": it.drag_place.map(|p| p.name()), "drag_float": it.drag_float, "drag_down": it.drag_down, "drag_head": it.drag_head, "shape_box": self.shape_now(0, it).ok().map(|(_, b)| vec![b.x, b.y, b.w, b.h]), "in_liquid": self.in_liquid(it), "scroll": [it.scroll, it.content_h, it.visible], "box": rest_box, "buttons": buttons, "content": w.content }));
             }
         }
         let banner = self.banner.as_ref().map(|b| json!({ "plugin": b.plugin, "say": b.say, "at": b.at.map(|a| [a.x, a.y, a.w, a.h]) }));
@@ -5465,6 +5563,7 @@ impl Frame {
 
     /// How often to tick: every frame while something moves, else four times a second.
     fn tick_rate(&mut self) {
+        self.grip_targets();
         if let Some(l) = &self.launcher {
             l.keep_mouse_free();
         }
@@ -5472,7 +5571,7 @@ impl Frame {
         let banner_moves = launcher_moves || self.banner.as_ref().is_some_and(|b| b.slide.moving() || b.home.is_some_and(|h| h.moving()) || b.typing || b.marquee || b.glowing || (b.say["pill"]["rows"].is_array() && b.since.elapsed().as_secs_f32() < 2.0));
         let rolling = self.rolls.borrow().values().any(|r| r.2.elapsed().as_secs_f32() < ROLL_FOR + 0.1);
         let rolling = rolling || self.dock_front.as_ref().is_some_and(|f| f.2.elapsed().as_secs_f32() < DOCK_FRONT_S + 0.05);
-        let moving = banner_moves || rolling || self.scrollbar_moves().is_some() || self.hold.is_some() || self.tip.as_ref().is_some_and(|t| t.grow.moving() || t.moving) || self.menu.as_ref().is_some_and(|m| m.grow.moving() || m.marquee) || self.ghost.as_ref().is_some_and(|g| g.rest.moving()) || self.screens.iter().any(|s| s.items.values().any(|i| i.open.moving() || i.rest.moving() || i.swell.moving())) || self.pops.values().any(|m| m.anim.is_some() || (m.strip_a > 0.0 && m.strip_a < 1.0)) || self.tear.is_some();
+        let moving = banner_moves || rolling || self.scrollbar_moves().is_some() || self.hold.is_some() || self.tip.as_ref().is_some_and(|t| t.grow.moving() || t.moving) || self.menu.as_ref().is_some_and(|m| m.grow.moving() || m.marquee) || self.ghost.as_ref().is_some_and(|g| g.rest.moving()) || self.screens.iter().any(|s| s.items.values().any(|i| i.open.moving() || i.rest.moving() || i.swell.moving())) || self.pops.values().any(|m| m.anim.is_some() || (m.strip_a > 0.0 && m.strip_a < 1.0)) || self.tear.is_some() || self.grips_moving();
         let alive = self.files_dragging || self.screens.iter().any(|s| s.items.values().any(|i| (i.alive && i.shown.now > 0.01) || i.shown.moving())) || self.hover.is_some() || self.press.is_some() || self.drag.is_some();
         // (widgets that show as the mouse comes: the mouse is looked at often)
         let watching = self.menu.is_some() || self.edit.is_some() || !self.pops.is_empty() || (self.click_to_open() && self.screens.iter().any(|s| s.items.values().any(|i| i.open.to == 1.0))) || !(self.config.reveal.is_empty() || self.config.reveal == "all") || self.screens.iter().any(|s| s.full || (s.maxed && self.config.auto_hide == "maximized"));
@@ -5596,6 +5695,17 @@ impl Frame {
                     }
                 }
             }
+            return;
+        }
+        // (editing: nothing in a widget answers, so nothing is pressed by mistake; a press only picks a widget up)
+        if self.edit.is_some() {
+            if self.edit_press(si, x, y) {
+                self.tick_rate();
+                return;
+            }
+            self.press = self.item_at(si, x, y).filter(|k| !is_pop(k)).map(|k| (si, k, x, y, Instant::now()));
+            self.mouse = (si, x, y);
+            self.tick_rate();
             return;
         }
         // (a window's grip or switch; an open panel pressed where nothing is, to be pulled off its edge)
@@ -6499,6 +6609,11 @@ impl Frame {
             self.menu_click(si, x, y);
             return;
         }
+        // (editing: a click does nothing in a widget)
+        if self.edit.is_some() {
+            self.press = None;
+            return;
+        }
         // (a press that was let go after it moved is no click)
         // (a window is never picked up: its presses are not kept as one, and are clicks)
         if self.press.take().is_none() && self.item_at(si, x, y).is_some_and(|k| !is_pop(&k)) && !self.in_banner(si, x, y) {
@@ -6642,6 +6757,15 @@ impl Frame {
     /// The right button on a widget: its menu (merged or floating, where it goes, hidden), and the frame's own (monitors, taskbar).
     pub fn context_menu(&mut self, si: usize, x: f32, y: f32) {
         let k = self.item_at(si, x, y);
+        // (editing: only a widget's own menu (its look, its place), never what is in it (a tray icon's, an app's))
+        if self.edit.is_some() {
+            if self.menu_open() {
+                self.close_menu();
+            } else {
+                self.open_menu(si, k, x, y);
+            }
+            return;
+        }
         // (on a tray icon: its app's own menu)
         if let Some(it) = k.as_ref().and_then(|k| self.screens[si].items.get(k)) {
             if let Ok((_, b)) = self.shape_now(si, it) {
@@ -6666,6 +6790,10 @@ impl Frame {
         // (a second right-click puts the menu away)
         if self.menu_open() {
             self.close_menu();
+            return;
+        }
+        // (on a window's grip: its own menu)
+        if self.pop_context(si, x, y) {
             return;
         }
         // (on an app on the dock at rest: its own menu)
@@ -6730,7 +6858,7 @@ impl Frame {
     }
 
     /// A thing's own menu (a right-click on a window in the dock), where the mouse is.
-    fn open_items_menu(&mut self, si: usize, plugin: String, items: Vec<Value>, x: f32, y: f32) {
+    pub(super) fn open_items_menu(&mut self, si: usize, plugin: String, items: Vec<Value>, x: f32, y: f32) {
         self.drop_menu();
         let (w, h) = crate::menu::items_size(items.len());
         let s = self.screens[si].s;
@@ -7376,6 +7504,10 @@ impl Frame {
     }
 
     pub fn wheel(&mut self, si: usize, x: f32, y: f32, delta: f32) {
+        // (editing: the wheel does nothing in a widget)
+        if self.edit.is_some() {
+            return;
+        }
         let Some(k) = self.item_at(si, x, y) else { return };
         if k == key(crate::builtin::PLUGIN, crate::builtin::QUICK) && self.screens[si].items.get(&k).is_some_and(|i| i.open.now < 0.6) {
             self.bi.nudge_volume(delta > 0.0);
@@ -7545,10 +7677,10 @@ pub fn paint_piece(p: &Painter, g: &Gfx, dc: &windows::Win32::Graphics::Direct2D
             // (room over the content for its handle, the handle in it while the mouse is on it)
             let top = content["\u{0}top"].as_f64().unwrap_or(0.0) as f32;
             let inner = Rect::new(body.x + PAD, body.y + PAD + top, body.w - 2.0 * PAD, body.h - 2.0 * PAD - top);
-            if let Some(ha) = content["\u{0}handle"].as_f64() {
+            if let Some(g) = content["\u{0}grip"].as_array() {
                 let cy = body.y + (PAD + top) / 2.0 + 1.0;
-                let hw = content["\u{0}handle_w"].as_f64().unwrap_or(32.0) as f32;
-                p.round(Rect::new(body.x + body.w / 2.0 - hw / 2.0, cy - 2.0, hw, 4.0), 2.0, draw::DIM.alpha(0.7 * a * ha as f32));
+                let at = |i: usize| g.get(i).and_then(|v| v.as_f64()).unwrap_or(0.0) as f32;
+                draw::grip(p, body.x + body.w / 2.0, cy, [at(0), at(1), at(2), at(3)], a);
             }
             // (washed at its top in a picture's colours (a cover's), fading into the panel)
             if let Some((r, gr, bl)) = panel["wash"].as_str().and_then(|w| crate::images::tone(p.pc, w)) {

@@ -1,9 +1,9 @@
 //! Popped out: an open widget's panel, taken off its edge (pulled away from it, or Pop Out in its menu), floats as a small window
 //! anywhere on the screen: a wiki beside a game. It is the same widget (its plugin hears the same presses); the widget keeps its
-//! place on the edge with a dot under it. A grip over the window (while the mouse is on it) moves it, and a three-way switch beside it
-//! picks its background: solid, see-through, or none. See-through and none let clicks through to what is under it until the mouse
-//! rests on it, or the hold key is held. Its close (top right, while the mouse is on it), or its widget pressed while it is in front, sends it back. Where
-//! it stood is kept for each widget and monitor.
+//! place on the edge with a dot under it. A grip bar along the window's top (while the mouse is on it) moves it; right-clicked, its menu
+//! picks its background (solid, see-through, or none) or closes it. See-through and none let clicks through to what is under it
+//! until the mouse rests on it, or the hold key is held. Close in its menu, or its widget pressed while it is in front, sends it
+//! back. Where it stood is kept for each widget and monitor.
 //!
 //! A plugin may ask for its widget's window itself, in its content: `window = { open, remember, ground }`. `open` set (or cleared)
 //! brings its window out (or sends it back), as if pressed; a widget with a panel and no peek is a window only, with no place on an
@@ -18,9 +18,8 @@ use windows::Win32::Graphics::DirectComposition::{IDCompositionVisual, IDComposi
 
 /// the key of a widget's window among the pieces of a screen (never a widget's own: those have no NUL)
 const POP: &str = "\u{0}pop\u{0}";
-/// the strip along a window's top that holds its grip and its switch (shown while the mouse is on it)
-pub(super) const POP_TOP: f32 = 24.0;
-const TOGGLE: f32 = 22.0;
+/// the strip along a window's top that holds its grip (shown while the mouse is on it)
+pub(super) const POP_TOP: f32 = 20.0;
 /// resting this long on a see-through window makes it take clicks
 const REST: Duration = Duration::from_millis(350);
 /// the grip stays this long after the mouse left the window
@@ -94,50 +93,7 @@ pub(super) struct PopMarks {
     pub key: String,
 }
 
-/// Where a window's grip, its switch's three, and its close are (in the window, `w` wide): the close in the top right corner, the
-/// switch beside it, the grip all the rest of its top strip.
-pub(super) fn marks_rects(w: f32) -> (Rect, [Rect; 3], Rect) {
-    let close = Rect::new(w - 12.0 - TOGGLE, 2.0, TOGGLE, POP_TOP - 2.0);
-    let tx = close.x - 8.0 - 3.0 * TOGGLE;
-    let toggles = [0, 1, 2].map(|i| Rect::new(tx + i as f32 * TOGGLE, 2.0, TOGGLE, POP_TOP - 2.0));
-    (Rect::new(0.0, 0.0, tx - 4.0, POP_TOP), toggles, close)
-}
-
-/// Draw a window's grip and switch (`now`: which background is on) in its top strip.
-pub(super) fn paint_marks(p: &Painter, w: f32, now: usize) {
-    let c = POP_TOP / 2.0 + 2.0;
-    // (the grip: a short bar in the middle, to take hold of)
-    p.round(Rect::new(w / 2.0 - 18.0, c - 2.0, 36.0, 4.0), 2.0, draw::DIM.alpha(0.8));
-    let (_, toggles, close) = marks_rects(w);
-    // (close: back into its widget)
-    p.icon("x", close.x + close.w / 2.0 - 6.0, c - 6.0, 12.0, draw::TEXT.alpha(0.85));
-    for (i, t) in toggles.iter().enumerate() {
-        let cx = t.x + t.w / 2.0;
-        if i == now {
-            p.round(Rect::new(cx - 9.0, c - 9.0, 18.0, 18.0), 9.0, draw::accent().alpha(0.85));
-        }
-        let r = Rect::new(cx - 5.0, c - 5.0, 10.0, 10.0);
-        match i {
-            0 => p.round(r, 3.0, draw::TEXT),
-            1 => {
-                p.round(r, 3.0, draw::TEXT.alpha(0.35));
-                p.round(Rect::new(r.x, r.y, r.w / 2.0, r.h), 2.0, draw::TEXT);
-            }
-            _ => {
-                // (none: its four corners alone)
-                for (dx, dy) in [(0.0, 0.0), (6.5, 0.0), (0.0, 6.5), (6.5, 6.5)] {
-                    p.round(Rect::new(r.x + dx, r.y + dy, 3.5, 3.5), 1.0, draw::TEXT);
-                }
-            }
-        }
-    }
-}
-
-pub(super) fn bg_index(bg: &str) -> usize {
-    BGS.iter().position(|b| *b == bg).unwrap_or(0)
-}
-
-const BGS: [&str; 3] = ["solid", "see", "none"];
+const BGS: [(&str, &str, &str); 3] = [("solid", "bg-solid", "Solid"), ("see", "bg-see", "See-Through"), ("none", "bg-none", "Clear")];
 
 impl Frame {
     /// How a widget's window is backed: "solid", "see" (see-through) or "none".
@@ -207,6 +163,9 @@ impl Frame {
                 buttons: Vec::new(),
                 thumb_boxes: Vec::new(),
                 thumbs: Vec::new(),
+                overs: Vec::new(),
+                over_hover: None,
+                over_piece: None,
                 sections_open: HashSet::new(),
                 sections_closed: HashSet::new(),
                 hover_since: None,
@@ -545,7 +504,38 @@ impl Frame {
         true
     }
 
-    /// The left button down on a window's grip or switch: the grip picks it up; the switch picks the next background. True: taken.
+    /// The right button on a window's top strip: its menu (its background, close). True: taken.
+    pub(super) fn pop_context(&mut self, si: usize, x: f32, y: f32) -> bool {
+        let Some(pk) = self.item_at(si, x, y).filter(|k| is_pop(k)) else { return false };
+        let Some(wb) = self.screens[si].items.get(&pk).map(|it| it.rest.now()) else { return false };
+        if y - wb.y >= POP_TOP {
+            return false;
+        }
+        let now = self.pop_bg(&pk);
+        let k = unpop(&pk).to_string();
+        let mut items: Vec<Value> = BGS.iter().map(|(bg, icon, label)| json!({ "icon": icon, "label": label, "on": *bg == now, "action": format!("popbg:{bg}:{k}") })).collect();
+        items.push(json!({ "icon": "x", "label": "Close", "action": format!("popin:{k}") }));
+        self.open_items_menu(si, crate::builtin::PLUGIN.into(), items, x, y);
+        true
+    }
+
+    /// A window's background chosen from its menu ("solid", "see", "none").
+    pub(super) fn set_pop_bg(&mut self, k: &str, bg: &str) {
+        let pk = pop_key(unpop(k));
+        let k = unpop(k).to_string();
+        self.change_config(|c| c.widgets.entry(k.clone()).or_default().pop_bg = if bg == "solid" { None } else { Some(bg.into()) });
+        if let Some(meta) = self.pops.get_mut(&pk) {
+            meta.live = true;
+        }
+        self.pop_layer(&pk);
+        if let Some(si) = (0..self.screens.len()).find(|&i| self.screens[i].items.contains_key(&pk)) {
+            self.render(si, &pk);
+        }
+        self.hit_regions();
+        self.commit();
+    }
+
+    /// The left button down on a window's grip: it picks it up. True: taken.
     pub(super) fn pop_press(&mut self, si: usize, x: f32, y: f32) -> bool {
         // (on a window: it comes to the front)
         if let Some(k) = self.item_at(si, x, y).filter(|k| is_pop(k)) {
@@ -556,36 +546,14 @@ impl Frame {
         let Some(pk) = self.pop_marks.as_ref().filter(|m| m.si == si).map(|m| m.key.clone()) else { return false };
         let Some(wb) = self.screens[si].items.get(&pk).map(|it| it.rest.now()) else { return false };
         let (lx, ly) = (x - wb.x, y - wb.y);
-        let inside = |r: &Rect| lx >= r.x && lx < r.x + r.w && ly >= r.y && ly < r.y + r.h;
-        let (grip, toggles, close) = marks_rects(wb.w);
-        if !inside(&Rect::new(0.0, 0.0, wb.w, POP_TOP)) {
+        if lx < 0.0 || lx >= wb.w || ly < 0.0 || ly >= POP_TOP {
             return false;
         }
-        if inside(&close) {
-            self.pop_in(&pk);
-            return true;
+        self.pop_drag = Some((si, pk, lx, ly));
+        unsafe {
+            let _ = SetCapture(self.screens[si].ov.hwnd);
         }
-        if inside(&grip) {
-            let Some(b) = self.screens[si].items.get(&pk).map(|it| it.rest.now()) else { return true };
-            self.pop_drag = Some((si, pk, x - b.x, y - b.y));
-            unsafe {
-                let _ = SetCapture(self.screens[si].ov.hwnd);
-            }
-            self.tick_rate();
-            return true;
-        }
-        if let Some(i) = toggles.iter().position(|t| inside(t)) {
-            let k = unpop(&pk).to_string();
-            let bg = BGS[i];
-            self.change_config(|c| c.widgets.entry(k.clone()).or_default().pop_bg = if bg == "solid" { None } else { Some(bg.into()) });
-            if let Some(meta) = self.pops.get_mut(&pk) {
-                meta.live = true;
-            }
-            self.pop_layer(&pk);
-            self.render(si, &pk);
-            self.hit_regions();
-            self.commit();
-        }
+        self.tick_rate();
         true
     }
 
