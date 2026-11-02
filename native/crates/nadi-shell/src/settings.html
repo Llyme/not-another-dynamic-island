@@ -118,6 +118,11 @@ input[type=range] { accent-color: var(--accent); flex: 1; min-width: 80px; }
 .hotdot { width: 6px; height: 6px; border-radius: 3px; background: var(--amber); flex: none; }
 .legend { display: flex; align-items: center; gap: 4px; margin-left: auto; }
 .legend i { width: 8px; height: 8px; border-radius: 2px; display: inline-block; margin-left: 8px; }
+/* (the page, before its first numbers: its own shape, shimmering; each graph's line drawing itself in its colour) */
+.skel { border-radius: 5px; background: linear-gradient(90deg, var(--card2) 0%, rgba(255,255,255,.09) 50%, var(--card2) 100%); background-size: 200% 100%; animation: shimmer 1.3s ease-in-out infinite; }
+@keyframes shimmer { 0% { background-position: 100% 0; } 100% { background-position: -100% 0; } }
+.ptile svg.draw path { stroke-dasharray: 420; stroke-dashoffset: 420; animation: drawline 1.8s ease-in-out infinite; }
+@keyframes drawline { 0% { stroke-dashoffset: 420; opacity: 1; } 70% { stroke-dashoffset: 0; opacity: 1; } 100% { stroke-dashoffset: 0; opacity: 0; } }
 </style>
 </head>
 <body>
@@ -132,6 +137,8 @@ const LOGO = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAEAAAABACAYAAACqaXHe
 const ICONS = {
   plugins: "M9 3v5M15 3v5M6 8h12v3a6 6 0 0 1-12 0zM12 17v4",
   perf: "M4 16.5a8 8 0 1 1 16 0M12 16.5l4-5",
+  download: "M12 4v11M7 10l5 5 5-5M5 20h14",
+  check: "M5 12.5l4.5 4.5L19 7.5",
   cpu: "M7 7h10v10H7zM4 10h3M4 14h3M17 10h3M17 14h3M10 4v3M14 4v3M10 17v3M14 17v3",
   mem: "M4 8h16v8H4zM8 8v8M12 8v8M16 8v8",
   drawing: "M4 18l4-6 4 3 4-7 4 4",
@@ -548,6 +555,34 @@ function spark(vals, color, lo, hi) {
   s.append(area, line);
   return s;
 }
+// (before the first numbers: the page as it will be, its numbers and bars shimmering, each graph's line drawing itself)
+function perfSkeleton(m) {
+  const sk = (w, h) => { const d = el("div", "skel"); d.style.width = w; d.style.height = h + "px"; return d; };
+  const tiles = el("div", "ptiles");
+  const accent = getComputedStyle(document.documentElement).getPropertyValue("--accent").trim() || "#5ac88c";
+  for (const [ico, color, d] of [["cpu", accent, "M0 34 C30 34 40 20 60 26 S95 38 115 22 150 12 200 24"], ["mem", "#b57de6", "M0 22 C40 21 80 23 120 22 S170 21 200 22"], ["drawing", "#4f8ff0", "M0 30 C25 30 35 14 55 22 S90 36 110 18 160 28 200 16"]]) {
+    const t = el("div", "ptile"); const th = el("div", "th");
+    th.append(icon(ico, "s"), sk("46px", 18));
+    const s = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+    s.setAttribute("viewBox", "0 0 200 44"); s.setAttribute("preserveAspectRatio", "none"); s.setAttribute("class", "spark draw");
+    const p = document.createElementNS("http://www.w3.org/2000/svg", "path");
+    p.setAttribute("d", d); p.setAttribute("fill", "none"); p.setAttribute("stroke", color); p.setAttribute("stroke-width", "1.6");
+    p.setAttribute("vector-effect", "non-scaling-stroke"); p.setAttribute("stroke-linecap", "round");
+    s.append(p); t.append(th, s); tiles.append(t);
+  }
+  m.append(tiles);
+  const c = el("div", "card");
+  const head = el("div", "row"); const hi = icon("plugins", "s"); hi.style.color = "var(--dim)"; head.append(hi); c.append(head);
+  for (const w of [88, 62, 74, 40]) {
+    const r = el("div", "prow");
+    const a = sk("24px", 24); a.style.borderRadius = "7px";
+    const n = el("span", "pn"); n.append(sk("78px", 10));
+    const b = el("div", "pbar"); b.style.background = "none"; const bi = sk(w + "%", 6); bi.style.borderRadius = "3px"; b.append(bi);
+    const v = el("span", "pv"); v.style.display = "flex"; v.style.justifyContent = "flex-end"; v.append(sk("38px", 10));
+    r.append(a, n, b, v); c.append(r);
+  }
+  m.append(c);
+}
 function pagePerf(root) {
   const P = S.perf;
   const m = el("div"); m.style.cssText = "display:flex;flex-direction:column;gap:12px"; root.append(m);
@@ -557,7 +592,7 @@ function pagePerf(root) {
   tipOn(pause, perfPaused ? "Go On" : "Pause");
   bar.append(pause);
   m.append(bar);
-  if (!P) { const w = el("div", "row"); w.append(el("span", "spin")); m.append(w); return; }
+  if (!P) { perfSkeleton(m); return; }
   const series = P.series || [];
   const col = i => series.map(v => v[i]);
   const tiles = el("div", "ptiles");
@@ -735,6 +770,23 @@ function pageAbout(m) {
   const g = el("div", "grow"); g.append(el("div", "name", "NADI"), el("div", "sub", S.version || ""));
   head.append(logo, g);
   m.append(head);
+  // (a newer NADI: fetched and installed from here, no browser; else up to date, looked for again with a press)
+  const u = S.update || { state: "current" };
+  const spin = () => el("span", "spin");
+  let urow;
+  if (u.state === "ready") urow = row(`Version ${u.version} Is Ready`, gh("Update", "acc", () => send("update"), "download"), "download");
+  else if (u.state === "fetching") urow = row(`Downloading Version ${u.version}`, spin(), "download");
+  else if (u.state === "installing") urow = row(`Installing Version ${u.version}`, spin(), "download");
+  else if (u.state === "looking") urow = row("Looking for a New Version", spin(), "refresh");
+  else if (u.state === "failed") {
+    urow = el("div"); urow.style.display = "flex"; urow.style.flexDirection = "column"; urow.style.gap = "8px";
+    urow.append(el("div", "note bad", u.error || "Something went wrong."));
+    urow.append(u.version ? row(`Version ${u.version} Is Ready`, gh("Try Again", "acc", () => send("update"), "download"), "download") : row("Look Again", gh(null, "", () => send("update_check"), "refresh"), "refresh"));
+  } else {
+    const again = gh(null, "", () => send("update_check"), "refresh"); tipOn(again, "Look Again");
+    urow = row("Up to Date", again, "check");
+  }
+  m.append(card(null, urow));
   m.append(card(null, row("Plugins Folder", gh("Open", "", () => send("open", { what: "plugins" }), "folder")), row("Data Folder", gh("Open", "", () => send("open", { what: "data" }), "folder"))));
 }
 

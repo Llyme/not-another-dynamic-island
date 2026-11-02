@@ -17,6 +17,7 @@ mod draw;
 mod events;
 mod eyes;
 mod frame;
+mod update;
 mod drop;
 mod recycle;
 mod perf;
@@ -143,6 +144,7 @@ fn run() -> windows::core::Result<()> {
                 settings::WM_SETTINGS => fr.settings_messages(),
                 drop::WM_DROP_HOVER => fr.drop_hover_changed(),
                 drop::WM_DROPPED => fr.dropped(),
+                update::WM_UPDATE => fr.update_changed(),
                 tray::WM_PINS => fr.take_pins(),
                 frame::WM_JOB => fr.jobs_done(),
                 trayhost::WM_TRAY_CHANGED => fr.tray_changed(),
@@ -352,6 +354,12 @@ fn main() {
             Ok(())
         }
         // (for checking: what is in the Recycle Bin; one of them restored)
+        // (for checking: NADI's newest release, and whether it is newer than this one)
+        Some("--update-check") => {
+            let r = nadi_core::repo::latest_nadi();
+            println!("{r:?} newer: {:?}", r.as_ref().ok().and_then(|o| o.as_ref()).map(|(v, _)| update::newer(v)));
+            Ok(())
+        }
         Some("--bin-list") => {
             unsafe {
                 let _ = CoInitializeEx(None, COINIT_APARTMENTTHREADED);

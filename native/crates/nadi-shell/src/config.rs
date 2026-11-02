@@ -122,6 +122,8 @@ pub struct Config {
     pub desk_keys: bool,
     /// the launcher open brings every widget out (over a game too)
     pub launcher_reveal: bool,
+    /// the newest version the person was told of (told once each)
+    pub update_told: String,
     /// "Pin to NADI Dock" and "Pin to NADI Apps" in File Explorer's right-click menu
     pub explorer_menu: bool,
     /// how near an edge the mouse brings hidden widgets out (logical px, 2 to 64), and how long it rests there first (ms)
@@ -142,7 +144,7 @@ impl Config {
 
 impl Default for Config {
     fn default() -> Self {
-        Config { widgets: BTreeMap::new(), monitors: "follow".into(), taskbar: "keep".into(), scale: 1.0, auto_hide: "fullscreen".into(), pinned: Vec::new(), launcher_pins: None, launcher_foot: None, win_key: "auto".into(), reveal: "all".into(), hold_key: "none".into(), open_on: "hover".into(), tray_pinned: Vec::new(), quiet_full: true, quiet_banners: Vec::new(), liquid: 50.0, theme: "#5ac88c".into(), theme2: "#e8b04a".into(), desk_map: BTreeMap::new(), desk_keys: true, launcher_reveal: false, explorer_menu: false, edge_reach: 6.0, edge_wait: 0 }
+        Config { widgets: BTreeMap::new(), monitors: "follow".into(), taskbar: "keep".into(), scale: 1.0, auto_hide: "fullscreen".into(), pinned: Vec::new(), launcher_pins: None, launcher_foot: None, win_key: "auto".into(), reveal: "all".into(), hold_key: "none".into(), open_on: "hover".into(), tray_pinned: Vec::new(), quiet_full: true, quiet_banners: Vec::new(), liquid: 50.0, theme: "#5ac88c".into(), theme2: "#e8b04a".into(), desk_map: BTreeMap::new(), desk_keys: true, launcher_reveal: false, update_told: String::new(), explorer_menu: false, edge_reach: 6.0, edge_wait: 0 }
     }
 }
 

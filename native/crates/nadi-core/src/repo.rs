@@ -145,6 +145,31 @@ fn http_get(url: &str, accept: &str, cap: usize) -> Result<Vec<u8>, Fetch> {
     Err(Fetch::Other("GitHub sent it round in circles.".into()))
 }
 
+/// NADI's own repository: its releases carry its installer (named `NADI-Setup-<version>.exe`).
+pub const NADI_REPO: &str = "Llyme/not-another-dynamic-island";
+
+fn fetch_text(f: Fetch) -> String {
+    match f {
+        Fetch::NotFound => "Not found on GitHub.".into(),
+        Fetch::Other(s) => s,
+    }
+}
+
+/// NADI's newest release: its version ("1.2.0") and where its installer is; none when there is no release.
+pub fn latest_nadi() -> Result<Option<(String, String)>, String> {
+    let tag = latest_tag(NADI_REPO).map_err(fetch_text)?;
+    Ok(tag.map(|t| {
+        let v = t.trim_start_matches('v').to_string();
+        let url = format!("https://github.com/{NADI_REPO}/releases/download/{t}/NADI-Setup-{v}.exe");
+        (v, url)
+    }))
+}
+
+/// A release's installer, fetched whole.
+pub fn fetch_installer(url: &str) -> Result<Vec<u8>, String> {
+    http_get(url, "application/octet-stream", 200 * 1024 * 1024).map_err(fetch_text)
+}
+
 /// The tag in the address the page of the latest release sends you on to.
 fn tag_from(location: &str) -> Option<String> {
     let tag = location.split("/releases/tag/").nth(1).map(|t| t.split(['?', '#']).next().unwrap_or(t).to_string());

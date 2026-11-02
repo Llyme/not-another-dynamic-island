@@ -200,12 +200,48 @@ impl<'a> Painter<'a> {
         } else {
             over * (1.0 - ease((ph - 2.0 * MARQUEE_WAIT - travel) / travel))
         };
+        // (each end fades softly where words go on past it: the start once they have moved off it, the end while there is more)
+        let fade = (size * 1.6).min(max_w * 0.25);
+        let a0 = (off / fade).clamp(0.0, 1.0);
+        let a1 = ((over - off) / fade).clamp(0.0, 1.0);
+        let s = self.s;
+        let bounds = D2D_RECT_F { left: x * s, top: (cy - size * 1.2) * s, right: (x + max_w) * s, bottom: (cy + size * 1.2) * s };
+        let mask = unsafe {
+            let stop = |position: f32, a: f32| D2D1_GRADIENT_STOP { position, color: D2D1_COLOR_F { r: 0.0, g: 0.0, b: 0.0, a } };
+            let k = fade / max_w;
+            let stops = [stop(0.0, 1.0 - a0), stop(k, 1.0), stop(1.0 - k, 1.0), stop(1.0, 1.0 - a1)];
+            self.dc
+                .CreateGradientStopCollection(&stops, D2D1_COLOR_SPACE_SRGB, D2D1_COLOR_SPACE_SRGB, D2D1_BUFFER_PRECISION_8BPC_UNORM, D2D1_EXTEND_MODE_CLAMP, D2D1_COLOR_INTERPOLATION_MODE_STRAIGHT)
+                .ok()
+                .and_then(|coll| windows::core::Interface::cast::<ID2D1GradientStopCollection>(&coll).ok())
+                .and_then(|coll| {
+                    let props = D2D1_LINEAR_GRADIENT_BRUSH_PROPERTIES { startPoint: D2D_POINT_2F { x: bounds.left, y: 0.0 }, endPoint: D2D_POINT_2F { x: bounds.right, y: 0.0 } };
+                    self.dc.CreateLinearGradientBrush(&props, None, &coll).ok()
+                })
+        };
         unsafe {
-            self.dc.PushAxisAlignedClip(&D2D_RECT_F { left: x * self.s, top: (cy - size * 1.2) * self.s, right: (x + max_w) * self.s, bottom: (cy + size * 1.2) * self.s }, D2D1_ANTIALIAS_MODE_ALIASED);
-        }
-        let _ = crate::paint::draw_words(self.dc, &full, (x - off) * self.s, cy * self.s - full.height / 2.0, c);
-        unsafe {
-            self.dc.PopAxisAlignedClip();
+            match &mask {
+                Some(br) => {
+                    let params = D2D1_LAYER_PARAMETERS1 {
+                        contentBounds: bounds,
+                        geometricMask: std::mem::ManuallyDrop::new(None),
+                        maskAntialiasMode: D2D1_ANTIALIAS_MODE_PER_PRIMITIVE,
+                        maskTransform: windows::Foundation::Numerics::Matrix3x2::identity(),
+                        opacity: 1.0,
+                        opacityBrush: std::mem::ManuallyDrop::new(Some(br.clone().into())),
+                        layerOptions: D2D1_LAYER_OPTIONS1_NONE,
+                    };
+                    self.dc.PushLayer(&params, None);
+                    let _ = crate::paint::draw_words(self.dc, &full, (x - off) * s, cy * s - full.height / 2.0, c);
+                    self.dc.PopLayer();
+                    let _ = std::mem::ManuallyDrop::into_inner(params.opacityBrush);
+                }
+                None => {
+                    self.dc.PushAxisAlignedClip(&bounds, D2D1_ANTIALIAS_MODE_ALIASED);
+                    let _ = crate::paint::draw_words(self.dc, &full, (x - off) * s, cy * s - full.height / 2.0, c);
+                    self.dc.PopAxisAlignedClip();
+                }
+            }
         }
         MARQUEE.with(|m| m.set(true));
         max_w

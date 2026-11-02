@@ -733,6 +733,7 @@ impl Frame {
         crate::sysw::start();
         crate::net::start();
         crate::recycle::start();
+        crate::update::start(f.msg_hwnd);
         crate::drop::set_notify(f.msg_hwnd);
         crate::radios::refresh();
         f.sync_sys();
@@ -787,6 +788,24 @@ impl Frame {
     fn sync_bin(&mut self) {
         let content = self.bin_widget();
         self.apply(vec![Update::Widget { plugin: crate::builtin::PLUGIN.into(), widget: crate::recycle::BIN.into(), content }]);
+    }
+
+    /// A newer NADI found (told once, in a banner: Update fetches and installs it), or its download done or failed: the settings
+    /// show where it stands.
+    pub fn update_changed(&mut self) {
+        if let crate::update::Status::Ready(v, _) = crate::update::status() {
+            if self.config.update_told != v {
+                let told = v.clone();
+                self.change_config(|c| c.update_told = told);
+                let say = json!({
+                    "title": format!("NADI {v}"),
+                    "text": "A new version is ready.",
+                    "pill": { "icon": "download", "ms": 12000, "key": "nadi-update", "buttons": [{ "label": "Update", "action": "nadi_update" }] },
+                });
+                self.say(crate::builtin::PLUGIN.into(), say);
+            }
+        }
+        self.push_settings();
     }
 
     /// A drag came over a widget that takes files, or left it.
@@ -1238,6 +1257,11 @@ impl Frame {
             let _ = self.tx.send(Command::Action { plugin, action, args });
             return;
         }
+        // (a newer NADI, from its banner: fetched and installed)
+        if action == "nadi_update" {
+            crate::update::install();
+            return;
+        }
         // (the Recycle Bin's: put back, deleted for good, emptied, opened, files dropped on it thrown away)
         if action.starts_with("bin_") {
             let parse = args["parse"].as_str().unwrap_or("").to_string();
@@ -1531,6 +1555,7 @@ impl Frame {
         let state = json!({
             "type": "state",
             "version": env!("CARGO_PKG_VERSION"),
+            "update": crate::update::json(),
             "autostart": crate::autostart::on(),
             "plugins": self.plugins,
             "config": self.config,
@@ -1576,6 +1601,9 @@ impl Frame {
                 "goto_done" => self.settings_goto = None,
                 // (the edge reach being dragged in the settings: its band on the screen itself, as it is moved)
                 "reach_preview" => self.show_reach(m["px"].as_f64().unwrap_or(0.0) as f32),
+                // (a newer NADI: fetched and installed; or looked for again now)
+                "update" => crate::update::install(),
+                "update_check" => crate::update::check(),
                 // (the Performance page open or shut, and over how long)
                 "perf" => {
                     self.perf_on = m["on"] == true;
@@ -2932,7 +2960,10 @@ impl Frame {
         let mut glow_line = [0.0f32; 4];
         let (sw, sh) = (self.screens[si].w, self.screens[si].h);
         for it in self.screens[si].items.values() {
-            if !self.in_liquid(it) {
+            // (a panel open on its edge: in the liquid too (under its own shape), so it runs into the edge and into the widgets
+            // beside it as a shut one does)
+            let open_panel = it.open.now > 0.01 && !is_pop(&it.slot.key) && !self.popped(&it.slot.key) && !it.floating && it.drag_place.is_none() && it.shown.now > 0.003;
+            if !self.in_liquid(it) && !open_panel {
                 continue;
             }
             let Ok((_, b)) = self.shape_now(si, it) else { continue };
@@ -2958,7 +2989,7 @@ impl Frame {
                 drops_lit.push(lit);
                 continue;
             }
-            let r = (depth.min(if place.horizontal() { b.h } else { b.w }) * 0.44).min(b.w.min(b.h) / 2.0);
+            let r = if open_panel { RADIUS_OPEN.min(b.w.min(b.h) / 2.0) } else { (depth.min(if place.horizontal() { b.h } else { b.w }) * 0.44).min(b.w.min(b.h) / 2.0) };
             // (coming out or going back in: as it goes, it sinks past its edge too, further than the neck reaches, so it melts into
             // the edge and nothing is left of it there when it is gone)
             let sink = (1.0 - it.shown.now.clamp(0.0, 1.0)) * (liquid_neck(px) * 1.5 + 4.0);
