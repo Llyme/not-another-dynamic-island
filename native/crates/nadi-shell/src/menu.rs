@@ -18,6 +18,8 @@ pub enum Act {
     AlwaysOpen,
     HideIdle,
     Bump,
+    /// the dock: the tray merged into it, or not
+    MergeTray,
     Hide,
     Edit,
     Settings,
@@ -46,6 +48,8 @@ pub struct State {
     pub can_pop: bool,
     /// its panel is out as a window
     pub popped: bool,
+    /// the dock: the tray merged into it (none: not the dock)
+    pub merge_tray: Option<bool>,
 }
 
 pub const W: f32 = 240.0;
@@ -92,7 +96,11 @@ pub fn draw_items(p: &Painter, items: &[serde_json::Value], hover: Option<usize>
         // (on: its icon in the theme colour, a dot at its end)
         let on = it["on"] == true;
         let c = if it["tone"] == "no" { red } else { draw::TEXT };
-        p.icon(it["icon"].as_str().unwrap_or("dot"), r.x + 12.0, r.y + MINI_ROW / 2.0 - 7.0, 14.0, if on { draw::accent() } else { c });
+        // (a picture of its own (a tray icon's), else its icon)
+        let pic = it["image"].as_str().is_some_and(|i| p.picture(i, Rect::new(r.x + 12.0, r.y + MINI_ROW / 2.0 - 7.0, 14.0, 14.0), 3.0));
+        if !pic {
+            p.icon(it["icon"].as_str().unwrap_or("dot"), r.x + 12.0, r.y + MINI_ROW / 2.0 - 7.0, 14.0, if on { draw::accent() } else { c });
+        }
         p.text(it["label"].as_str().unwrap_or(""), r.x + 36.0, r.y + MINI_ROW / 2.0, 12.0, Weight::Regular, r.w - 40.0 - if on { 14.0 } else { 0.0 }, c);
         if on {
             p.circle(r.right() - 12.0, r.y + MINI_ROW / 2.0, 2.5, draw::accent());
@@ -233,6 +241,9 @@ pub fn draw_widget(p: &Painter, st: &State, hover: Option<usize>, names: &mut Ve
     }
     toggles.push(("moon", "Hide When Idle", st.hide_idle, Act::HideIdle));
     toggles.push(("sparkle", "Bump When Something Happens", st.bump, Act::Bump));
+    if let Some(on) = st.merge_tray {
+        toggles.push(("merge", "Merge Tray", on, Act::MergeTray));
+    }
     let n = toggles.len() as f32;
     let step = (w - TOG) / (n - 1.0).max(1.0);
     for (i, (icon, name, on, act)) in toggles.into_iter().enumerate() {
@@ -288,7 +299,7 @@ pub fn preview(g: &crate::gfx::Gfx, pc: &std::sync::Arc<nadi_core::pc::Pc>) -> w
     let p = Painter { g, dc: &g.dc, s, pc, t: 0.0, viz: [0.0; 3] };
     let big = crate::shape::floating(&g.d2d_factory, w * s, h * s, RADIUS * s)?;
     let small = crate::shape::floating(&g.d2d_factory, mw * s, mh * s, RADIUS * s)?;
-    let st = State { floating: false, large: true, place: "top".into(), pinned: false, always_shown: true, over_full: false, always_open: false, hide_idle: true, bump: true, icon_only: Some(false), can_pop: true, popped: false };
+    let st = State { floating: false, large: true, place: "top".into(), pinned: false, always_shown: true, over_full: false, always_open: false, hide_idle: true, bump: true, icon_only: Some(false), can_pop: true, popped: false, merge_tray: None };
     let (tw, th) = (((w + mw + 60.0) * s) as u32, ((h + 40.0) * s) as u32);
     let px = g.snapshot(tw, th, [0.17, 0.2, 0.3, 1.0], |dc| unsafe {
         dc.SetTransform(&windows::Foundation::Numerics::Matrix3x2::translation(20.0 * s, 20.0 * s));

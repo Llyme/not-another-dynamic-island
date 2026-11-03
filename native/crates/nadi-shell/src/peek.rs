@@ -997,7 +997,8 @@ fn measure_at(p: &Painter, peek: &Value, horizontal: bool) -> f32 {
         let icon = dock_icon(dock_depth(peek));
         // (at its ends, its grips)
         let stages: f32 = if horizontal { items.iter().filter(|i| staged(peek, i)).map(|i| stage_w(p, peek, i) - icon).sum() } else { 0.0 };
-        return DOCK_END * 2.0 + n * icon + (n - 1.0) * DOCK_GAP + stages;
+        let _ = n;
+        return DOCK_END * 2.0 + dock_along(peek, icon).max(icon) + stages;
     }
     if !horizontal {
         let (text, _) = words_of(peek);
@@ -1277,6 +1278,29 @@ fn dock_margins(depth: f32) -> (f32, f32) {
     // (the same each side: its icons in the middle of its depth)
     let m = (depth * 0.15).round().clamp(4.0, 8.0);
     (m, m)
+}
+
+/// The thin line between the dock's apps (pinned, or with a window) and its tray (apps in the tray alone, then tray icons of no
+/// app): `TRAY_SEP` each side of it, in place of a gap. Each of the tray's takes an app's room, its picture small in it, as a tray
+/// icon is, its marks the size of an app's.
+const TRAY_SEP: f32 = 9.0;
+
+/// How many apps, and how many of the tray, the dock has.
+fn dock_counts(peek: &Value) -> (usize, usize) {
+    let items = peek["dock"]["items"].as_array();
+    let tray_apps = items.map_or(0, |a| a.iter().filter(|i| i["tray_only"] == true).count());
+    let apps = items.map_or(0, |a| a.len()) - tray_apps;
+    (apps, tray_apps + peek["dock"]["trays"].as_array().map_or(0, |a| a.len()))
+}
+
+/// How long the dock's icons are end to end (an app on its card aside), the line between its apps and its tray too.
+fn dock_along(peek: &Value, icon: f32) -> f32 {
+    let (apps, tray) = dock_counts(peek);
+    let n = (apps + tray) as f32;
+    if n == 0.0 {
+        return 0.0;
+    }
+    n * icon + (n - 1.0) * DOCK_GAP + if apps > 0 && tray > 0 { 2.0 * TRAY_SEP - DOCK_GAP } else { 0.0 }
 }
 
 /// Its icons: what the depth leaves past its margins.
@@ -1564,7 +1588,8 @@ fn dock(p: &Painter, peek: &Value, body: Rect, horizontal: bool) -> Vec<(Rect, S
     let mut out = Vec::new();
     let n = items.len().max(1) as f32;
     // (on a side edge, more apps than fit: each smaller, down to a size)
-    let z = if horizontal { icon } else { ((body.h - 2.0 * DOCK_END - (n - 1.0) * DOCK_GAP) / n).clamp(14.0, icon) };
+    let _ = n;
+    let z = if horizontal { icon } else { (icon * (body.h - 2.0 * DOCK_END) / dock_along(peek, icon).max(icon)).clamp(14.0, icon) };
     // (past its ends, its grips)
     let mut at = if horizontal { body.x + DOCK_END } else { body.y + DOCK_END };
     // (on a side edge: a column of icons, as wide as every widget there; their names in their tips)
@@ -1575,7 +1600,41 @@ fn dock(p: &Painter, peek: &Value, body: Rect, horizontal: bool) -> Vec<(Rect, S
     // (toward the middle of the screen: which way a hop goes)
     let inward = if inner == "bottom" || inner == "right" { 1.0 } else { -1.0 };
     let place = |at: f32| if horizontal { Rect::new(at, cross - z / 2.0, z, z) } else { Rect::new(cross - z / 2.0, at, z, z) };
+    let mut last_gap = DOCK_GAP;
+    // (the line between the apps and the tray, from the end of the last app (`at`, its gap after it): where the tray starts)
+    let line = |at: f32| -> f32 {
+        let line_at = at - DOCK_GAP + TRAY_SEP;
+        let half = (z * 0.32).max(6.0);
+        let r = if horizontal { Rect::new(line_at - 0.5, cross - half, 1.0, 2.0 * half) } else { Rect::new(cross - half, line_at - 0.5, 2.0 * half, 1.0) };
+        p.round(r, 0.5, DIM.alpha(0.45));
+        line_at + TRAY_SEP
+    };
+    let mut divided = false;
     for (i, it) in items.iter().enumerate() {
+        if it["tray_only"] == true && !divided {
+            divided = true;
+            if i > 0 {
+                at = line(at);
+            }
+        }
+        // (in the tray alone: an app's room, its tray icon's picture small in it, as a tray icon is; its marks an app's size)
+        if it["tray_only"] == true {
+            let r = place(at);
+            if it["key"].as_str() == Some(hovered) {
+                p.round(Rect::new(r.x - 3.0, r.y - 3.0, r.w + 6.0, r.h + 6.0), (z + 6.0) * 0.3, FAINT);
+            }
+            let img = it["tray_image"].as_str().unwrap_or("");
+            if !tray_icon(p, img, r) {
+                let s = TRAY_PIC.min(z);
+                p.picture(it["image"].as_str().unwrap_or(""), Rect::new(r.x + (z - s) / 2.0, r.y + (z - s) / 2.0, s, s), s * 0.22);
+            }
+            icon_mark(p, it, r, z * 0.22);
+            out.push((r, format!("app:{i}")));
+            at += z + DOCK_GAP;
+            last_gap = DOCK_GAP;
+            continue;
+        }
+        last_gap = DOCK_GAP;
         // (the app in front, at the dock's largest: on its stage)
         if staged(peek, it) && horizontal {
             let sw = stage_w(p, peek, it);
@@ -1678,6 +1737,13 @@ fn dock(p: &Painter, peek: &Value, body: Rect, horizontal: bool) -> Vec<(Rect, S
         }
         // (downloading, or making sound: its one mark over it)
         icon_mark(p, it, pic, pic.w * 0.22);
+        // (its tray icon has a new picture (an unread mark): a dot on its corner, in the theme's second colour, cut out of it)
+        if it["news"] == true {
+            let d = (z * 0.17).clamp(3.0, 4.5);
+            let (cx, cy) = (pic.right() - d * 0.6, pic.y + d * 0.6);
+            p.circle(cx, cy, d + 1.6, crate::paint::Color(0.0, 0.0, 0.0, 1.0));
+            p.circle(cx, cy, d, crate::draw::AMBER);
+        }
         // (Win held: its number, under it)
         if peek["dock"]["numbers"] == true && i < 9 {
             let t = format!("{}", i + 1);
@@ -1688,6 +1754,21 @@ fn dock(p: &Painter, peek: &Value, body: Rect, horizontal: bool) -> Vec<(Rect, S
         }
         out.push((if rows { row } else { r }, format!("app:{i}")));
         at += z + DOCK_GAP;
+    }
+    // (its end: the tray icons of no app, small, after the apps)
+    if let Some(rest) = peek["dock"]["trays"].as_array().filter(|a| !a.is_empty()) {
+        let _ = last_gap;
+        let mut t = if !divided && !items.is_empty() { line(at) } else { at };
+        for r_ in rest {
+            let r = place(t);
+            let a = r_["action"].as_str().unwrap_or("").to_string();
+            if hovered == a {
+                p.round(Rect::new(r.x - 3.0, r.y - 3.0, r.w + 6.0, r.h + 6.0), (z + 6.0) * 0.3, FAINT);
+            }
+            tray_icon(p, r_["image"].as_str().unwrap_or(""), r);
+            out.push((r, a));
+            t += z + DOCK_GAP;
+        }
     }
     // (its grips: a small dot in the middle of each end while the mouse is on it; the one the mouse is over, brighter and a touch
     // bigger)

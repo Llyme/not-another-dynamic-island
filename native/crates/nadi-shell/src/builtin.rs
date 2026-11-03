@@ -223,6 +223,87 @@ fn progress_by_program() -> std::collections::HashMap<String, f32> {
     out
 }
 
+/// A tray icon, merged into an app on the dock (or at its end, an app's of none).
+#[derive(Clone, Debug, PartialEq)]
+pub struct TrayRef {
+    pub owner: isize,
+    pub uid: u32,
+    /// its picture's handle (drawn as "trayicon:<it>"), and its picture as a number (a new one: news)
+    pub icon: isize,
+    pub pic: u64,
+    pub tip: String,
+    /// what names it from one start to the next
+    pub key: String,
+}
+
+impl TrayRef {
+    fn of(i: &crate::trayhost::Icon) -> TrayRef {
+        TrayRef { owner: i.owner, uid: i.uid, icon: i.icon, pic: i.pic, tip: i.tip.lines().next().unwrap_or("").trim().to_string(), key: tray_key(i) }
+    }
+
+    pub fn action(&self) -> String {
+        format!("tray:{}:{}", self.owner, self.uid)
+    }
+}
+
+/// Is a program an app (one the Start menu has: a chat app, a game's launcher), not a part of one (a driver's helper, a
+/// service's)? Asked once each program, once the apps are known.
+fn is_app(exe: &str) -> bool {
+    thread_local! {
+        static KNOWN: std::cell::RefCell<std::collections::HashMap<String, bool>> = std::cell::RefCell::new(std::collections::HashMap::new());
+    }
+    if let Some(k) = KNOWN.with(|m| m.borrow().get(exe).copied()) {
+        return k;
+    }
+    let list = apps::cached();
+    if list.is_empty() {
+        return false;
+    }
+    let file = exe.rsplit(['\\', '/']).next().unwrap_or("").to_lowercase();
+    let name = apps::same_name(&winlist::app_name(exe));
+    let stem = apps::same_name(file.trim_end_matches(".exe"));
+    let yes = list.iter().any(|a| {
+        let id = a.id.to_lowercase();
+        let n = apps::same_name(&a.name);
+        id == exe || (!file.is_empty() && id.ends_with(&format!("\\{file}"))) || (!name.is_empty() && n == name) || (stem.len() > 3 && n == stem)
+    });
+    KNOWN.with(|m| m.borrow_mut().insert(exe.to_string(), yes));
+    yes
+}
+
+/// Is a tray icon's program (lower-case path) one app with an app on the dock that runs another (its window drawn by a helper
+/// program somewhere in its folder: a "ui" folder's, a web view's)? The other program in its folder (or the tray's in the app's),
+/// and the app's name or a window's title saying the tray app's name ("Store Client WebHelper" is the Store's; a game in the
+/// Store's folder, named its own, is not). Windows' own folder and shallow ones (Program Files itself) never count.
+fn one_app(tray_exe: &str, app: &DockApp) -> bool {
+    let dir = |p: &str| p.rsplit_once('\\').map(|(d, _)| d.to_string()).unwrap_or_default();
+    let (t, a) = (dir(tray_exe), dir(&app.key));
+    let deep = |d: &str| d.split('\\').filter(|s| !s.is_empty()).count() >= 3 && !d.starts_with("c:\\windows");
+    let inside = |outer: &str, inner: &str| outer == inner || inner.starts_with(&format!("{outer}\\"));
+    let near = !t.is_empty() && !a.is_empty() && ((inside(&t, &a) && deep(&t)) || (inside(&a, &t) && deep(&a)));
+    if !near {
+        return false;
+    }
+    let name = apps::same_name(&winlist::app_name(tray_exe));
+    name.chars().count() >= 3 && (apps::same_name(&app.name).contains(&name) || app.windows.iter().any(|w| apps::same_name(&w.title).contains(&name)))
+}
+
+/// The tray icons by program (lower case), in the order they came; and those of no app.
+fn tray_by_program() -> (Vec<(String, TrayRef)>, Vec<TrayRef>) {
+    let mut list = tray_icons();
+    list.sort_by_key(|i| i.seq);
+    let (mut apps_, mut rest) = (Vec::new(), Vec::new());
+    for i in &list {
+        let exe = exe_of(i.pid).to_lowercase();
+        if !exe.is_empty() {
+            apps_.push((exe, TrayRef::of(i)));
+        } else {
+            rest.push(TrayRef::of(i));
+        }
+    }
+    (apps_, rest)
+}
+
 /// One app on the dock: pinned, open, or both.
 #[derive(Clone, Debug, PartialEq)]
 pub struct DockApp {
@@ -234,6 +315,8 @@ pub struct DockApp {
     pub windows: Vec<AppWindow>,
     /// what is opened for it (and what it is pinned as): the program, or a shortcut pinned as itself
     pub open: String,
+    /// its tray icons (the dock and the tray as one): the first on it, the rest in its menu
+    pub tray: Vec<TrayRef>,
 }
 
 /// What a press asks of the frame (beyond what is done here).
@@ -282,11 +365,13 @@ pub struct Builtins {
     looks: u32,
     /// each running program's share of the processor and of the memory, the last minute or so (once a second)
     history: std::collections::HashMap<String, std::collections::VecDeque<(f32, f32)>>,
+    /// each tray icon's picture as it was last seen (its app pressed, or in front): another since is news
+    tray_seen: std::collections::HashMap<String, u64>,
 }
 
 impl Builtins {
     pub fn new() -> Builtins {
-        Builtins { windows: Vec::new(), order: Vec::new(), scanned: None, volume: crate::volume::get(), usage: Default::default(), used_at: None, audio: crate::appaudio::AppAudio::new(), sounding: Default::default(), looks: 0, history: Default::default(), flashing: Default::default(), numbers: false, sys: Default::default(), net: Default::default(), radios: Default::default(), net_ask: None, desk_pending: None, focus: None, outputs: Vec::new(), inputs: Vec::new(), mic: None, app_volumes: Vec::new() }
+        Builtins { windows: Vec::new(), order: Vec::new(), scanned: None, volume: crate::volume::get(), usage: Default::default(), used_at: None, audio: crate::appaudio::AppAudio::new(), sounding: Default::default(), looks: 0, history: Default::default(), flashing: Default::default(), numbers: false, sys: Default::default(), net: Default::default(), radios: Default::default(), net_ask: None, desk_pending: None, focus: None, outputs: Vec::new(), inputs: Vec::new(), mic: None, app_volumes: Vec::new(), tray_seen: Default::default() }
     }
 
     /// Look at the windows again (at most twice a second); true when what the dock shows changed.
@@ -375,7 +460,7 @@ impl Builtins {
             } else {
                 format!("app:{}", p.id)
             };
-            out.push(DockApp { key, name: p.name.clone(), image, pinned: true, windows, open: p.id.clone() });
+            out.push(DockApp { key, name: p.name.clone(), image, pinned: true, windows, open: p.id.clone(), tray: Vec::new() });
         }
         for k in &self.order {
             if out.iter().any(|a| &a.key == k) {
@@ -385,9 +470,69 @@ impl Builtins {
             if windows.is_empty() {
                 continue;
             }
-            out.push(DockApp { key: k.clone(), name: winlist::app_name(k), image: format!("exe:{k}"), pinned: false, windows, open: k.clone() });
+            out.push(DockApp { key: k.clone(), name: winlist::app_name(k), image: format!("exe:{k}"), pinned: false, windows, open: k.clone(), tray: Vec::new() });
+        }
+        // (the dock and the tray as one: each tray icon on its program's app; an app only in the tray after the others)
+        if cfg.dock_tray {
+            let (by_program, _) = tray_by_program();
+            for (exe, t) in by_program {
+                if let Some(a) = out.iter_mut().find(|a| a.key == exe) {
+                    a.tray.push(t);
+                } else if let Some(a) = out.iter_mut().find(|a| a.tray.is_empty() && one_app(&exe, a)) {
+                    // (one app's two programs, its window's (a helper's) and its tray icon's (its own): the app's own name and
+                    // picture, unless pinned as something of one's own)
+                    if !a.pinned {
+                        a.name = winlist::app_name(&exe);
+                        a.image = format!("exe:{exe}");
+                    }
+                    a.tray.push(t);
+                } else if is_app(&exe) {
+                    out.push(DockApp { key: exe.clone(), name: winlist::app_name(&exe), image: format!("exe:{exe}"), pinned: false, windows: Vec::new(), open: exe.clone(), tray: vec![t] });
+                }
+            }
         }
         out
+    }
+
+    /// The tray icons of no app (a driver's, a helper's): at the dock's end, small.
+    pub fn dock_tray_rest(&self, cfg: &Config) -> Vec<TrayRef> {
+        if !cfg.dock_tray {
+            return Vec::new();
+        }
+        let apps = self.dock_apps(cfg);
+        let (by_program, mut rest) = tray_by_program();
+        for t in by_program.into_iter().map(|(_, t)| t) {
+            if !apps.iter().any(|a| a.tray.iter().any(|m| m.key == t.key)) {
+                rest.push(t);
+            }
+        }
+        rest
+    }
+
+    /// The tray icons looked at: one first seen, as it is; an app in front, its icons seen; gone ones forgotten.
+    pub fn tray_look(&mut self, cfg: &Config) {
+        if !cfg.dock_tray {
+            self.tray_seen.clear();
+            return;
+        }
+        let apps = self.dock_apps(cfg);
+        let mut live = std::collections::HashSet::new();
+        for a in &apps {
+            let front = a.windows.iter().any(|w| w.front);
+            for t in &a.tray {
+                live.insert(t.key.clone());
+                let seen = self.tray_seen.entry(t.key.clone()).or_insert(t.pic);
+                if front {
+                    *seen = t.pic;
+                }
+            }
+        }
+        self.tray_seen.retain(|k, _| live.contains(k));
+    }
+
+    /// Has one of an app's tray icons a new picture since it was seen (an unread mark)?
+    fn tray_news_of(&self, a: &DockApp) -> bool {
+        a.tray.iter().any(|t| self.tray_seen.get(&t.key).is_some_and(|s| *s != t.pic))
     }
 
     /// The dock, as a widget. Each running app: what it uses (its share of the processor, of the memory), how far what it
@@ -405,11 +550,20 @@ impl Builtins {
                 let file = a.key.rsplit(['\\', '/']).next().unwrap_or("").to_string();
                 let running = !a.windows.is_empty();
                 let in_apps = cfg.launcher_pins.as_ref().is_some_and(|l| l.iter().any(|p| p.kind == "app" && p.id.eq_ignore_ascii_case(&a.key)));
-                let mut menu = vec![
+                let mut menu = Vec::new();
+                // (its tray icon's own menu first: Windows will not let two menus be one, so one opens the other; its other tray
+                // icons, each a row)
+                if let Some(t) = a.tray.first() {
+                    menu.push(json!({ "image": format!("trayicon:{}", t.icon), "icon": "dots", "label": "Tray Menu", "action": format!("traymenu:{}:{}", t.owner, t.uid) }));
+                }
+                for t in a.tray.iter().skip(1) {
+                    menu.push(json!({ "image": format!("trayicon:{}", t.icon), "icon": "dot", "label": if t.tip.is_empty() { a.name.clone() } else { t.tip.clone() }, "action": t.action() }));
+                }
+                menu.extend([
                     json!({ "icon": "window-new", "label": if running { "New Window" } else { "Open" }, "action": format!("launch:{}", a.open) }),
                     json!({ "icon": if a.pinned { "unpin" } else { "pin" }, "label": if a.pinned { "Unpin" } else { "Pin" }, "action": format!("pin:{}", a.open) }),
                     json!({ "icon": "grid", "label": if in_apps { "Unpin from Apps" } else { "Pin to Apps" }, "action": format!("apppin:{}", a.key) }),
-                ];
+                ]);
                 if std::path::Path::new(&a.key).is_file() {
                     menu.push(json!({ "icon": "folder", "label": "Reveal in File Explorer", "action": format!("reveal:{}", a.key) }));
                 }
@@ -437,6 +591,12 @@ impl Builtins {
                     "progress": progress.get(&file).copied(),
                     "sound": self.sounding.contains(&a.key),
                     "attention": a.windows.iter().any(|w| self.flashing.contains(&w.hwnd)),
+                    // (in the tray alone (running, no window): dimmed, a hollow mark under it; a tray icon's new picture: a dot)
+                    // (pinned, it keeps its place and its picture: only the others go to the tray's side)
+                    "tray_only": !running && !a.pinned && !a.tray.is_empty(),
+                    "tray_image": a.tray.first().map(|t| format!("trayicon:{}", t.icon)),
+                    "tray_action": a.tray.first().map(|t| t.action()),
+                    "news": self.tray_news_of(a),
                     // (its right-click: new window, pin, its file in Explorer (a program on disk, not a store app's), close all (held))
                     "menu": menu,
                     // (the app in front: its window, and what it used lately, for the dock at its largest)
@@ -455,7 +615,8 @@ impl Builtins {
         let mut pins: Vec<Value> = Vec::new();
         for a in &apps {
             if a.windows.is_empty() {
-                pins.push(json!({ "image": a.image, "name": a.name, "action": format!("launch:{}", a.key) }));
+                let action = a.tray.first().map(|t| t.action()).unwrap_or_else(|| format!("launch:{}", a.key));
+                pins.push(json!({ "image": a.image, "name": a.name, "action": action }));
                 continue;
             }
             let first = tiles.len();
@@ -504,10 +665,12 @@ impl Builtins {
         let n = groups.iter().map(|g| g["windows"].as_array().map_or(0, |w| w.len())).sum::<usize>().clamp(1, 4) as f32;
         let width = (2.0 * 16.0 + 6.0 + 4.0 + n * crate::blocks::TILE_W + (n - 1.0) * crate::blocks::TILE_GAP).clamp(400.0, 1100.0);
         json!({
-            "peek": { "dock": { "items": items, "numbers": self.numbers } },
+            "peek": { "dock": { "items": items, "numbers": self.numbers, "trays": self.dock_tray_rest(cfg).iter().map(|t| json!({ "image": format!("trayicon:{}", t.icon), "action": t.action() })).collect::<Vec<_>>() } },
             "panel": { "width": width, "body": [{ "kind": "appwindows", "groups": groups, "pins": pins }] },
             "tiles": tiles,
             "tip": "Apps",
+            // (nothing pinned and nothing open: nothing to show; hidden as an idle widget is, unless shown anyway)
+            "idle": items.is_empty() && self.dock_tray_rest(cfg).is_empty(),
         })
     }
 
@@ -606,12 +769,34 @@ impl Builtins {
             }
             return (Effect::None, false);
         }
+        // (its tray icon's own menu, where the mouse is)
+        if let Some((owner, uid)) = action.strip_prefix("traymenu:").and_then(|r| r.split_once(':')) {
+            let mut pt = windows::Win32::Foundation::POINT::default();
+            unsafe {
+                let _ = windows::Win32::UI::WindowsAndMessaging::GetCursorPos(&mut pt);
+            }
+            crate::trayhost::click(owner.parse().unwrap_or(0), uid.parse().unwrap_or(0), crate::trayhost::Click::Right, pt.x, pt.y);
+            return (Effect::None, false);
+        }
         if let Some(i) = action.strip_prefix("app:").and_then(|i| i.parse::<usize>().ok()) {
             let Some(a) = apps.get(i) else { return (Effect::None, false) };
             for w in &a.windows {
                 self.flashing.remove(&w.hwnd);
             }
+            // (pressed: its tray icons' pictures seen)
+            for t in &a.tray {
+                self.tray_seen.insert(t.key.clone(), t.pic);
+            }
             match a.windows.len() {
+                // (in the tray alone: as a click on its tray icon (most bring their window))
+                0 if !a.tray.is_empty() => {
+                    let t = &a.tray[0];
+                    let mut pt = windows::Win32::Foundation::POINT::default();
+                    unsafe {
+                        let _ = windows::Win32::UI::WindowsAndMessaging::GetCursorPos(&mut pt);
+                    }
+                    crate::trayhost::click(t.owner, t.uid, crate::trayhost::Click::Left, pt.x, pt.y);
+                }
                 0 => apps::launch(&a.open),
                 // one: in front, it goes down; else it comes up
                 1 if a.windows[0].front => winlist::minimize(a.windows[0].hwnd),

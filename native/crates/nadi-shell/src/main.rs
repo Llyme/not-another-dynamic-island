@@ -9,6 +9,7 @@ mod apps;
 mod blocks;
 mod builtin;
 mod clip;
+mod crashdump;
 mod aura;
 mod config;
 mod director;
@@ -90,6 +91,8 @@ fn run() -> windows::core::Result<()> {
     let (tx, rx) = nadi_core::host::spawn(data.join("plugins"), Some(data.join("plugins.json")), pc.clone(), move || unsafe {
         let _ = PostMessageW(HWND(wake_to as _), tray::WM_WAKE, WPARAM(0), LPARAM(0));
     });
+    // (drawn without the graphics card, when asked: read before the drawing devices are made)
+    gfx::set_software(config::load().0.software_draw);
     let g = gfx::Gfx::new()?;
     keyhook::install(msg_hwnd);
     let frame = Rc::new(RefCell::new(frame::Frame::new(g, pc, tx.clone(), msg_hwnd)));
@@ -293,6 +296,8 @@ fn main() {
     // (what NADI starts gets the user's own surroundings, not those of what started NADI: started from inside an editor built on
     // Electron, it would pass on the switch that makes every Electron app it opens run as a bare script, with no window)
     std::env::remove_var("ELECTRON_RUN_AS_NODE");
+    // (a crash that is not a panic (a fault in a driver it called): where, and a dump of it)
+    crashdump::watch();
     // (a panic: what and where, kept in NADI's folder, the newest last)
     std::panic::set_hook(Box::new(|info| {
         if let Some(p) = nadi_core::paths::data_dir().map(|d| d.join("crash.log")) {

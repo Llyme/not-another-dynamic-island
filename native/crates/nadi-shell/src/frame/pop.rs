@@ -18,7 +18,7 @@ use windows::Win32::Graphics::DirectComposition::{IDCompositionVisual, IDComposi
 
 /// the key of a widget's window among the pieces of a screen (never a widget's own: those have no NUL)
 const POP: &str = "\u{0}pop\u{0}";
-/// the strip along a window's top that holds its grip (shown while the mouse is on it)
+/// the strip along a window's top that holds its grip (shown while the mouse is on it; right-clicked, its menu)
 pub(super) const POP_TOP: f32 = 20.0;
 /// resting this long on a see-through window makes it take clicks
 const REST: Duration = Duration::from_millis(350);
@@ -93,6 +93,25 @@ pub(super) struct PopMarks {
     pub key: String,
 }
 
+/// A widget's content as its window shows it: its panel's own content for when it is out (`panel.out.body`) in place of its panel,
+/// at its own width; else its panel as it is.
+pub(super) fn window_content(content: &mut Value) {
+    let out = content["panel"]["out"].clone();
+    if let Some(body) = out["body"].as_array().cloned() {
+        // (its head as it is: its title, its tile)
+        let panel = &mut content["panel"];
+        panel["body"] = json!(body);
+        if let Some(w) = out["size"][0].as_f64() {
+            panel["width"] = json!(w);
+        }
+    }
+}
+
+/// Has a widget something to show as a window: its panel (what it shows out, or at its widget)?
+pub(super) fn has_window(content: &Value) -> bool {
+    content["panel"].is_object()
+}
+
 const BGS: [(&str, &str, &str); 3] = [("solid", "bg-solid", "Solid"), ("see", "bg-see", "See-Through"), ("none", "bg-none", "Clear")];
 
 impl Frame {
@@ -117,7 +136,7 @@ impl Frame {
             self.pop_front(&pk);
             return;
         }
-        if !self.widgets.get(&k).is_some_and(|w| w.content["panel"].is_object()) {
+        if !self.widgets.get(&k).is_some_and(|w| has_window(&w.content)) {
             return;
         }
         // (being typed into on its edge: the box put away, or it keeps the panel there open)
@@ -134,7 +153,8 @@ impl Frame {
                 }
             }
         }
-        self.set_open(si, &k, false);
+        // (its plugin is not told its widget shut: it is open still, as its window (told so below); told it shut, a plugin that asked for
+        // its window would take it back at once)
         // (its widget's middle, before it shrinks to its stump: from the menu, the window grows out of it)
         let from_widget = self.screens[si].items.get(&k).and_then(|it| self.shape_now(si, it).ok()).map(|(_, b)| (b.x + b.w / 2.0, b.y + b.h / 2.0));
         let pulled = at.is_some();
@@ -225,7 +245,7 @@ impl Frame {
 
     /// A widget that asks to be remembered: its window out (on this monitor), or not.
     fn keep_popped(&mut self, k: &str, on: Option<String>) {
-        let remember = self.widgets.get(k).is_some_and(|w| w.content["window"]["remember"] == true);
+        let remember = self.widgets.get(k).is_some_and(|w| w.content["panel"]["out"]["remember"] == true);
         let has = self.config.widgets.get(k).and_then(|c| c.popped_on.clone());
         if (remember || has.is_some()) && has != on {
             let k = k.to_string();
@@ -462,7 +482,7 @@ impl Frame {
         for pk in keys {
             let k = unpop(&pk).to_string();
             // (its widget gone, or its panel: it goes back)
-            if !self.widgets.get(&k).is_some_and(|w| w.content["panel"].is_object()) {
+            if !self.widgets.get(&k).is_some_and(|w| has_window(&w.content)) {
                 self.pop_remove(&pk);
                 if self.screens[si].items.contains_key(&k) {
                     self.render(si, &k);
@@ -514,9 +534,23 @@ impl Frame {
         let now = self.pop_bg(&pk);
         let k = unpop(&pk).to_string();
         let mut items: Vec<Value> = BGS.iter().map(|(bg, icon, label)| json!({ "icon": icon, "label": label, "on": *bg == now, "action": format!("popbg:{bg}:{k}") })).collect();
+        items.push(json!({ "icon": "shrink", "label": "Back to Its Widget", "action": format!("popback:{k}") }));
         items.push(json!({ "icon": "x", "label": "Close", "action": format!("popin:{k}") }));
         self.open_items_menu(si, crate::builtin::PLUGIN.into(), items, x, y);
         true
+    }
+
+    /// A window sent back into its widget, and its widget's panel opened on its edge.
+    pub(super) fn pop_back(&mut self, pk: &str) {
+        let k = unpop(pk).to_string();
+        self.pop_in(pk);
+        if let Some(si) = (0..self.screens.len()).find(|&i| self.screens[i].items.contains_key(&k)) {
+            if self.widgets.get(&k).is_some_and(|w| w.content["panel"].is_object()) {
+                self.open_only(si, &k);
+                self.relayout_with(Some(&HashSet::new()));
+                self.commit();
+            }
+        }
     }
 
     /// A window's background chosen from its menu ("solid", "see", "none").

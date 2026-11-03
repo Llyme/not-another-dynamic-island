@@ -532,6 +532,11 @@ pub struct Launcher {
     naming: Option<String>,
     /// the mouse left (or is over nothing): no box round the one picked until the keys or the mouse pick one again
     unlit: bool,
+    /// where the pointer was last (on the screen): a "move" with the pointer still (Windows says so when the launcher appears under
+    /// it, or grows) picks nothing
+    mouse_at: (i32, i32),
+    /// what was searched for last: another search, the first found picked
+    searched: String,
     /// something in it moves by itself (a name gliding, the caret blinking): drawn again every frame while it is out
     alive: bool,
     /// opened over something that had the mouse (a game: the pointer held in its window, or hidden): where the pointer was, put back
@@ -566,11 +571,24 @@ unsafe extern "system" fn proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> 
 
 /// (for checking: with `NADI_LAUNCHER_LOG` set, what happens to the launcher is written there)
 pub fn log(what: &str) {
-    if let Some(p) = std::env::var_os("NADI_LAUNCHER_LOG") {
+    static PATH: std::sync::OnceLock<Option<std::ffi::OsString>> = std::sync::OnceLock::new();
+    if let Some(p) = PATH.get_or_init(|| std::env::var_os("NADI_LAUNCHER_LOG")) {
         use std::io::Write;
         if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(p) {
             let t = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis() % 100000).unwrap_or(0);
             let _ = writeln!(f, "{t:>6} {what}");
+        }
+    }
+}
+
+/// (with `NADI_LAUNCHER_LOG`: how long something took, written when it ends)
+struct Timed(&'static str, Instant);
+
+impl Drop for Timed {
+    fn drop(&mut self) {
+        let ms = self.1.elapsed().as_secs_f64() * 1000.0;
+        if ms >= 2.0 {
+            log(&format!("timing: {} {ms:.1} ms", self.0));
         }
     }
 }
@@ -681,6 +699,8 @@ impl Launcher {
                 freed: None,
                 ask: None,
                 unlit: false,
+                mouse_at: (i32::MIN, i32::MIN),
+                searched: String::new(),
                 grid: (PAD, 0.0, (W - 2.0 * PAD) / TILE_COLS as f32),
                 anim: std::collections::HashMap::new(),
                 anim_live: false,
@@ -698,7 +718,9 @@ impl Launcher {
         self.foot = foot;
         self.pins_out = None;
         self.apps_tidy();
+        let t = Instant::now();
         self.recent = recent_files(40);
+        log(&format!("timing: recent files {} ms", t.elapsed().as_millis()));
         self.s = scale;
         self.query.clear();
         self.view = View::Home;
@@ -707,10 +729,13 @@ impl Launcher {
         self.press = None;
         self.drag = None;
         self.naming = None;
-        // (nothing lit as it opens: the keys or the mouse light one)
+        // (nothing lit as it opens: the keys or the mouse light one; the pointer where it is, not a move)
         self.unlit = true;
+        self.mouse_at = cursor_at();
         self.anim.clear();
+        let t = Instant::now();
         self.search();
+        log(&format!("timing: first search {} ms", t.elapsed().as_millis()));
         let (pw, ph) = (((W + 2.0 * M) * scale) as i32, ((H_MAX + 2.0 * M) * scale) as i32);
         let cx = (area.left + area.right) / 2;
         let top = area.top + ((area.bottom - area.top) as f32 * 0.14) as i32 - (M * scale) as i32;
@@ -1112,6 +1137,7 @@ impl Launcher {
 
     /// What it shows for what is typed (or, with nothing typed, its pins, every app, or a folder), laid out.
     fn search(&mut self) {
+        let _timed = Timed("search", Instant::now());
         let q = self.query.trim().to_string();
         let inner = W - 2.0 * PAD;
         let mut out: Vec<(Hit, Look, Rect)> = Vec::new();
@@ -1132,7 +1158,10 @@ impl Launcher {
                     }
                 }
             } else {
-                for w in winlist::app_windows() {
+                let tw = Instant::now();
+                let wins = winlist::app_windows();
+                log(&format!("timing: windows listed {} ms ({})", tw.elapsed().as_millis(), wins.len()));
+                for w in wins {
                     let sc = apps::score(&w.title, &q).max(apps::score(&winlist::app_name(&w.exe), &q));
                     if sc > 0 {
                         found.push((sc + 5, Hit::Window(w.hwnd, w.title, w.exe)));
@@ -1335,10 +1364,13 @@ impl Launcher {
             }
         }
         self.h = (y + PAD).min(H_MAX);
-        let keep = self.items.get(self.sel).map(|(h, _, _)| format!("{h:?}"));
+        // (something else searched for: the first found picked; else the one picked stays picked when it is still there: a page
+        // turned, a list scrolled)
+        let fresh = self.query.trim() != self.searched;
+        self.searched = self.query.trim().to_string();
+        let keep = if fresh { None } else { self.items.get(self.sel).map(|(h, _, _)| format!("{h:?}")) };
         self.items = out;
         self.deco = deco;
-        // (the one picked stays picked when it is still there: a page turned, a list scrolled)
         self.sel = keep.and_then(|k| self.items.iter().position(|(h, _, _)| format!("{h:?}") == k)).unwrap_or(0);
         self.sel_at = Instant::now();
         self.hold = None;
@@ -2098,6 +2130,14 @@ impl Launcher {
                 Some(LRESULT(0))
             }
             WM_MOUSEMOVE | WM_LBUTTONDOWN | WM_LBUTTONUP => {
+                // (a move with the pointer still: the launcher came, or grew, under it; nothing picked by it)
+                if msg == WM_MOUSEMOVE {
+                    let now = cursor_at();
+                    if now == self.mouse_at {
+                        return Some(LRESULT(0));
+                    }
+                    self.mouse_at = now;
+                }
                 let (x, y) = ((lp.0 & 0xffff) as i16 as f32 / self.s - M, ((lp.0 >> 16) & 0xffff) as i16 as f32 / self.s - M);
                 // (a row's pictogram under the mouse: its tip after a moment)
                 if msg == WM_MOUSEMOVE {
@@ -2227,6 +2267,7 @@ impl Launcher {
     /// Draw it as it is now.
     pub fn render(&mut self, g: &Gfx, pc: &Arc<Pc>) {
         log(&format!("render t={:.3}", self.t));
+        let _timed = Timed("render", Instant::now());
         let s = self.s;
         let t = self.t.max(0.0);
         let h = self.h.max(2.0);
@@ -2705,12 +2746,19 @@ pub fn preview(g: &Gfx, pc: &Arc<Pc>, query: &str) -> windows::core::Result<(u32
         p.folder = "Games".into();
     }
     l.pins = pins;
+    let t = Instant::now();
     l.recent = recent_files(40);
+    log(&format!("timing: recent files {} ms", t.elapsed().as_millis()));
     match query {
         "@all" => l.view = View::All,
         _ => l.query = query.to_string(),
     }
+    let t = Instant::now();
     l.search();
+    log(&format!("timing: search {} ms", t.elapsed().as_millis()));
+    let t = Instant::now();
+    l.search();
+    log(&format!("timing: search again {} ms", t.elapsed().as_millis()));
     if query == "@menu" {
         l.query.clear();
         l.search();
@@ -2722,8 +2770,24 @@ pub fn preview(g: &Gfx, pc: &Arc<Pc>, query: &str) -> windows::core::Result<(u32
     let hi = l.target();
     let places = l.drawn_places();
     let v = Paint { places: &places, onto: None, query: &l.query, hi, items: &l.items, deco: &l.deco, pins: &l.pins, foot: &l.foot, held: None, tip: (0, 0.0), side_tip: None, drag: None, ctx: l.ctx.as_ref(), clip: l.clip, naming: false, unlit: false };
+    let t = Instant::now();
+    let _ = g.snapshot(pw, ph, [0.17, 0.2, 0.3, 1.0], |dc| {
+        paint(&p, dc, &shp, s, 1.0, l.h, 2.0, &v);
+    })?;
+    log(&format!("timing: first paint {} ms", t.elapsed().as_millis()));
+    let t = Instant::now();
     let px = g.snapshot(pw, ph, [0.17, 0.2, 0.3, 1.0], |dc| {
         paint(&p, dc, &shp, s, 1.0, l.h, 2.0, &v);
     })?;
+    log(&format!("timing: second paint {} ms", t.elapsed().as_millis()));
     Ok((pw, ph, px))
+}
+
+/// Where the pointer is on the screen (physical px).
+fn cursor_at() -> (i32, i32) {
+    let mut p = POINT::default();
+    unsafe {
+        let _ = GetCursorPos(&mut p);
+    }
+    (p.x, p.y)
 }

@@ -300,6 +300,26 @@ pub fn decode(dc: &ID2D1DeviceContext, bytes: &[u8]) -> Result<ID2D1Bitmap1> {
 /// A picture from the shell's bitmap of an icon. Its pixels are read and made sound first: an old icon's see-through edge comes with
 /// colour where there is no cover (drawn as it is, a pale frame round it), and one with no cover at all (no alpha) is all solid.
 fn from_hbitmap(dc: &ID2D1DeviceContext, hbmp: windows::Win32::Graphics::Gdi::HBITMAP) -> Option<ID2D1Bitmap1> {
+    let (w, h, px) = hbitmap_pixels(hbmp)?;
+    from_pixels(dc, w, h, &px)
+}
+
+/// A picture made of pixels (premultiplied BGRA, `w` × `h`).
+fn from_pixels(dc: &ID2D1DeviceContext, w: u32, h: u32, px: &[u8]) -> Option<ID2D1Bitmap1> {
+    unsafe {
+        let props = D2D1_BITMAP_PROPERTIES1 {
+            pixelFormat: windows::Win32::Graphics::Direct2D::Common::D2D1_PIXEL_FORMAT { format: windows::Win32::Graphics::Dxgi::Common::DXGI_FORMAT_B8G8R8A8_UNORM, alphaMode: windows::Win32::Graphics::Direct2D::Common::D2D1_ALPHA_MODE_PREMULTIPLIED },
+            dpiX: 96.0,
+            dpiY: 96.0,
+            bitmapOptions: D2D1_BITMAP_OPTIONS_NONE,
+            colorContext: std::mem::ManuallyDrop::new(None),
+        };
+        dc.CreateBitmap(windows::Win32::Graphics::Direct2D::Common::D2D_SIZE_U { width: w, height: h }, Some(px.as_ptr() as *const _), w * 4, &props).ok()
+    }
+}
+
+/// An hbitmap's pixels (premultiplied BGRA), the shell's faint frame round a small icon taken off.
+fn hbitmap_pixels(hbmp: windows::Win32::Graphics::Gdi::HBITMAP) -> Option<(u32, u32, Vec<u8>)> {
     use windows::Win32::Graphics::Gdi::*;
     unsafe {
         let mut bm = BITMAP::default();
@@ -340,14 +360,65 @@ fn from_hbitmap(dc: &ID2D1DeviceContext, hbmp: windows::Win32::Graphics::Gdi::HB
                 c[2] = c[2].min(a);
             }
         }
-        let props = D2D1_BITMAP_PROPERTIES1 {
-            pixelFormat: windows::Win32::Graphics::Direct2D::Common::D2D1_PIXEL_FORMAT { format: windows::Win32::Graphics::Dxgi::Common::DXGI_FORMAT_B8G8R8A8_UNORM, alphaMode: windows::Win32::Graphics::Direct2D::Common::D2D1_ALPHA_MODE_PREMULTIPLIED },
-            dpiX: 96.0,
-            dpiY: 96.0,
-            bitmapOptions: D2D1_BITMAP_OPTIONS_NONE,
-            colorContext: std::mem::ManuallyDrop::new(None),
-        };
-        dc.CreateBitmap(windows::Win32::Graphics::Direct2D::Common::D2D_SIZE_U { width: w as u32, height: h as u32 }, Some(px.as_ptr() as *const _), (w * 4) as u32, &props).ok()
+        Some((w as u32, h as u32, px))
+    }
+}
+
+/// The shell's pictures (an app's, as the Start menu shows it; a file's or a folder's, as Explorer does) are slow to make (tens of ms
+/// each): made on a thread of their own, their pixels handed back; none until then (what names one is drawn again when it comes).
+static SHELL_ASK: std::sync::OnceLock<std::sync::Mutex<std::sync::mpsc::Sender<String>>> = std::sync::OnceLock::new();
+static SHELL_DONE: std::sync::Mutex<Vec<(String, Option<(u32, u32, Vec<u8>)>)>> = std::sync::Mutex::new(Vec::new());
+
+thread_local! {
+    /// the shell's pictures asked for and not come yet
+    static SHELL_WAITING: RefCell<std::collections::HashSet<String>> = RefCell::new(std::collections::HashSet::new());
+}
+
+/// Ask the shell's thread for a picture ("app:<id>" or "shell:<path>"), once.
+fn ask_shell(name: &str) {
+    let first = SHELL_WAITING.with(|w| w.borrow_mut().insert(name.to_string()));
+    if !first {
+        return;
+    }
+    let tx = SHELL_ASK.get_or_init(|| {
+        let (tx, rx) = std::sync::mpsc::channel::<String>();
+        let _ = std::thread::Builder::new().name("nadi-shell-icons".into()).spawn(move || {
+            use windows::core::{Interface, HSTRING};
+            use windows::Win32::UI::Shell::*;
+            unsafe {
+                let _ = CoInitializeEx(None, COINIT_APARTMENTTHREADED);
+            }
+            for name in rx {
+                let px = unsafe {
+                    let (item, size): (Option<IShellItem>, i32) = if let Some(id) = name.strip_prefix("app:") {
+                        (crate::apps::item(id), 64)
+                    } else if let Some(path) = name.strip_prefix("shell:") {
+                        (SHCreateItemFromParsingName(&HSTRING::from(path), None).ok(), 48)
+                    } else {
+                        (None, 0)
+                    };
+                    item.and_then(|item| item.cast::<IShellItemImageFactory>().ok()).and_then(|f| f.GetImage(windows::Win32::Foundation::SIZE { cx: size, cy: size }, SIIGBF_ICONONLY | SIIGBF_BIGGERSIZEOK).ok()).and_then(|hbmp| {
+                        let px = hbitmap_pixels(hbmp);
+                        let _ = windows::Win32::Graphics::Gdi::DeleteObject(hbmp);
+                        px
+                    })
+                };
+                SHELL_DONE.lock().unwrap().push((name, px));
+                WEB_NEW.store(true, std::sync::atomic::Ordering::Relaxed);
+            }
+        });
+        std::sync::Mutex::new(tx)
+    });
+    let _ = tx.lock().unwrap().send(name.to_string());
+}
+
+/// The shell's pictures that came: made into pictures for this drawing device, and kept.
+fn take_shell(dc: &ID2D1DeviceContext) {
+    let done: Vec<(String, Option<(u32, u32, Vec<u8>)>)> = std::mem::take(&mut *SHELL_DONE.lock().unwrap());
+    for (name, px) in done {
+        SHELL_WAITING.with(|w| w.borrow_mut().remove(&name));
+        let bmp = px.and_then(|(w, h, px)| from_pixels(dc, w, h, &px));
+        CACHE.with(|c| c.borrow_mut().insert(name, bmp));
     }
 }
 
@@ -430,8 +501,14 @@ pub fn get(dc: &ID2D1DeviceContext, pc: &Arc<Pc>, name: &str) -> Option<ID2D1Bit
     if name.is_empty() {
         return None;
     }
+    take_shell(dc);
     if let Some(hit) = CACHE.with(|c| c.borrow().get(name).cloned()) {
         return hit;
+    }
+    // (an app's picture, a file's: from the shell's thread; none till it comes)
+    if (name.starts_with("app:") && crate::apps::plugin_image(&name[4..]).is_none()) || name.starts_with("shell:") {
+        ask_shell(name);
+        return None;
     }
     let uri: Option<String> = if let Some(path) = name.strip_prefix("exe:") {
         nadi_core::sensors::exeinfo::lookup(path).icon

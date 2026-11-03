@@ -263,7 +263,8 @@ function seg(options, value, onPick) {
   for (const [v, label] of options) { const b = el("button", v === value ? "on" : "", label); b.onclick = () => onPick(v); s.append(b); }
   return s;
 }
-function sw(on, onFlip) { const s = el("div", "switch" + (on ? " on" : "")); s.onclick = e => { e.stopPropagation(); onFlip(!on); }; return s; }
+// (flipped at once where it is pressed, not when NADI answers: pressed again before then, it flips back)
+function sw(on, onFlip) { const s = el("div", "switch" + (on ? " on" : "")); s.onclick = e => { e.stopPropagation(); on = !on; s.classList.toggle("on", on); onFlip(on); }; return s; }
 function gh(text, cls, onClick, ico) { const b = el("button", "gh" + (cls ? " " + cls : "")); if (ico) b.append(icon(ico, "s")); if (text) b.append(document.createTextNode(text)); b.onclick = e => { e.stopPropagation(); onClick(); }; return b; }
 function tiles(cols, items, value, onPick) {
   const t = el("div", "tiles"); t.style.gridTemplateColumns = `repeat(${cols}, 1fr)`;
@@ -729,6 +730,10 @@ function pagePerf(root) {
     }
     m.append(c);
   }
+  // (drawn without the graphics card: its driver kept out of NADI, for a driver that crashes)
+  const sc = el("div", "card");
+  sc.append(hintRow("Software Drawing", "Draws NADI without the graphics card, so a graphics driver that crashes can not take NADI with it. Uses a little more of the processor; the liquid edges move less smoothly.", sw(!!(S.config && S.config.software_draw), on => send("config", { patch: { software_draw: on } })), "cpu"));
+  m.append(sc);
 }
 
 // ----------------------------------------------------------------------------------------------------------------- look

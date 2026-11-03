@@ -25,6 +25,11 @@ pub enum Press {
     View(String),
     /// a card that can be carried (held a moment, then dragged): pressed quickly, its action; its id
     Card(String, String),
+    /// a point on a curve (its id; none: the curve's ground, where a double-click adds one) and its curve's block (its axes, its
+    /// actions, and `area`: where it is drawn, in the panel)
+    Point(String, Value),
+    /// a menu, opened under it (its rows as a thing's own menu's)
+    Menu(Value),
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -385,6 +390,27 @@ pub fn desk_cell_at(lx: f32, ly: f32) -> Option<(i32, i32)> {
     Some(((x / g.cell.0).floor() as i32 + g.min.0, (y / g.cell.1).floor() as i32 + g.min.1))
 }
 
+thread_local! {
+    /// a curve's point being dragged: its id, and where it is now (in its axes' values)
+    static POINTING: std::cell::RefCell<Option<(String, f32, f32)>> = const { std::cell::RefCell::new(None) };
+}
+
+pub fn set_pointing(at: Option<(String, f32, f32)>) {
+    POINTING.with(|s| *s.borrow_mut() = at);
+}
+
+/// Where a place in a curve's box is, in its axes' values (`spec`: the curve's block, its `area` in it).
+pub fn curve_value(spec: &Value, lx: f32, ly: f32) -> (f32, f32) {
+    let a = &spec["area"];
+    let (ax, ay, aw, ah) = (f(a, "x"), f(a, "y"), f(a, "w").max(1.0), f(a, "h").max(1.0));
+    let fx = ((lx - ax) / aw).clamp(0.0, 1.0);
+    let fy = ((ly - ay) / ah).clamp(0.0, 1.0);
+    let (x0, x1) = (f(&spec["x"], "min"), f(&spec["x"], "max"));
+    let xv = if spec["x"]["log"] == true && x0 > 0.0 && x1 > 0.0 { x0 * (x1 / x0).powf(fx) } else { x0 + (x1 - x0) * fx };
+    let (y0, y1) = (f(&spec["y"], "min"), f(&spec["y"], "max"));
+    (xv, y1 - (y1 - y0) * fy)
+}
+
 /// The bar being dragged, and where its knob is (none: none is).
 pub fn set_sliding(at: Option<(String, f32)>) {
     SLIDING.with(|s| *s.borrow_mut() = at);
@@ -408,6 +434,16 @@ fn note_slider(action: &str, v: f32) {
 /// A slider's value, as last drawn (none: it is not a slider, a bar to seek on).
 pub fn slider_value(action: &str) -> Option<f32> {
     SLIDERS.with(|s| s.borrow().get(action).copied())
+}
+
+thread_local! {
+    /// the sliders the wheel does not turn (`wheel = false`: the wheel scrolls their panel instead)
+    static NO_WHEEL: std::cell::RefCell<HashSet<String>> = std::cell::RefCell::new(HashSet::new());
+}
+
+/// Does the wheel turn this slider?
+pub fn slider_wheel(action: &str) -> bool {
+    NO_WHEEL.with(|s| !s.borrow().contains(action))
 }
 
 /// Where the mouse is over the panel about to be drawn (none: not on it).
@@ -2730,15 +2766,17 @@ impl<'a, 'b> Ctx<'a, 'b> {
                     return h;
                 }
                 let h = 52.0;
-                // (its picture: a game's art, wide; else its app's icon; else a pictogram)
+                // (its picture: a game's art, wide; else its own icon; neither: none, its words from its start)
                 let img = s(b, "image");
+                let icon = s(b, "icon");
                 let wide = b["wide"] == true;
                 let pr = if wide { Rect::new(x, y + 4.0, 64.0, 30.0) } else { Rect::new(x, y + 3.0, 32.0, 32.0) };
-                if !(self.draw && !img.is_empty() && self.p.picture(img, pr, 7.0)) {
+                let pictured = !img.is_empty() || !icon.is_empty();
+                if pictured && !(self.draw && !img.is_empty() && self.p.picture(img, pr, 7.0)) {
                     self.round(Rect::new(x, y + 3.0, 32.0, 32.0), 9.0, TRACK);
-                    self.icon(if s(b, "icon").is_empty() { "download" } else { s(b, "icon") }, x + 8.0, y + 11.0, 16.0, DIM);
+                    self.icon(if icon.is_empty() { "download" } else { icon }, x + 8.0, y + 11.0, 16.0, DIM);
                 }
-                let tx = x + if wide { 74.0 } else { 42.0 };
+                let tx = x + if !pictured { 0.0 } else if wide { 74.0 } else { 42.0 };
                 let right = s(b, "right");
                 let rw = if right.is_empty() { 0.0 } else { self.p.measure(right, 12.0, Weight::Semibold, 90.0) + 8.0 };
                 self.text_end(right, x + w, y + 19.0, 12.0, Weight::Semibold, 90.0, TEXT);
@@ -3285,6 +3323,102 @@ impl<'a, 'b> Ctx<'a, 'b> {
             }
             // (the dock open: each app, its name over its windows (each its live picture, its title under it), the apps in rows; at
             // the foot, its pinned ones that are closed)
+            "curve" => {
+                // a curve over two axes (along: `x`, `{ min, max, log, marks = { { v, t } } }`; up: `y`, the same), drawn from `line`
+                // (its values, evenly across), and its `points` (`{ id, x, y }`) to take hold of: dragged, `drag` is told where (`{ id,
+                // x, y }`, and `done` when let go); clicked, `pick` (`{ id }`); the wheel over one, `wheel` (`{ id, up }`); a
+                // double-click on the ground, `add` (`{ x, y }`). `selected`: the one picked, lit. `ghost`: a second line (its values
+                // too), faint, behind it (an equalizer: what is heard, its preamp in it)
+                let h = b["height"].as_f64().unwrap_or(200.0) as f32;
+                let area = Rect::new(x + 8.0, y + 8.0, w - 16.0, h - 26.0);
+                let (x0, x1) = (f(&b["x"], "min"), f(&b["x"], "max"));
+                let (y0, y1) = (f(&b["y"], "min"), f(&b["y"], "max"));
+                let log = b["x"]["log"] == true && x0 > 0.0 && x1 > 0.0;
+                let px = |v: f32| {
+                    let fx = if log { (v.max(1e-6) / x0).ln() / (x1 / x0).ln() } else { (v - x0) / (x1 - x0).max(1e-6) };
+                    area.x + area.w * fx.clamp(0.0, 1.0)
+                };
+                let py = |v: f32| area.y + area.h * ((y1 - v) / (y1 - y0).max(1e-6)).clamp(0.0, 1.0);
+                let mut spec = b.clone();
+                spec["area"] = json!({ "x": area.x, "y": area.y, "w": area.w, "h": area.h });
+                if let Some(o) = spec.as_object_mut() {
+                    o.remove("line");
+                    o.remove("ghost");
+                }
+                let selected = s(b, "selected").to_string();
+                let dragging = POINTING.with(|p| p.borrow().clone());
+                let points: Vec<(String, f32, f32)> = b["points"]
+                    .as_array()
+                    .map(|a| {
+                        a.iter()
+                            .map(|pt| {
+                                let id = pt["id"].as_str().map(str::to_string).unwrap_or_else(|| pt["id"].to_string());
+                                match &dragging {
+                                    Some((d, dx, dy)) if *d == id => (id, *dx, *dy),
+                                    _ => (id, f(pt, "x"), f(pt, "y")),
+                                }
+                            })
+                            .collect()
+                    })
+                    .unwrap_or_default();
+                if self.draw {
+                    self.round(Rect::new(x, y, w, h), 14.0, crate::paint::Color(0.043, 0.047, 0.059, 1.0));
+                    let grid = crate::paint::Color(1.0, 1.0, 1.0, 0.07);
+                    for m in b["x"]["marks"].as_array().cloned().unwrap_or_default() {
+                        let gx = px(f(&m, "v"));
+                        self.p.round(Rect::new(gx, area.y, 1.0, area.h), 0.0, grid);
+                        self.text(s(&m, "t"), gx + 3.0, area.bottom() + 9.0, 9.5, Weight::Regular, 40.0, DIM);
+                    }
+                    for m in b["y"]["marks"].as_array().cloned().unwrap_or_default() {
+                        let v = f(&m, "v");
+                        let gy = py(v);
+                        self.p.round(Rect::new(area.x, gy, area.w, 1.0), 0.0, if v == 0.0 { crate::paint::Color(1.0, 1.0, 1.0, 0.14) } else { grid });
+                        let t = s(&m, "t");
+                        if !t.is_empty() {
+                            self.text(t, area.x + 3.0, gy - 7.0, 9.5, Weight::Regular, 40.0, DIM);
+                        }
+                    }
+                    // (its ghost: faint, thin, behind)
+                    let ghost: Vec<f32> = b["ghost"].as_array().map(|a| a.iter().map(|v| v.as_f64().unwrap_or(0.0) as f32).collect()).unwrap_or_default();
+                    if ghost.len() >= 2 {
+                        let n = ghost.len();
+                        let pts: Vec<(f32, f32)> = ghost.iter().enumerate().map(|(i, v)| (area.x + area.w * i as f32 / (n - 1) as f32, py(*v))).collect();
+                        self.p.line(&pts, 1.4, TEXT.alpha(0.28));
+                    }
+                    // (the curve: filled faintly down to its middle, its line over it)
+                    let line: Vec<f32> = b["line"].as_array().map(|a| a.iter().map(|v| v.as_f64().unwrap_or(0.0) as f32).collect()).unwrap_or_default();
+                    if line.len() >= 2 {
+                        let n = line.len();
+                        let zero = py(0.0_f32.clamp(y0.min(y1), y0.max(y1)));
+                        let pts: Vec<(f32, f32)> = line.iter().enumerate().map(|(i, v)| (area.x + area.w * i as f32 / (n - 1) as f32, py(*v))).collect();
+                        let col = if b["off"] == true { DIM } else { accent() };
+                        let step = area.w / (n - 1) as f32;
+                        for (lx, ly) in &pts {
+                            let (top, bot) = if *ly < zero { (*ly, zero) } else { (zero, *ly) };
+                            self.p.round(Rect::new(lx - step / 2.0, top, step + 0.4, (bot - top).max(0.0)), 0.0, col.alpha(0.13));
+                        }
+                        self.p.line(&pts, 2.0, col);
+                    }
+                    for (id, vx, vy) in &points {
+                        let (cx, cy) = (px(*vx), py(*vy));
+                        if *id == selected || dragging.as_ref().is_some_and(|(d, ..)| d == id) {
+                            self.p.circle(cx, cy, 10.0, accent().alpha(0.25));
+                            self.p.circle(cx, cy, 6.0, TEXT);
+                        } else {
+                            let over = hovered(Rect::new(cx - 8.0, cy - 8.0, 16.0, 16.0));
+                            self.p.circle(cx, cy, if over { 6.0 } else { 5.0 }, TEXT);
+                            self.p.circle(cx, cy, if over { 4.4 } else { 3.6 }, crate::paint::Color(0.043, 0.047, 0.059, 1.0));
+                        }
+                    }
+                }
+                // (its points first, so they are found before its ground)
+                for (id, vx, vy) in points.iter().rev() {
+                    let (cx, cy) = (px(*vx), py(*vy));
+                    self.hit(Rect::new(cx - 9.0, cy - 9.0, 18.0, 18.0), Press::Point(id.clone(), spec.clone()));
+                }
+                self.hit(area, Press::Point(String::new(), spec));
+                h
+            }
             "appwindows" => {
                 // every window a tile, its live picture filling it; what is drawn over the picture (its name, its use, its sound) is
                 // kept for the glass over the panel, where Windows does not draw over it; here too, for while the pictures are not out
@@ -3716,6 +3850,158 @@ impl<'a, 'b> Ctx<'a, 'b> {
             }
             "deskmap" => self.deskmap(b, x, y, w),
             // a thin line across, between groups
+            "row" => {
+                // a row of small things, left to right, one line tall; each `{ kind = ... }`:
+                // `button` (an icon, a ghost: `icon`, `tip`, `on` (its icon in the theme colour), `dot` (a small amber dot on its corner),
+                // `tone` ("no": red), `action` and `args`, or `menu` (pressed: that menu, its rows as a thing's own menu's)); `switch`
+                // (`on`, `action`, `args`, `tip`); `pill` (`text`, `image` or `icon`, `dot`, `action` and `args` or `menu`: a chevron after
+                // it); `seg` (`options = { { text | icon, value, tip } }`, `value`, `action`: sent `{ value }`); `num` (`text`, `unit`,
+                // `action`: pressed, typed, sent `{ text }`); `slider` (a slider block's fields: it takes what room is left, as a space does);
+                // `space` (what room is left, shared by every space and slider)
+                let items = b["items"].as_array().cloned().unwrap_or_default();
+                let h = 34.0;
+                let cy = y + h / 2.0;
+                const SEG_PAD: f32 = 3.0;
+                let width = |it: &Value| -> f32 {
+                    match s(it, "kind") {
+                        "button" => 32.0,
+                        "switch" => 42.0,
+                        "pill" => {
+                            let pic = if !s(it, "image").is_empty() || !s(it, "icon").is_empty() { 24.0 } else { 0.0 };
+                            let dot = if it["dot"] == true { 13.0 } else { 0.0 };
+                            let chev = if it["menu"].is_array() { 18.0 } else { 0.0 };
+                            12.0 + pic + self.p.measure(s(it, "text"), 12.5, Weight::Semibold, 220.0) + dot + chev + 12.0
+                        }
+                        "seg" => {
+                            let opts = it["options"].as_array().cloned().unwrap_or_default();
+                            2.0 * SEG_PAD + opts.iter().map(|o| if !s(o, "icon").is_empty() { 32.0 } else { self.p.measure(s(o, "text"), 11.5, Weight::Semibold, 120.0) + 22.0 }).sum::<f32>() + 2.0 * (opts.len().max(1) - 1) as f32
+                        }
+                        "num" => 20.0 + self.p.measure(s(it, "text"), 12.5, Weight::Semibold, 100.0) + if s(it, "unit").is_empty() { 0.0 } else { 4.0 + self.p.measure(s(it, "unit"), 10.5, Weight::Regular, 40.0) },
+                        _ => 0.0,
+                    }
+                };
+                let gap = 4.0;
+                let fixed: f32 = items.iter().map(width).sum::<f32>() + gap * (items.len().max(1) - 1) as f32;
+                let flexible = |it: &Value| matches!(s(it, "kind"), "space" | "slider");
+                let spaces = items.iter().filter(|i| flexible(i)).count().max(1) as f32;
+                let spare = ((w - fixed) / spaces).max(0.0);
+                let mut cx = x;
+                for it in &items {
+                    let kind = s(it, "kind");
+                    let iw = if flexible(it) { spare } else { width(it) };
+                    let action = s(it, "action").to_string();
+                    let tip = if s(it, "tip").is_empty() { Value::Null } else { Value::String(s(it, "tip").to_string()) };
+                    let press = |action: &str, args: &Value| if it["menu"].is_array() { Press::Menu(it["menu"].clone()) } else { Press::Action(action.to_string(), args.clone()) };
+                    match kind {
+                        "button" => {
+                            let br = Rect::new(cx, cy - 16.0, 32.0, 32.0);
+                            if self.draw {
+                                if hovered(br) {
+                                    self.p.circle(cx + 16.0, cy, 16.0, LIT);
+                                }
+                                let c = if s(it, "tone") == "no" { RED } else if it["on"] == true { accent() } else { TEXT };
+                                self.icon(s(it, "icon"), cx + 8.0, cy - 8.0, 16.0, c);
+                                if it["dot"] == true {
+                                    self.p.circle(cx + 25.0, cy - 9.0, 4.6, FACE);
+                                    self.p.circle(cx + 25.0, cy - 9.0, 3.4, AMBER);
+                                }
+                            }
+                            if !action.is_empty() || it["menu"].is_array() {
+                                self.hit_tip(br, press(&action, &it["args"]), tip);
+                            }
+                        }
+                        "switch" => {
+                            let on = it["on"] == true;
+                            let tr = Rect::new(cx + 1.0, cy - 12.0, 40.0, 24.0);
+                            if self.draw {
+                                self.p.round(tr, 12.0, if on { accent() } else { SLIDER_TRACK });
+                                let kx = if on { tr.right() - 12.0 } else { tr.x + 12.0 };
+                                let kc = if on { crate::paint::Color(1.0, 1.0, 1.0, 1.0) } else if hovered(tr) { TEXT } else { DIM };
+                                self.p.circle(kx, cy, 9.0, kc);
+                            }
+                            if !action.is_empty() {
+                                self.hit_tip(tr, Press::Action(action.clone(), it["args"].clone()), tip);
+                            }
+                        }
+                        "pill" => {
+                            let pr = Rect::new(cx, cy - 16.0, iw, 32.0);
+                            self.round(pr, 16.0, if hovered(pr) { LIT } else { TRACK });
+                            let mut tx = cx + 12.0;
+                            let image = s(it, "image");
+                            if !image.is_empty() {
+                                if self.draw && !self.p.picture(image, Rect::new(tx, cy - 8.0, 16.0, 16.0), 4.0) {
+                                    self.icon("dot", tx, cy - 8.0, 16.0, DIM);
+                                }
+                                tx += 24.0;
+                            } else if !s(it, "icon").is_empty() {
+                                self.icon(s(it, "icon"), tx, cy - 8.0, 16.0, accent());
+                                tx += 24.0;
+                            }
+                            let tw = self.text(s(it, "text"), tx, cy, 12.5, Weight::Semibold, 220.0, TEXT);
+                            tx += tw;
+                            if it["dot"] == true {
+                                if self.draw {
+                                    self.p.circle(tx + 9.0, cy, 3.5, AMBER);
+                                }
+                                tx += 13.0;
+                            }
+                            if it["menu"].is_array() {
+                                self.icon("chev-down", tx + 4.0, cy - 6.0, 12.0, DIM);
+                            }
+                            if !action.is_empty() || it["menu"].is_array() {
+                                self.hit_tip(pr, press(&action, &it["args"]), tip);
+                            }
+                        }
+                        "seg" => {
+                            let tr = Rect::new(cx, cy - 15.0, iw, 30.0);
+                            self.round(tr, 10.0, TRACK);
+                            let mut ox = cx + SEG_PAD;
+                            for o in it["options"].as_array().cloned().unwrap_or_default() {
+                                let icon = s(&o, "icon");
+                                let ow = if !icon.is_empty() { 32.0 } else { self.p.measure(s(&o, "text"), 11.5, Weight::Semibold, 120.0) + 22.0 };
+                                let orr = Rect::new(ox, cy - 12.0, ow, 24.0);
+                                let on = o["value"] == it["value"];
+                                if on {
+                                    self.round(orr, 7.5, CHOSEN);
+                                } else if hovered(orr) {
+                                    self.round(orr, 7.5, LIT);
+                                }
+                                if !icon.is_empty() {
+                                    self.icon(icon, ox + 7.0, cy - 9.0, 18.0, if on { accent() } else { DIM });
+                                } else {
+                                    let t = s(&o, "text");
+                                    let tw = self.p.measure(t, 11.5, Weight::Semibold, 120.0);
+                                    self.text(t, ox + (ow - tw) / 2.0, cy, 11.5, if on { Weight::Semibold } else { Weight::Regular }, 120.0, if on { TEXT } else { DIM });
+                                }
+                                if !action.is_empty() {
+                                    let otip = if s(&o, "tip").is_empty() { Value::Null } else { Value::String(s(&o, "tip").to_string()) };
+                                    self.hit_tip(orr, Press::Action(action.clone(), json!({ "value": o["value"] })), otip);
+                                }
+                                ox += ow + 2.0;
+                            }
+                        }
+                        "slider" => {
+                            self.block(it, cx, cy - 16.0, iw);
+                        }
+                        "num" => {
+                            let nr = Rect::new(cx, cy - 14.0, iw, 28.0);
+                            self.round(nr, 9.0, if hovered(nr) { LIT } else { TRACK });
+                            let t = s(it, "text");
+                            let tw = self.text(t, cx + 10.0, cy, 12.5, Weight::Semibold, 100.0, TEXT);
+                            let unit = s(it, "unit");
+                            if !unit.is_empty() {
+                                self.text(unit, cx + 10.0 + tw + 4.0, cy + 0.5, 10.5, Weight::Regular, 40.0, DIM);
+                            }
+                            if !action.is_empty() {
+                                self.hit_tip(nr, Press::Field(action.clone(), false, unit.to_string(), t.to_string(), false, Value::Null), tip);
+                            }
+                        }
+                        _ => {}
+                    }
+                    cx += iw + gap;
+                }
+                h
+            }
             "rule" => {
                 if self.draw {
                     self.p.round(Rect::new(x, y + 5.0, w, 1.0), 0.5, crate::paint::Color(0.118, 0.118, 0.137, 1.0));
@@ -3746,13 +4032,49 @@ impl<'a, 'b> Ctx<'a, 'b> {
                 let action = s(b, "action");
                 let given = f(b, "value").clamp(0.0, 1.0);
                 note_slider(action, given);
+                NO_WHEEL.with(|s| {
+                    let mut s = s.borrow_mut();
+                    if b["wheel"] == false {
+                        s.insert(action.to_string());
+                    } else {
+                        s.remove(action);
+                    }
+                });
                 let held = sliding(action);
+                // (held, with steps of its own (`range.step`): the knob goes from step to step, as its value does)
+                let held = held.map(|h| {
+                    let r = &b["range"];
+                    let (lo, hi) = (f(r, "min"), f(r, "max"));
+                    match r["step"].as_f64().map(|x| x as f32).filter(|x| *x > 0.0 && hi > lo) {
+                        Some(step) => {
+                            let val = (lo + (hi - lo) * h.clamp(0.0, 1.0)) / step;
+                            ((val.round() * step - lo) / (hi - lo)).clamp(0.0, 1.0)
+                        }
+                        None => h,
+                    }
+                });
                 let v = held.unwrap_or(given).clamp(0.0, 1.0);
                 let icon = s(b, "icon");
                 let image = s(b, "image");
                 let muted = b["muted"] == true;
                 let has_icon = !icon.is_empty() || !image.is_empty();
                 let left = if has_icon { x + 40.0 } else { x };
+                // (a button after it, its own: `after = { icon, on, action, tip }`; the rest of it that much narrower)
+                let after = b["after"].clone();
+                let w = if after.is_object() {
+                    let br = Rect::new(x + w - 32.0, y, 32.0, 32.0);
+                    if self.draw {
+                        if hovered(br) {
+                            self.p.circle(br.x + 16.0, br.y + 16.0, 16.0, LIT);
+                        }
+                        self.icon(s(&after, "icon"), br.x + 8.0, br.y + 8.0, 16.0, if after["on"] == true { accent() } else { TEXT });
+                    }
+                    let tip = if s(&after, "tip").is_empty() { Value::Null } else { Value::String(s(&after, "tip").to_string()) };
+                    self.hit_tip(br, Press::Action(s(&after, "action").to_string(), after["args"].clone()), tip);
+                    w - 40.0
+                } else {
+                    w
+                };
                 let vw = 36.0;
                 let hit = Rect::new(left, y, (x + w - vw - 6.0 - left).max(20.0), h);
                 let track = Rect::new(hit.x + SEEK_INSET, cy, (hit.w - 2.0 * SEEK_INSET).max(4.0), 0.0);
@@ -3803,7 +4125,23 @@ impl<'a, 'b> Ctx<'a, 'b> {
                         self.hit_tip(ib, Press::Action(press.to_string(), Value::Null), Value::String(if muted { "Unmute" } else { "Mute" }.into()));
                     }
                 }
-                let t = if held.is_some() { format!("{}%", (v * 100.0).round() as i32) } else { s(b, "text").to_string() };
+                // (held: where it is as it goes, in its own units when it says what they are (`range = { min, max, unit, sign }`: "-9.5 dB"),
+                // else a percentage)
+                let t = match (held, b["range"].is_object()) {
+                    (Some(_), true) => {
+                        let r = &b["range"];
+                        let val = f(r, "min") + (f(r, "max") - f(r, "min")) * v;
+                        let step = r["step"].as_f64().map(|x| x as f32).filter(|x| *x > 0.0).unwrap_or(0.1);
+                        let n = ((val / step).round() * step * 100.0).round() / 100.0;
+                        // (as fine as its steps: 0.25 dB steps, two decimals; whole ones, none)
+                        let num = if n.fract() == 0.0 { format!("{n:.0}") } else if ((n * 10.0).round() - n * 10.0).abs() < 0.001 { format!("{n:.1}") } else { format!("{n:.2}") };
+                        let sign = if r["sign"] == true && n > 0.0 { "+" } else { "" };
+                        let unit = s(r, "unit");
+                        if unit.is_empty() { format!("{sign}{num}") } else { format!("{sign}{num} {unit}") }
+                    }
+                    (Some(_), false) => format!("{}%", (v * 100.0).round() as i32),
+                    _ => s(b, "text").to_string(),
+                };
                 if self.draw {
                     // (muted: a speaker struck out, red, where its value was)
                     if muted && held.is_none() {

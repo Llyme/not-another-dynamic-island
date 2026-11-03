@@ -48,6 +48,8 @@ struct Icon {
     /// the box it is drawn in (16 for a line icon)
     box_size: f32,
     filled: bool,
+    /// drawn as lines: how thick, in its box
+    width: f32,
 }
 
 thread_local! {
@@ -275,22 +277,23 @@ fn icon(factory: &ID2D1Factory1, name: &str) -> Result<std::rc::Rc<Icon>> {
     }
     // (a plugin's own SVG; the filled set; the line icons for what it has not)
     let own = name.strip_prefix("file:").filter(|p| p.to_ascii_lowercase().ends_with(".svg")).and_then(svg_paths);
-    let made = if let Some((b, d)) = own {
-        Icon { geometry: path_of(factory, &d, true)?, box_size: b, filled: true }
+    let made = if let Some((b, d, line)) = own {
+        Icon { geometry: path_of(factory, &d, line.is_none())?, box_size: b, filled: line.is_none(), width: line.unwrap_or(1.5) }
     } else if let Some((_, d)) = FILLED.iter().find(|(n, _)| *n == name) {
-        Icon { geometry: path_of(factory, d, true)?, box_size: 20.0, filled: true }
+        Icon { geometry: path_of(factory, d, true)?, box_size: 20.0, filled: true, width: 1.5 }
     } else {
         let d = line(name).or_else(|| line("dot")).unwrap_or("M8 8h.01");
-        Icon { geometry: path_of(factory, d, false)?, box_size: 16.0, filled: false }
+        Icon { geometry: path_of(factory, d, false)?, box_size: 16.0, filled: false, width: 1.5 }
     };
     let rc = std::rc::Rc::new(made);
     CACHE.with(|c| c.borrow_mut().insert(name.to_string(), rc.clone()));
     Ok(rc)
 }
 
-/// A plugin's own icon: the paths of its SVG file (all of them, filled, in its own colour) and the size of its box (from its viewBox).
-/// Read as data: only the numbers of its viewBox and its paths' `d`.
-fn svg_paths(path: &str) -> Option<(f32, String)> {
+/// A plugin's own icon: the paths of its SVG file (all of them, in its own colour) and the size of its box (from its viewBox); drawn as
+/// lines (how thick, in its box) when it says `fill="none"` (its `stroke-width`, else 1.5), else filled. Read as data: only the numbers
+/// of its viewBox and its paths' `d`, and those two words.
+fn svg_paths(path: &str) -> Option<(f32, String, Option<f32>)> {
     let f = std::fs::File::open(path).ok()?;
     let mut s = String::new();
     std::io::Read::read_to_string(&mut std::io::Read::take(f, 512 * 1024), &mut s).ok()?;
@@ -315,7 +318,8 @@ fn svg_paths(path: &str) -> Option<(f32, String)> {
     let vb: Vec<f32> = attr(&s, "viewBox=").first()?.split([' ', ',']).filter_map(|n| n.parse().ok()).collect();
     let b = if vb.len() == 4 { vb[2].max(vb[3]) } else { return None };
     let d = attr(&s, "d=").join(" ");
-    (b > 0.0 && !d.is_empty()).then_some((b, d))
+    let line = attr(&s, "fill=").iter().any(|f| f == "none").then(|| attr(&s, "stroke-width=").first().and_then(|w| w.parse::<f32>().ok()).unwrap_or(1.5));
+    (b > 0.0 && !d.is_empty()).then_some((b, d, line))
 }
 
 fn stroke(factory: &ID2D1Factory1) -> Result<ID2D1StrokeStyle> {
@@ -377,7 +381,7 @@ pub fn draw(dc: &ID2D1DeviceContext, factory: &ID2D1Factory1, name: &str, x: f32
         if i.filled {
             dc.FillGeometry(&i.geometry, &b, None);
         } else {
-            dc.DrawGeometry(&i.geometry, &b, 1.5, &stroke(factory)?);
+            dc.DrawGeometry(&i.geometry, &b, i.width, &stroke(factory)?);
         }
         dc.SetTransform(&before);
     }

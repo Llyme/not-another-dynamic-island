@@ -226,12 +226,15 @@ impl Frame {
         if let Some(z) = self.sizing.as_ref().filter(|z| z.key == k) {
             return Some(z.live);
         }
-        let c = self.config.widgets.get(unpop(k))?;
+        // (a window: the size made by hand, else the one its plugin asks for (its bar not counted))
         if is_pop(k) {
-            c.pop_size
-        } else {
-            c.panel_size
+            let asked = self.widgets.get(unpop(k)).and_then(|w| {
+                let s = &w.content["panel"]["out"]["size"];
+                Some((s[0].as_f64()? as f32, (s[1].as_f64()? as f32 - pop::POP_TOP).max(80.0)))
+            });
+            return self.config.widgets.get(unpop(k)).and_then(|c| c.pop_size).or(asked);
         }
+        self.config.widgets.get(unpop(k))?.panel_size
     }
 
     /// The largest a panel may be made, on its screen (a window; on a side edge, never past the screen's middle).

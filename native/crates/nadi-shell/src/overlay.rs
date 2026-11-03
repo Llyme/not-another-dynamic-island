@@ -292,6 +292,18 @@ impl Overlay {
         }
     }
 
+    /// A piece on the glass over the frame's window, over every other piece there (a tip: over the open dock's names on its live
+    /// pictures). (A visual added with no reference goes under the others when "above", over them when not.)
+    pub fn top_piece_front(&self, gfx: &Gfx, w: u32, h: u32) -> Result<Piece> {
+        unsafe {
+            let visual = gfx.dcomp.CreateVisual()?;
+            let surface = gfx.surface(w, h)?;
+            visual.SetContent(&surface)?;
+            self.top_root.AddVisual(&visual, false, None)?;
+            Ok(Piece { visual, surface, alloc: (w, h), x: 0, y: 0 })
+        }
+    }
+
     pub fn remove_top(&self, p: &Piece) {
         unsafe {
             let _ = self.top_root.RemoveVisual(&p.visual);

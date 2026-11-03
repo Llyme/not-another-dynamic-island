@@ -46,7 +46,7 @@ with a `manifest.json`, up to three levels down, is a plugin.
   - `rank` orders the widgets on one edge.
   - The person can move a widget, float it or hide it.
   - `many: true`: the plugin may show many of it at once, each `"<id>:<name>"` (up to 24), such as a note pinned to the screen each.
-    The person does not place these: give them a panel and no peek, and ask for their window (see `window` below).
+    The person does not place these: give them a panel and no peek, and ask for it to be out (see `panel.out` below).
 
 ### Permissions
 
@@ -124,7 +124,8 @@ keeps its place, and its banners still come out there.
 
 **`peek` (at rest):**
 - What leads it is one of these:
-  - `icon` (a name)
+  - `icon` (a name; or `own:<file>.svg`, an SVG in the plugin's folder: its paths filled, or drawn as lines when it says
+    `fill="none"` (its `stroke-width`); an icon anywhere else may be one too)
   - `image` (`"exe:<path>"`, `"media:<source>:<id>"`, `"app:<id>"`)
   - `live = { icon, tone }` (`working` sweeps)
   - `ring = { part }`
@@ -133,10 +134,12 @@ keeps its place, and its banners still come out there.
   - `clock = { h24, date }`
 - With it, optionally: `text`, `label`, `color`, `viz`, `dot`, `button = { icon, label, action }`.
 
-**`window`:** `{ open, remember, ground }`: `open` set brings the widget's panel out as a window (cleared, sends it back), as if
-the person popped it out; it may have no peek, and then no place on an edge. `remember`: out when NADI ends, it comes out again when
-it starts, on the same monitor, where it stood (a window the person popped out is not remembered). `ground`: its solid background
-(`"#rrggbb"`). Its window closed, the plugin hears its widget shut (`open` with `open = false`).
+**`panel.out`:** `{ open, remember, ground, size, body }`: how the panel is when it is popped out of its widget (the person
+pops any panel out from its menu). `open` set pops it out (cleared, puts it back), as if the person had; a widget may have no peek, and
+then no place on an edge. `remember`: out when NADI ends, it comes out again when it starts, on the same monitor, where it stood (a panel
+the person popped out is not remembered). `ground`: its solid background (`"#rrggbb"`). Popped out, a panel is held by the grip along its
+top (right-clicked: its background, back into its widget, close). `body`: its own blocks while it is out (without it, the panel's own), and `size = { w, h }` its size at first (resized by hand, kept).
+Put back by the person, the plugin hears its widget shut (`open` with `open = false`).
 
 **`panel` (open):**
 - `title`, `sub`, `tile = { icon | image | text, color, ring, ring_color, vessel, bolt }`, `press` (the head's action), and `body`.
@@ -163,18 +166,24 @@ it starts, on the same monitor, where it stood (a window the person popped out i
 | `controls` | `items = { { icon, label, action } }` |
 | `buttons` | `items = { { label, action, tone } }` |
 | `choice` | `label`, `action`, `value`, `options` |
-| `slider` | `label`, `icon`, `value`, `text`, `action`, `press` |
+| `slider` | `label`, `icon`, `value`, `text`, `action`, `press`, `wheel` (`false`: the wheel scrolls the panel, not the slider), `after = { icon, on, action, tip }` (a button after it), `range = { min, max, unit, sign, step }` (dragged: its value shown in its units, at its steps, not a percentage) |
+| `row` | `items`, left to right, each a `button` (`icon`, `tip`, `on`, `dot`, `tone`, `action`/`args` or `menu`), `switch` (`on`, `action`), `pill` (`text`, `icon` or `image`, `dot`, `action` or `menu`), `seg` (`options = { { text \| icon, value, tip } }`, `value`, `action`), `num` (`text`, `unit`, `action`: typed), `slider` (a slider's fields: the room left), or `space` (the room left) |
 | `ask` | `label`, `side`, `icon`, `text`, `buttons`, `action` |
 | `field` | `placeholder`, `hint`, `value`, `action` |
 | `cards` | `columns` (1 to 3, 2 at first), `cards = { { color, ink, title, text, items = { { state, text, action, args } }, badge, tip, action, args, menu } }` |
 | `head` | `title`, `prev`, `next`, `press` |
 | `grid` | `labels`, `cells = { { t, id, state, dots } }` |
 | `section` | `id`, `title`, `sub`, `tile`, `live`, `body`, `press` (opens and closes; the first is open) |
+| `curve` | `height`, `x` and `y` (`{ min, max, log, marks = { { v, t } } }`), `line` (its values, evenly across), `ghost` (a second line's values, drawn faint behind it), `points = { { id, x, y } }`, `selected`, `off`, `drag`, `pick`, `add`, `wheel` |
 
 A pressed block sends `action` with `args`:
 - A `seek` or `slider` sends `{ fraction }`.
-- A `choice` sends `{ value }`.
+- A `choice` sends `{ value }`; a `row`'s `seg` too.
+- A `row`'s `num` pressed opens a field there; what is typed is sent as `{ text }`. A `menu` (a `row`'s `button` or `pill`) opens under
+  it, its rows as a thing's own menu's (`{ icon, image, label, action, on, tone }`).
 - A `field` sends `{ text }`.
+- A `curve`'s point dragged sends `drag` with `{ id, x, y }` a few times a second and `done = true` when let go; clicked, `pick` with
+  `{ id }`; the wheel over it, `wheel` with `{ id, up }`; a double-click on the curve, `add` with `{ x, y }` (in its axes' values).
 
 ## The library
 

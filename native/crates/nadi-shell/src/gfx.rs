@@ -25,13 +25,22 @@ pub struct Gfx {
     pub dwrite: IDWriteFactory,
 }
 
+/// Drawn without the graphics card (Windows' own software drawing): its driver never loaded into NADI (a driver that crashes takes
+/// NADI with it). Read when the drawing devices are made.
+static SOFTWARE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+pub fn set_software(on: bool) {
+    SOFTWARE.store(on, std::sync::atomic::Ordering::Relaxed);
+}
+
 impl Gfx {
     pub fn new() -> Result<Gfx> {
         unsafe {
             let mut d3d: Option<ID3D11Device> = None;
             let levels = [D3D_FEATURE_LEVEL_11_1, D3D_FEATURE_LEVEL_11_0, D3D_FEATURE_LEVEL_10_1, D3D_FEATURE_LEVEL_10_0];
-            // (a GPU when there is one; else the software one, so it still draws)
-            let made = D3D11CreateDevice(None, D3D_DRIVER_TYPE_HARDWARE, HMODULE::default(), D3D11_CREATE_DEVICE_BGRA_SUPPORT, Some(&levels), D3D11_SDK_VERSION, Some(&mut d3d), None, None);
+            // (a GPU when there is one, unless asked for software; else the software one, so it still draws)
+            let soft = SOFTWARE.load(std::sync::atomic::Ordering::Relaxed);
+            let made = if soft { Err(windows::core::Error::from(windows::Win32::Foundation::E_FAIL)) } else { D3D11CreateDevice(None, D3D_DRIVER_TYPE_HARDWARE, HMODULE::default(), D3D11_CREATE_DEVICE_BGRA_SUPPORT, Some(&levels), D3D11_SDK_VERSION, Some(&mut d3d), None, None) };
             if made.is_err() {
                 D3D11CreateDevice(None, D3D_DRIVER_TYPE_WARP, HMODULE::default(), D3D11_CREATE_DEVICE_BGRA_SUPPORT, Some(&levels), D3D11_SDK_VERSION, Some(&mut d3d), None, None)?;
             }

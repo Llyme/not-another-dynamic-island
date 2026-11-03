@@ -25,16 +25,18 @@ use windows::Win32::UI::Input::KeyboardAndMouse::*;
 use windows::Win32::UI::WindowsAndMessaging::*;
 
 /// the card: how wide, its padding, how round
-const CW: f32 = 300.0;
-const PAD: f32 = 22.0;
-const RADIUS: f32 = 26.0;
-const BTN_H: f32 = 38.0;
-const ICON: f32 = 52.0;
+const CW: f32 = 360.0;
+const PAD: f32 = 20.0;
+const RADIUS: f32 = 24.0;
+const BTN_H: f32 = 34.0;
+const ICON: f32 = 36.0;
 const FIELD_H: f32 = 40.0;
 /// a card with a list: wider; a line of it, and how many show before it scrolls
-const CW_LIST: f32 = 340.0;
+const CW_LIST: f32 = 520.0;
 const ROW: f32 = 28.0;
-const ROWS: usize = 8;
+/// a line of the list's words, and how many lines one may take at most (wrapped, not scrolled sideways)
+const LIST_FS: f32 = 12.5;
+const LIST_LINES: usize = 6;
 const CHANGE_H: f32 = 30.0;
 
 /// Where the card's things are (logical, in the monitor).
@@ -44,6 +46,8 @@ struct Lay {
     title_y: f32,
     change_y: f32,
     text_y: f32,
+    /// where its words start, beside its pictogram
+    text_x: f32,
     list: Option<Rect>,
     field: Option<Rect>,
     buttons: Vec<Rect>,
@@ -87,6 +91,9 @@ pub struct Modal {
     marquee: bool,
     /// its list scrolled this far down (logical px)
     scroll: f32,
+    /// how tall each line of its list is, its words wrapped (measured as it is drawn), and its text under its title
+    row_h: Vec<f32>,
+    text_h: f32,
 }
 
 unsafe extern "system" fn proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> LRESULT {
@@ -146,6 +153,8 @@ impl Modal {
                 keyed: false,
                 marquee: false,
                 scroll: 0.0,
+                row_h: Vec::new(),
+                text_h: 0.0,
             })
         }
     }
@@ -188,6 +197,8 @@ impl Modal {
         self.mouse = (-1.0, -1.0);
         self.keyed = false;
         self.scroll = 0.0;
+        self.row_h.clear();
+        self.text_h = 0.0;
         unsafe {
             let _ = SetWindowPos(self.hwnd, HWND_TOPMOST, a.mon.left, a.mon.top, w, h, SWP_SHOWWINDOW);
             // (Windows lets only the app in front take the focus: joined to its input for a moment, NADI may)
@@ -313,66 +324,93 @@ impl Modal {
         }
     }
 
-    /// How far its list scrolls at most.
-    fn scroll_max(&self) -> f32 {
+    /// Each line of its list, as tall as its words wrapped (before it is first drawn: one line each).
+    fn heights(&self) -> Vec<f32> {
         let n = self.list().len();
-        (n as f32 * ROW - n.min(ROWS) as f32 * ROW).max(0.0)
+        if self.row_h.len() == n {
+            self.row_h.clone()
+        } else {
+            vec![ROW; n]
+        }
     }
 
-    /// The card's box (logical, in the monitor), and where its things are: the icon's middle, the title's, chips' and text's lines,
-    /// the list, the field, the buttons.
+    /// How tall its list shows at most: most of the screen's height, past that it scrolls.
+    fn list_max(&self) -> f32 {
+        let mh = (self.mon.bottom - self.mon.top) as f32 / self.s;
+        (mh * 0.6).min(560.0)
+    }
+
+    /// How far its list scrolls at most.
+    fn scroll_max(&self) -> f32 {
+        let total: f32 = self.heights().iter().sum();
+        (total - total.min(self.list_max())).max(0.0)
+    }
+
+    /// A button's width: its words and room round them.
+    fn button_w(label: &str) -> f32 {
+        (label.chars().count() as f32 * 7.4 + 36.0).max(88.0)
+    }
+
+    /// The card's box (logical, in the monitor), and where its things are: its pictogram at its top left, its title beside it and its
+    /// words under that (wrapped), the chips or the bar, the list (its lines wrapped), the field, its buttons at its foot on the right.
     fn layout(&self) -> Lay {
         let (mw, mh) = ((self.mon.right - self.mon.left) as f32 / self.s, (self.mon.bottom - self.mon.top) as f32 / self.s);
         let cw = self.cw();
         let has_text = !self.spec["text"].as_str().unwrap_or("").is_empty() || (self.spec["countdown"].is_number() && self.spec["counting"].is_string());
         let has_field = self.spec["field"].is_object();
         let has_change = self.spec["change"].as_array().is_some_and(|c| c.len() == 2) || self.spec["progress"].is_string();
+        let total: f32 = self.heights().iter().sum();
+        let list_h = total.min(self.list_max());
         let n = self.list().len();
-        let list_h = n.min(ROWS) as f32 * ROW;
-        let mut h = PAD + ICON + 14.0 + 20.0;
+        let text_h = if has_text { self.text_h.max(17.0) } else { 0.0 };
+        let head = (20.0 + if has_text { 4.0 + text_h } else { 0.0 }).max(ICON);
+        let mut h = PAD + head;
         if has_change {
-            h += CHANGE_H;
-        }
-        if has_text {
-            h += 22.0;
+            h += 8.0 + CHANGE_H;
         }
         if n > 0 {
-            h += 10.0 + list_h;
+            h += 14.0 + list_h;
         }
         if has_field {
-            h += 10.0 + FIELD_H;
+            h += 14.0 + FIELD_H;
         }
-        h += 18.0 + BTN_H + 16.0;
+        h += 18.0 + BTN_H + PAD - 4.0;
         let card = Rect::new((mw - cw) / 2.0, (mh - h) / 2.0, cw, h);
-        let icon = (card.x + cw / 2.0, card.y + PAD + ICON / 2.0);
-        let title_y = card.y + PAD + ICON + 14.0 + 10.0;
-        let mut y = title_y + 10.0;
-        let change_y = y + CHANGE_H / 2.0 + 2.0;
+        let icon = (card.x + PAD + ICON / 2.0, card.y + PAD + ICON / 2.0);
+        let text_x = card.x + PAD + ICON + 14.0;
+        // (its title: in the middle of the pictogram's height when alone, else at its top, its words under it)
+        let title_y = if has_text { card.y + PAD + 10.0 } else { icon.1 };
+        let text_y = card.y + PAD + 24.0;
+        let mut y = card.y + PAD + head;
+        let change_y = y + 8.0 + CHANGE_H / 2.0;
         if has_change {
-            y += CHANGE_H;
-        }
-        let text_y = y + 12.0;
-        if has_text {
-            y += 22.0;
+            y += 8.0 + CHANGE_H;
         }
         let list = (n > 0).then(|| {
-            y += 10.0;
+            y += 14.0;
             let r = Rect::new(card.x + 12.0, y, cw - 24.0, list_h);
             y += list_h;
             r
         });
         let field = has_field.then(|| {
-            y += 10.0;
-            let r = Rect::new(card.x + 20.0, y, cw - 40.0, FIELD_H);
+            y += 14.0;
+            let r = Rect::new(card.x + PAD, y, cw - 2.0 * PAD, FIELD_H);
             y += FIELD_H;
             r
         });
         y += 18.0;
         let bs = self.buttons();
-        let nb = bs.len() as f32;
-        let bw = (cw - 40.0 - (nb - 1.0) * 8.0) / nb;
-        let buttons = (0..bs.len()).map(|i| Rect::new(card.x + 20.0 + i as f32 * (bw + 8.0), y, bw, BTN_H)).collect();
-        Lay { card, icon, title_y, change_y, text_y, list, field, buttons }
+        let ws: Vec<f32> = bs.iter().map(|b| Self::button_w(b["label"].as_str().unwrap_or(""))).collect();
+        let mut x = card.right() - PAD - (ws.iter().sum::<f32>() + (ws.len().max(1) - 1) as f32 * 8.0);
+        let buttons = ws
+            .iter()
+            .map(|w| {
+                let r = Rect::new(x, y, *w, BTN_H);
+                x += w + 8.0;
+                r
+            })
+            .collect();
+        Lay { card, icon, title_y, change_y, text_y, text_x, list, field, buttons }
     }
 
     /// What its window hears.
@@ -444,9 +482,27 @@ impl Modal {
         let s = self.s;
         let age = self.opened.elapsed().as_secs_f32();
         let p = Painter { g, dc: &g.dc, s, pc, t: age, viz: [0.0; 3] };
+        // (its words measured first, wrapped, so the card is as tall as they need)
+        {
+            let cw = self.cw();
+            let lw = cw - 24.0 - 48.0;
+            let heights: Vec<f32> = self
+                .list()
+                .iter()
+                .map(|it| if it["sep"].is_string() { ROW } else { (p.paragraph(it["text"].as_str().unwrap_or(""), 0.0, 0.0, LIST_FS, lw, LIST_LINES, draw::TEXT, false) + 11.0).max(ROW) })
+                .collect();
+            if heights != self.row_h {
+                self.row_h = heights;
+                self.scroll = self.scroll.min(self.scroll_max());
+            }
+            let text = self.spec["text"].as_str().unwrap_or("");
+            self.text_h = if text.is_empty() { 0.0 } else { p.paragraph(text, 0.0, 0.0, 12.0, cw - 2.0 * PAD - ICON - 14.0, 4, draw::DIM, false) };
+        }
         let l = self.layout();
+        let row_h = self.heights();
+        let text_x = l.text_x;
         let (card, icon, title_y, text_y, field, buttons) = (l.card, l.icon, l.title_y, l.text_y, l.field, l.buttons.clone());
-        let (change_y, list_box, list, scroll, cw) = (l.change_y, l.list, self.list(), self.scroll, self.cw());
+        let (change_y, list_box, list, scroll) = (l.change_y, l.list, self.list(), self.scroll);
         let (mw, mh) = ((self.mon.right - self.mon.left) as f32 / s, (self.mon.bottom - self.mon.top) as f32 / s);
         let t = self.t.max(0.0);
         let Ok(shp) = shape::floating(&g.d2d_factory, card.w * s, card.h * s, RADIUS * s) else { return };
@@ -458,7 +514,7 @@ impl Modal {
         let _ = g.draw_surface(&self.surface, |dc| unsafe {
             use windows::Foundation::Numerics::Matrix3x2;
             // (the screen behind: dimmed, more as it comes out)
-            p.round(Rect::new(0.0, 0.0, mw, mh), 0.0, Color(0.0, 0.0, 0.0, 0.38 * t.clamp(0.0, 1.0)));
+            p.round(Rect::new(0.0, 0.0, mw, mh), 0.0, Color(0.0, 0.0, 0.0, 0.2 * t.clamp(0.0, 1.0)));
             // (the card: growing out of its own middle, a little past its size and back; going, shrinking into it)
             let k = 0.6 + 0.4 * t;
             let (cx, cy) = (card.x + card.w / 2.0, card.y + card.h / 2.0);
@@ -483,16 +539,16 @@ impl Modal {
                     draw::keep_moving();
                 }
                 let ic = spec["icon"].as_str().unwrap_or("info");
-                p.icon(ic, icon.0 - 11.0, icon.1 - 11.0, 22.0, tone);
-                // (its question, and a line of what happens; counting down, how long is left)
+                p.icon(ic, icon.0 - 9.0, icon.1 - 9.0, 18.0, tone);
+                // (its question beside its pictogram, and under it what happens (wrapped); counting down, how long is left)
+                let wr = card.right() - PAD - text_x;
                 let title = spec["title"].as_str().unwrap_or("");
-                let tw = p.measure(title, 15.0, Weight::Semibold, cw - 40.0);
-                p.text(title, card.x + cw / 2.0 - tw / 2.0, title_y, 15.0, Weight::Semibold, cw - 40.0, draw::TEXT);
+                p.text(title, text_x, title_y, 14.5, Weight::Semibold, wr, draw::TEXT);
                 // (how far it has come: a bar in the modal's colour)
                 if spec["progress"] == "nadi-update" {
                     let f = crate::update::fraction();
-                    let bw = cw - 80.0;
-                    let r = Rect::new(card.x + 40.0, change_y - 3.0, bw, 6.0);
+                    let bw = card.right() - PAD - text_x;
+                    let r = Rect::new(text_x, change_y - 3.0, bw, 6.0);
                     p.round(r, 3.0, Color(0.15, 0.15, 0.17, 1.0));
                     p.round(Rect::new(r.x, r.y, (bw * f).max(6.0), 6.0), 3.0, tone);
                 }
@@ -500,8 +556,7 @@ impl Modal {
                 if let Some([a, b]) = spec["change"].as_array().map(|c| c.as_slice()) {
                     let (a, b) = (a.as_str().unwrap_or(""), b.as_str().unwrap_or(""));
                     let (aw, bw) = (p.measure(a, 11.5, Weight::Semibold, 120.0) + 16.0, p.measure(b, 11.5, Weight::Semibold, 120.0) + 16.0);
-                    let total = aw + 8.0 + 14.0 + 8.0 + bw;
-                    let mut x = card.x + cw / 2.0 - total / 2.0;
+                    let mut x = text_x;
                     p.round(Rect::new(x, change_y - 10.0, aw, 20.0), 10.0, Color(1.0, 1.0, 1.0, 0.07));
                     p.text(a, x + 8.0, change_y, 11.5, Weight::Semibold, aw, Color(0.79, 0.79, 0.82, 1.0));
                     x += aw + 8.0;
@@ -516,17 +571,19 @@ impl Modal {
                     text = format!("{word} in {} s.", (c as f32 - age).ceil().max(0.0) as u32);
                 }
                 if !text.is_empty() {
-                    let xw = p.measure(&text, 12.0, Weight::Regular, cw - 40.0);
-                    p.text(&text, card.x + cw / 2.0 - xw / 2.0, text_y, 12.0, Weight::Regular, cw - 40.0, draw::DIM);
+                    p.paragraph(&text, text_x, text_y, 12.0, wr, 4, draw::DIM, true);
                 }
                 // (its list: a pictogram of each line's kind, in its colour, and the line; a version's number over its own)
                 if let Some(lr) = list_box {
                     use windows::Win32::Graphics::Direct2D::Common::D2D_RECT_F;
                     use windows::Win32::Graphics::Direct2D::D2D1_ANTIALIAS_MODE_ALIASED;
                     dc.PushAxisAlignedClip(&D2D_RECT_F { left: lr.x * s, top: lr.y * s, right: (lr.x + lr.w) * s, bottom: (lr.y + lr.h) * s }, D2D1_ANTIALIAS_MODE_ALIASED);
+                    let mut top = lr.y - scroll;
                     for (i, item) in list.iter().enumerate() {
-                        let ry = lr.y + i as f32 * ROW - scroll;
-                        if ry + ROW < lr.y || ry > lr.y + lr.h {
+                        let ry = top;
+                        let rh = row_h.get(i).copied().unwrap_or(ROW);
+                        top += rh;
+                        if ry + rh < lr.y || ry > lr.y + lr.h {
                             continue;
                         }
                         if let Some(v) = item["sep"].as_str() {
@@ -543,7 +600,8 @@ impl Modal {
                         };
                         p.round(Rect::new(lr.x + 8.0, ry + 3.0, 22.0, 22.0), 7.0, c.alpha(0.11));
                         p.icon(ic, lr.x + 12.5, ry + 7.5, 13.0, c);
-                        p.text(item["text"].as_str().unwrap_or(""), lr.x + 40.0, ry + ROW / 2.0, 12.5, Weight::Regular, lr.w - 48.0, draw::TEXT);
+                        // (its words wrapped, as many lines as they take)
+                        p.paragraph(item["text"].as_str().unwrap_or(""), lr.x + 40.0, ry + 5.5, LIST_FS, lr.w - 48.0, LIST_LINES, draw::TEXT, true);
                     }
                     dc.PopAxisAlignedClip();
                 }

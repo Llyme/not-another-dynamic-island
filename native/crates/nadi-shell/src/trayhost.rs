@@ -36,6 +36,8 @@ pub struct Icon {
     pub pid: u32,
     /// the order it came in
     pub seq: u64,
+    /// its picture, as a number (a hash of its pixels): a new picture (an unread mark on it) is a new number
+    pub pic: u64,
 }
 
 static ICONS: Mutex<Vec<Icon>> = Mutex::new(Vec::new());
@@ -181,6 +183,40 @@ fn free_icon(h: isize) {
     }
 }
 
+/// An icon's picture as a number: a hash of its pixels (its colours and its mask); none: 0.
+fn pic_hash(h: isize) -> u64 {
+    use windows::Win32::Graphics::Gdi::*;
+    if h == 0 {
+        return 0;
+    }
+    let mut hash = 0xcbf2_9ce4_8422_2325u64;
+    unsafe {
+        let mut ii = ICONINFO::default();
+        if GetIconInfo(HICON(h as *mut _), &mut ii).is_err() {
+            return 0;
+        }
+        for bmp in [ii.hbmColor, ii.hbmMask] {
+            if bmp.is_invalid() {
+                continue;
+            }
+            let mut bm = BITMAP::default();
+            if GetObjectW(bmp, std::mem::size_of::<BITMAP>() as i32, Some(&mut bm as *mut _ as *mut _)) != 0 {
+                let n = (bm.bmWidthBytes.max(0) * bm.bmHeight.abs()) as usize;
+                if n > 0 && n <= 1 << 20 {
+                    let mut buf = vec![0u8; n];
+                    let got = GetBitmapBits(bmp, n as i32, buf.as_mut_ptr() as *mut _).max(0) as usize;
+                    for b in &buf[..got.min(n)] {
+                        hash ^= *b as u64;
+                        hash = hash.wrapping_mul(0x0100_0000_01b3);
+                    }
+                }
+            }
+            let _ = DeleteObject(bmp);
+        }
+    }
+    hash
+}
+
 /// What an app said about its icon: kept.
 fn take(message: u32, nid: &Nid32) -> bool {
     let owner = handle(nid.hwnd);
@@ -207,7 +243,7 @@ fn take(message: u32, nid: &Nid32) -> bool {
                     unsafe {
                         GetWindowThreadProcessId(HWND(owner as *mut _), Some(&mut pid));
                     }
-                    list.push(Icon { owner, uid: nid.uid, guid, callback: 0, version: 0, icon: 0, tip: String::new(), hidden: false, pid, seq: SEQ.fetch_add(1, Ordering::Relaxed) });
+                    list.push(Icon { owner, uid: nid.uid, guid, callback: 0, version: 0, icon: 0, tip: String::new(), hidden: false, pid, seq: SEQ.fetch_add(1, Ordering::Relaxed), pic: 0 });
                     list.len() - 1
                 }
             };
@@ -220,6 +256,7 @@ fn take(message: u32, nid: &Nid32) -> bool {
                 // (a copy of its own: the app may let its icon go)
                 let copy = unsafe { CopyIcon(HICON(handle(nid.icon) as *mut _)) }.map(|h| h.0 as isize).unwrap_or(0);
                 free_icon(std::mem::replace(&mut it.icon, copy));
+                it.pic = pic_hash(copy);
             }
             if nid.flags & NIF_TIP != 0 {
                 it.tip = text(&nid.tip);
@@ -446,7 +483,12 @@ pub fn click(owner: isize, uid: u32, how: Click, x: i32, y: i32) {
     const NIN_SELECT: u32 = WM_USER;
     const WM_CONTEXTMENU_: u32 = 0x007B;
     unsafe {
-        // (its menu or window may take the focus)
+        // (Windows lets only the app in front give the front away: an app's own window in front (NADI not), NADI is joined to its
+        // input for the moment, as the taskbar is, so its menu or window may take the focus)
+        let fg = GetForegroundWindow();
+        let theirs = GetWindowThreadProcessId(fg, None);
+        let mine = windows::Win32::System::Threading::GetCurrentThreadId();
+        let joined = theirs != 0 && theirs != mine && windows::Win32::System::Threading::AttachThreadInput(mine, theirs, true).as_bool();
         let _ = AllowSetForegroundWindow(it.pid);
         let say = |m: u32| {
             let (wp, lp) = if it.version >= 4 {
@@ -480,6 +522,9 @@ pub fn click(owner: isize, uid: u32, how: Click, x: i32, y: i32) {
                     let _ = PostMessageW(h, it.callback, wp, lp);
                 }
             }
+        }
+        if joined {
+            let _ = windows::Win32::System::Threading::AttachThreadInput(mine, theirs, false);
         }
     }
 }
