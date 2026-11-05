@@ -54,6 +54,7 @@ icon, for the frame's settings.
 - `native/crates/nadi-shell`: the frame, the dock, the launcher, the faces, and the settings window (WebView2, made only while it is
   open).
 - `native/PLUGINS.md`: how to write a plugin.
+- `native/GPU-DRIVERS.md`: graphics driver crashes (AMD's), and what NADI does about them.
 
 `cargo test` runs the core's and the shell's tests. `nadi-plugin test <folder>` runs a plugin's own tests.
 
