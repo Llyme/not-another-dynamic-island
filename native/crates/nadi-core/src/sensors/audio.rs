@@ -527,6 +527,9 @@ unsafe fn capture_session(state: &Arc<Pc>) -> windows::core::Result<()> {
     let mut pending_lr: Vec<(f32, f32)> = Vec::with_capacity(FFT_N * 2);
     let mut was_silent_emitted = false;
     let mut idle_polls = 0u32;
+    // (the output device listened to: another made the default, this session ends and one starts on it)
+    let listening = device.GetId().map(|p| p.to_string().unwrap_or_default()).unwrap_or_default();
+    let mut checked = std::time::Instant::now();
 
     let result = (|| -> windows::core::Result<()> {
         loop {
@@ -535,6 +538,14 @@ unsafe fn capture_session(state: &Arc<Pc>) -> windows::core::Result<()> {
             }
             // nothing has played for ~1 s: poll lazily (the analyzer has decayed to silence)
             std::thread::sleep(Duration::from_millis(if idle_polls >= 60 { 80 } else { 15 }));
+            // (once a second: is it still the default output? Switched (speakers to a headset), listen to the new one)
+            if checked.elapsed() >= Duration::from_secs(1) {
+                checked = std::time::Instant::now();
+                let now = enumerator.GetDefaultAudioEndpoint(eRender, eConsole).and_then(|d| d.GetId()).map(|p| p.to_string().unwrap_or_default()).unwrap_or_default();
+                if !now.is_empty() && now != listening {
+                    return Ok(());
+                }
+            }
 
             let mut got_data = false;
             let mut packet = capture.GetNextPacketSize()?;

@@ -32,6 +32,21 @@ const EXTRA: &[(&str, &str)] = &[
     ("bg-solid", "M3 3h10v10H3zM3 7 7 3M3 11 11 3M5 13 13 5M9 13 13 9"),
     ("bg-see", "M3 3h10v10H3zM8 3v10M3 7 7 3M3 11 8 6M5 13 8 10"),
     ("bg-none", "M3 6V3h3M10 3h3v3M13 10v3h-3M6 13H3v-3"),
+    // (the screen: a snip, cast, HDR, the four ways to use a second screen)
+    ("snip", "M4 12a2 2 0 1 0 .01 0M12 12a2 2 0 1 0 .01 0M5.5 10.5 12 2M10.5 10.5 4 2"),
+    ("cast", "M2 11.5a2.5 2.5 0 0 1 2.5 2.5M2 8.5a5.5 5.5 0 0 1 5.5 5.5M2 4V3a1 1 0 0 1 1-1h10a1 1 0 0 1 1 1v9a1 1 0 0 1-1 1h-3"),
+    ("hdr", "M2 4h12v8H2zM4.5 6.5v3M6.5 6.5v3M4.5 8h2M8.5 6.5v3h1a1.5 1.5 0 0 0 0-3zM12 9.5v-3"),
+    ("proj-pc", "M1.5 4h6v5h-6zM8.5 4h6v5h-6z M2.5 5h4v3h-4z"),
+    ("proj-dup", "M1.5 4h6v5h-6zM8.5 4h6v5h-6zM3 6.5h3M10 6.5h3"),
+    ("proj-ext", "M1.5 4h6v5h-6zM8.5 4h6v5h-6zM4 6.5h8M10.5 5l1.5 1.5-1.5 1.5"),
+    ("proj-second", "M1.5 4h6v5h-6zM8.5 4h6v5h-6zM9.5 5h4v3h-4z"),
+    // (focus, the power mode)
+    ("bell-off", "M6.3 13.5a1.8 1.8 0 0 0 3.4 0M4 11.5h8.5M12 9.5V7a4 4 0 0 0-6.6-3M4 7v4.5M2 2l12 12"),
+    ("scales", "M8 2v12M4 14h8M3 5h10M3 5 1.5 9h3zM13 5l-1.5 4h3z"),
+    // (the Volume Mixer's tiles: sharing nearby, accessibility, the touch keyboard)
+    ("nearby", "M4 8a2 2 0 1 0 .01 0M12 4a2 2 0 1 0 .01 0M12 12a2 2 0 1 0 .01 0M5.8 7.1l4.4-2.2M5.8 8.9l4.4 2.2"),
+    ("a11y", "M8 1.6a1.4 1.4 0 1 0 .01 0M3 5.5l5 1 5-1M8 6.5v3l-2.5 5M8 9.5l2.5 5"),
+    ("keyboard", "M1.5 4h13v8h-13zM4 6.8h.01M6.5 6.8h.01M9 6.8h.01M11.5 6.8h.01M5 9.5h6"),
 ];
 
 /// The name of a known icon, as the icons have it (a plugin's badge naming one).

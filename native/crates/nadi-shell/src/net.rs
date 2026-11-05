@@ -57,6 +57,9 @@ pub struct State {
 static NOW: Mutex<Option<State>> = Mutex::new(None);
 static DIRTY: AtomicBool = AtomicBool::new(false);
 static WAKE: (Mutex<bool>, Condvar) = (Mutex::new(false), Condvar::new());
+/// looking again, asked for (Refresh pressed): the Wi-Fi scanning, the paired devices asked again; and while it is
+static FRESH: AtomicBool = AtomicBool::new(false);
+static SCANNING: AtomicBool = AtomicBool::new(false);
 
 pub fn start() {
     static STARTED: AtomicBool = AtomicBool::new(false);
@@ -71,7 +74,7 @@ pub fn start() {
         let mut paired_now: Vec<Paired> = Vec::new();
         let mut looks = 0u32;
         loop {
-            if looks % 5 == 0 {
+            if looks % 5 == 0 || FRESH.swap(false, Ordering::Relaxed) {
                 paired_now = paired();
             }
             looks = looks.wrapping_add(1);
@@ -89,6 +92,37 @@ pub fn start() {
             *g = false;
         }
     });
+}
+
+/// Look again, all of it (Refresh pressed): the Wi-Fi asked to scan the air afresh (what is new in reach shows a few seconds later),
+/// the paired devices asked again.
+pub fn refresh() {
+    if SCANNING.swap(true, Ordering::Relaxed) {
+        return;
+    }
+    // (its button lit at once)
+    DIRTY.store(true, Ordering::Relaxed);
+    poke();
+    std::thread::spawn(|| {
+        if let Some(c) = Client::open() {
+            if let Some(guid) = c.guid {
+                unsafe {
+                    let _ = WlanScan(c.h, &guid, None, None, None);
+                }
+            }
+        }
+        // (a scan takes a few seconds: looked at then)
+        std::thread::sleep(Duration::from_secs(4));
+        FRESH.store(true, Ordering::Relaxed);
+        SCANNING.store(false, Ordering::Relaxed);
+        DIRTY.store(true, Ordering::Relaxed);
+        poke();
+    });
+}
+
+/// Looking again now (its button lit)?
+pub fn refreshing() -> bool {
+    SCANNING.load(Ordering::Relaxed)
 }
 
 pub fn poke() {
@@ -450,8 +484,15 @@ pub fn widget(s: &State, radios: crate::radios::States, speed: Option<(f64, f64)
         body.push(json!({ "kind": "list", "rows": [{ "icon": "hotspot", "title": h.ssid, "sub": h.pass, "right": right, "action": "hotspotcopy" }] }));
     }
     let others: Vec<&Wifi> = s.wifi.iter().filter(|w| !w.joined).collect();
-    if radios.wifi != Some(false) && !others.is_empty() {
-        body.push(json!({ "kind": "text", "label": "Networks" }));
+    // (the networks' heading, and beside it: look again (lit while it looks), and Windows' own settings)
+    let listed = radios.wifi != Some(false) && !others.is_empty();
+    body.push(json!({ "kind": "row", "items": [
+        { "kind": "label", "text": if listed { "Networks" } else { "" } },
+        { "kind": "space" },
+        { "kind": "button", "icon": "refresh", "tip": "Refresh", "on": refreshing(), "action": "netrefresh" },
+        { "kind": "button", "icon": "gear", "tip": "Network Settings", "action": "netsettings" },
+    ] }));
+    if listed {
         let (joining, failed) = (joining(), failed());
         let row = |w: &Wifi| {
             let mut marks = Vec::new();
@@ -477,7 +518,6 @@ pub fn widget(s: &State, radios: crate::radios::States, speed: Option<(f64, f64)
             body.push(json!({ "kind": "list", "rows": rows }));
         }
     }
-    body.push(json!({ "kind": "buttons", "items": [{ "icon": "gear", "label": "Network Settings", "tip": "Network Settings", "action": "netsettings" }] }));
     json!({ "peek": peek, "panel": { "width": 340, "body": body }, "tip": label })
 }
 

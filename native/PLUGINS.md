@@ -39,7 +39,7 @@ with a `manifest.json`, up to three levels down, is a plugin.
 
 - **`kind`:** `luau`, or `face` for the frame's own looks (`look`: `eyes`, `aura`), which need no script.
 - **`tick`:** calls the plugin this often with `tick` (`250ms`, `5s`, `1m`, `2h`).
-- **`settings`:** each setting's `type` is `toggle`, `number`, `text`, `choice` (with `options: [{value, label}]`) or `range`. The plugin gets their values in every event.
+- **`settings`:** each setting's `type` is `toggle`, `number`, `text`, `lines` (several, one a line, in a box: a list of links, say), `choice` (with `options: [{value, label}]`) or `range`. The plugin gets their values in every event. A `net` host written `{{settings.key}}` is the host of each address in that setting.
 - **`actions`:** buttons in Settings. With `ask`, a field comes with the button; what is typed goes to the `then` action as `args.text`.
 - **`widgets`:** what the plugin can put on the screen.
   - `place` is where a widget goes the first time: `top`, `bottom`, `left`, `right`, `top-left`, `top-right`, `bottom-left` or `bottom-right`.
@@ -148,6 +148,7 @@ Put back by the person, the plugin hears its widget shut (`open` with `open = fa
 | Block | Fields |
 |---|---|
 | `text` | `label`, `text`, `tone` |
+| `rule` | (none: a thin line across) |
 | `facts` | `rows = { { k, v } }` |
 | `stats` | `items = { { value, label } }` |
 | `chips` | `items = { { icon, text, tone } }` |
@@ -167,7 +168,7 @@ Put back by the person, the plugin hears its widget shut (`open` with `open = fa
 | `buttons` | `items = { { label, action, tone } }` |
 | `choice` | `label`, `action`, `value`, `options` |
 | `slider` | `label`, `icon`, `value`, `text`, `action`, `press`, `wheel` (`false`: the wheel scrolls the panel, not the slider), `after = { icon, on, action, tip }` (a button after it), `range = { min, max, unit, sign, step }` (dragged: its value shown in its units, at its steps, not a percentage) |
-| `row` | `items`, left to right, each a `button` (`icon`, `tip`, `on`, `dot`, `tone`, `action`/`args` or `menu`), `switch` (`on`, `action`), `pill` (`text`, `icon` or `image`, `dot`, `action` or `menu`), `seg` (`options = { { text \| icon, value, tip } }`, `value`, `action`), `num` (`text`, `unit`, `action`: typed), `slider` (a slider's fields: the room left), or `space` (the room left) |
+| `row` | `items`, left to right, each a `button` (`icon`, `tip`, `on`, `dot`, `tone`, `action`/`args` or `menu`), `switch` (`on`, `action`), `pill` (`text`, `icon` or `image`, `dot`, `action` or `menu`), `seg` (`options = { { text \| icon, value, tip } }`, `value`, `action`), `num` (`text`, `unit`, `action`: typed), `slider` (a slider's fields: the room left), `label` (`text`, small and dim, as a heading), or `space` (the room left) |
 | `ask` | `label`, `side`, `icon`, `text`, `buttons`, `action` |
 | `field` | `placeholder`, `hint`, `value`, `action` |
 | `cards` | `columns` (1 to 3, 2 at first), `cards = { { color, ink, title, text, items = { { state, text, action, args } }, badge, tip, action, args, menu } }` |

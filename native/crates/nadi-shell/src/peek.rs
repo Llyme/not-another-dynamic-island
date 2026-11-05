@@ -540,7 +540,9 @@ fn song(p: &Painter, peek: &Value, body: Rect) {
     let s = &peek["song"];
     let c = color_of(&peek["color"], TEXT);
     let playing = s["playing"] == true;
-    let parts = if playing { p.viz } else { crate::draw::FLAT };
+    // (playing: never lower than paused, so a quiet moment (or a sound the loopback does not hear) never leaves it blank)
+    let flat = crate::draw::FLAT;
+    let parts = if playing { [p.viz[0].max(flat[0]), p.viz[1].max(flat[1]), p.viz[2].max(flat[2])] } else { flat };
     let cy = body.y + body.h / 2.0;
     if s["alone"] == true {
         let h: f32 = 16.0;
@@ -808,7 +810,33 @@ fn graphs(p: &Painter, peek: &Value, body: Rect) {
 }
 
 /// How long the body of a peek is along its edge (logical px); a large one's (its `scale`), that much longer.
+/// A group's other widgets beside it (the mouse on it): each as it looks alone (its words, or its icon alone, as it is set), a thin
+/// line before each.
+const FAN_ICON: f32 = 16.0;
+const FAN_SEP: f32 = 6.0;
+
+/// How long one of them is along the edge.
+fn fan_one(p: &Painter, m: &Value, horizontal: bool) -> f32 {
+    if m["peek"].is_object() {
+        measure(p, &m["peek"], horizontal)
+    } else {
+        FAN_ICON + 12.0
+    }
+}
+
+pub fn fan_len(p: &Painter, peek: &Value, horizontal: bool) -> f32 {
+    peek["fan"].as_array().map_or(0.0, |a| a.iter().map(|m| 1.0 + FAN_SEP + fan_one(p, m, horizontal)).sum())
+}
+
 pub fn measure(p: &Painter, peek: &Value, horizontal: bool) -> f32 {
+    let fan = fan_len(p, peek, horizontal);
+    if fan > 0.0 {
+        let mut base = peek.clone();
+        if let Some(o) = base.as_object_mut() {
+            o.remove("fan");
+        }
+        return measure(p, &base, horizontal) + fan;
+    }
     if peek["voice"].is_object() {
         let w = if horizontal { voice_w(p, peek) } else { METERS_SQUARE };
         return w * peek["scale"].as_f64().unwrap_or(1.0) as f32;
@@ -835,6 +863,36 @@ pub fn measure(p: &Painter, peek: &Value, horizontal: bool) -> f32 {
 
 /// Draw a peek in its body; a large one (its `scale`) drawn that much bigger. The boxes that can be pressed in it, and what each does.
 pub fn draw(p: &Painter, peek: &Value, body: Rect, horizontal: bool, dot: bool) -> Vec<(Rect, String)> {
+    // (a group, the mouse on it: its other widgets after what it shows, each as it looks alone, each a press of its own)
+    let fan = fan_len(p, peek, horizontal);
+    if fan > 0.0 {
+        let mut base = peek.clone();
+        if let Some(o) = base.as_object_mut() {
+            o.remove("fan");
+        }
+        let main = if horizontal { Rect::new(body.x, body.y, (body.w - fan).max(0.0), body.h) } else { Rect::new(body.x, body.y, body.w, (body.h - fan).max(0.0)) };
+        let mut out = draw(p, &base, main, horizontal, dot);
+        let mut at = if horizontal { main.right() } else { main.bottom() };
+        let cross = if horizontal { body.y + body.h / 2.0 } else { body.x + body.w / 2.0 };
+        let half = (if horizontal { body.h } else { body.w } * 0.28).max(6.0);
+        for m in peek["fan"].as_array().cloned().unwrap_or_default() {
+            let line = if horizontal { Rect::new(at, cross - half, 1.0, 2.0 * half) } else { Rect::new(cross - half, at, 2.0 * half, 1.0) };
+            p.round(line, 0.5, DIM.alpha(0.4));
+            at += 1.0 + FAN_SEP;
+            let len = fan_one(p, &m, horizontal);
+            let r = if horizontal { Rect::new(at, body.y, len, body.h) } else { Rect::new(body.x, at, body.w, len) };
+            if m["peek"].is_object() {
+                let _ = draw(p, &m["peek"], r, horizontal, false);
+            } else {
+                let ir = Rect::new(r.x + (r.w - FAN_ICON) / 2.0, r.y + (r.h - FAN_ICON) / 2.0, FAN_ICON, FAN_ICON);
+                p.icon(m["icon"].as_str().unwrap_or("dot"), ir.x, ir.y, FAN_ICON, TEXT);
+            }
+            // (the whole of it one press: its own panel)
+            out.push((r, m["action"].as_str().unwrap_or("").to_string()));
+            at += len;
+        }
+        return out;
+    }
     let k = peek["scale"].as_f64().unwrap_or(1.0) as f32;
     if two_rows(peek, horizontal) && !dot {
         draw_two_rows(p, peek, body);

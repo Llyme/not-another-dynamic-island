@@ -67,6 +67,24 @@ pub(super) struct Edit {
     pub corner: Option<Corner>,
 }
 
+/// NADI's own widgets: each its id, its name, and whether it can be placed.
+const OWN: [(&str, &str, bool); 14] = [
+    (crate::builtin::APPS, "Apps", true),
+    (crate::builtin::DOCK, "Dock", true),
+    (crate::builtin::TASKBAR, "Taskbar", true),
+    (crate::builtin::QUICK, "Volume Mixer", true),
+    (crate::builtin::TRAY, "Tray", true),
+    (crate::sysw::PRIVACY, "Mic and Camera", true),
+    (crate::sysw::DRIVES, "Drives", true),
+    (crate::sysw::LANG, "Keyboard Language", true),
+    (crate::sysw::DESKS, "Desktops", true),
+    (crate::net::NET, "Network", true),
+    (crate::sysw::DEVICES, "Bluetooth", true),
+    (crate::screen::SCREEN, "Screen", true),
+    (crate::screen::FOCUS, "Focus", true),
+    (crate::screen::POWER, "Power Mode", true),
+];
+
 impl Frame {
     pub(super) fn enter_edit(&mut self, si: usize) {
         if self.edit.is_some() || si >= self.screens.len() {
@@ -131,21 +149,10 @@ impl Frame {
             }
         }
         // (NADI's own, every one of them (the tray too: placing it is what makes NADI hold the tray))
-        let own = [
-            (crate::builtin::APPS, "Apps", true),
-            (crate::builtin::DOCK, "Dock", true),
-            (crate::builtin::QUICK, "Volume Mixer", true),
-            (crate::builtin::TRAY, "Tray", true),
-            (crate::sysw::PRIVACY, "Mic and Camera", true),
-            (crate::sysw::DRIVES, "Drives", true),
-            (crate::sysw::LANG, "Keyboard Language", true),
-            (crate::sysw::DESKS, "Desktops", true),
-            (crate::net::NET, "Network", true),
-            (crate::sysw::DEVICES, "Bluetooth", true),
-        ];
-        for (id, label, there) in own {
+        for (id, label, there) in OWN {
             let k = key(crate::builtin::PLUGIN, id);
-            if there && self.place_of(crate::builtin::PLUGIN, id).is_none() {
+            // (in a group: placed, with it)
+            if there && self.place_of(crate::builtin::PLUGIN, id).is_none() && self.group_of(&k).is_none() {
                 out.push(Chip { key: k, label: label.into(), plugin_off: None });
             }
         }
@@ -269,6 +276,11 @@ impl Frame {
     /// A widget's name, as the shelf would show it.
     pub(super) fn widget_label(&self, k: &str) -> String {
         let Some((pl, id)) = k.split_once('/') else { return String::new() };
+        if pl == crate::builtin::PLUGIN {
+            if let Some((_, label, _)) = OWN.iter().find(|(o, ..)| *o == id) {
+                return label.to_string();
+            }
+        }
         if let Some(n) = self.plugins.iter().find(|p| p.id == pl).and_then(|p| p.widgets.iter().find(|w| w.id == id).map(|w| if w.name.is_empty() { p.name.clone() } else { w.name.clone() })) {
             return n;
         }
@@ -479,7 +491,7 @@ impl Frame {
             }
         }
         // a dock's app
-        let dock = key(crate::builtin::PLUGIN, crate::builtin::DOCK);
+        let dock = self.dock_in_use();
         if self.item_at(si, x, y).as_deref() == Some(dock.as_str()) {
             if let Some(it) = self.screens[si].items.get(&dock) {
                 if let Ok((_, b)) = self.shape_now(si, it) {
@@ -699,7 +711,7 @@ impl Frame {
 
     /// A dock's app let go: on the dock, it is pinned where it was let go (among the pinned ones); off it, unpinned.
     fn drop_app(&mut self, si: usize, x: f32, y: f32, app: &str, name: &str, pinned: bool) {
-        let dock = key(crate::builtin::PLUGIN, crate::builtin::DOCK);
+        let dock = self.dock_in_use();
         let Some(it) = self.screens[si].items.get(&dock) else { return };
         let Ok((_, b)) = self.shape_now(si, it) else { return };
         let near = x >= b.x - 40.0 && x <= b.x + b.w + 40.0 && y >= b.y - 50.0 && y <= b.y + b.h + 50.0;

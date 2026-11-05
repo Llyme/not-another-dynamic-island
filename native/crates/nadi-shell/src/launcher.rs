@@ -45,6 +45,8 @@ enum Hit {
     File(String, String, SystemTime),
     /// a page of Windows' settings: its name, its address
     Setting(&'static str, &'static str),
+    /// a program run by its name, as the Start menu finds it (one on the PC's path, or one Windows knows by name: its path, its name)
+    Program(String, String),
     /// one of the PC's own buttons
     Sys(Sys),
     /// a pin (its place among the pins); a folder of pins (its name)
@@ -277,6 +279,57 @@ const SETTINGS: &[(&str, &str)] = &[
     ("About This PC", "ms-settings:about"),
     ("Night Light", "ms-settings:nightlight"),
     ("Focus", "ms-settings:focus"),
+    ("Recovery", "ms-settings:recovery"),
+    ("Troubleshoot", "ms-settings:troubleshoot"),
+    // (the Control Panel's own pages, as the Start menu finds them)
+    ("Control Panel", "control"),
+    ("Programs and Features", "appwiz.cpl"),
+    ("Windows Features", "optionalfeatures"),
+    ("Network Connections", "ncpa.cpl"),
+    ("Sound Control Panel", "mmsys.cpl"),
+    ("System Properties", "sysdm.cpl"),
+    ("Power Options", "powercfg.cpl"),
+    ("Internet Options", "inetcpl.cpl"),
+    ("Mouse Properties", "main.cpl"),
+    ("Windows Firewall", "firewall.cpl"),
+    ("Device Manager", "devmgmt.msc"),
+    ("Disk Management", "diskmgmt.msc"),
+    ("Services", "services.msc"),
+    ("Event Viewer", "eventvwr.msc"),
+    ("Registry Editor", "regedit"),
+    ("System Information", "msinfo32"),
+    ("DirectX Diagnostic Tool", "dxdiag"),
+];
+
+/// Other names a page is known by, as the Start menu knows them (each: the name, the page it is).
+const ALIASES: &[(&str, &str)] = &[
+    ("Add or Remove Programs", "Programs and Features"),
+    ("Uninstall a Program", "Programs and Features"),
+    ("Uninstall", "Installed Apps"),
+    ("Apps and Features", "Installed Apps"),
+    ("Turn Windows Features On or Off", "Windows Features"),
+    ("Network Adapters", "Network Connections"),
+    ("Playback Devices", "Sound Control Panel"),
+    ("Recording Devices", "Sound Control Panel"),
+    ("Advanced System Settings", "System Properties"),
+    ("Environment Variables", "System Properties"),
+    ("Computer Name", "System Properties"),
+    ("Screen Resolution", "Display"),
+    ("Scale", "Display"),
+    ("Wallpaper", "Background"),
+    ("Dark Mode", "Colors"),
+    ("Updates", "Windows Update"),
+    ("Antivirus", "Windows Security"),
+    ("Startup", "Startup Apps"),
+    ("Printer", "Printers and Scanners"),
+    ("Partitions", "Disk Management"),
+    ("Drivers", "Device Manager"),
+    ("Reset This PC", "Recovery"),
+    ("Do Not Disturb", "Focus"),
+    ("Time", "Date and Time"),
+    ("Region", "Language and Region"),
+    ("Password", "Sign-in Options"),
+    ("PC Name", "About This PC"),
 ];
 
 /// How a thing is shown: a row, a pin's tile, a ghost button at the foot (round), half a row (what was used lately), a small ghost
@@ -409,6 +462,61 @@ fn run_pin(p: &AppPin) {
             }
         }
     }
+}
+
+/// The programs run by their names, as the Start menu finds them: each program and console on the PC's path (`dxdiag`, `regedit`,
+/// `services`), and those Windows knows by name (its App Paths). Found once, on a thread of its own; none till then.
+fn programs() -> Vec<(String, String)> {
+    static FOUND: std::sync::OnceLock<Vec<(String, String)>> = std::sync::OnceLock::new();
+    static LOOKING: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+    if let Some(f) = FOUND.get() {
+        return f.clone();
+    }
+    if !LOOKING.swap(true, std::sync::atomic::Ordering::Relaxed) {
+        std::thread::spawn(|| {
+            let _ = FOUND.set(find_programs());
+        });
+    }
+    Vec::new()
+}
+
+fn find_programs() -> Vec<(String, String)> {
+    let mut out: Vec<(String, String)> = Vec::new();
+    let mut add = |name: String, path: String| {
+        if !name.is_empty() && !out.iter().any(|(n, _)| n.eq_ignore_ascii_case(&name)) {
+            out.push((name, path));
+        }
+    };
+    // (the path's folders, in order: the first of a name wins, as Windows runs it)
+    let path = std::env::var("PATH").unwrap_or_default();
+    for dir in path.split(';').map(str::trim).filter(|d| !d.is_empty()) {
+        let Ok(rd) = std::fs::read_dir(dir) else { continue };
+        for e in rd.flatten() {
+            let p = e.path();
+            let ext = p.extension().and_then(|x| x.to_str()).map(str::to_lowercase).unwrap_or_default();
+            if ext != "exe" && ext != "msc" {
+                continue;
+            }
+            let stem = p.file_stem().and_then(|s| s.to_str()).unwrap_or("").to_string();
+            add(stem, p.to_string_lossy().to_string());
+        }
+    }
+    // (those Windows knows by name: App Paths, the user's and the PC's)
+    use winreg::enums::{HKEY_CURRENT_USER, HKEY_LOCAL_MACHINE};
+    for root in [HKEY_CURRENT_USER, HKEY_LOCAL_MACHINE] {
+        let Ok(k) = winreg::RegKey::predef(root).open_subkey(r"Software\Microsoft\Windows\CurrentVersion\App Paths") else { continue };
+        for name in k.enum_keys().flatten() {
+            let Ok(sub) = k.open_subkey(&name) else { continue };
+            let Ok(target) = sub.get_value::<String, _>("") else { continue };
+            let target = std::env::var("SystemRoot").map(|r| target.replace("%SystemRoot%", &r).replace("%systemroot%", &r)).unwrap_or(target).trim_matches('"').to_string();
+            if !std::path::Path::new(&target).is_file() {
+                continue;
+            }
+            let stem = name.strip_suffix(".exe").or_else(|| name.strip_suffix(".EXE")).unwrap_or(&name).to_string();
+            add(stem, target);
+        }
+    }
+    out
 }
 
 fn shell_open(what: &str, verb: &str) {
@@ -713,6 +821,7 @@ impl Launcher {
         self.pick = pick;
         self.picked = None;
         self.apps = apps::cached();
+        let _ = programs();
         self.pinned = pinned;
         self.pins = pins;
         self.foot = foot;
@@ -1180,9 +1289,31 @@ impl Launcher {
                     }
                 }
                 for (name, uri) in SETTINGS {
-                    let sc = apps::score(name, &q);
+                    // (by its name, or by another it is known by: found by that one, shown by it)
+                    let own = apps::score(name, &q);
+                    let alias = ALIASES.iter().filter(|(_, to)| to == name).map(|(a, _)| (apps::score(a, &q), *a)).max_by_key(|(sc, _)| *sc);
+                    let (sc, shown) = match alias {
+                        Some((asc, a)) if asc > own => (asc, a),
+                        _ => (own, *name),
+                    };
                     if sc > 0 {
-                        found.push((sc.saturating_sub(1), Hit::Setting(name, uri)));
+                        found.push((sc.saturating_sub(1), Hit::Setting(shown, uri)));
+                    }
+                }
+                // (a program by its name ("dxdiag", "services"): only by its start, typed far enough, and not one of the apps already)
+                if q.chars().count() >= 2 {
+                    let ql = q.to_lowercase();
+                    for (name, path) in programs() {
+                        let low = name.to_lowercase();
+                        // (one a page of Settings or the Control Panel is already (Registry Editor, Services): found as that)
+                        let file = path.rsplit(['\\', '/']).next().unwrap_or("").to_lowercase();
+                        let paged = SETTINGS.iter().any(|(_, u)| u.eq_ignore_ascii_case(&low) || u.eq_ignore_ascii_case(&file));
+                        if !low.starts_with(&ql) || paged || self.apps.iter().any(|a| a.id.eq_ignore_ascii_case(&path) || a.name.eq_ignore_ascii_case(&name)) {
+                            continue;
+                        }
+                        // (the whole name typed: first of all)
+                        let sc = apps::score(&name, &q) + if low == ql { 6 } else { 0 };
+                        found.push((sc, Hit::Program(path, name)));
                     }
                 }
                 // (the pins: what is pinned by its own name (a file, a shortcut, an app renamed), and the folders by theirs; one found
@@ -1590,6 +1721,7 @@ impl Launcher {
                 }
             }
             Some(Hit::Setting(_, uri)) => apps::launch_uri(uri),
+            Some(Hit::Program(path, _)) => shell_open(&path, "open"),
             Some(Hit::App(a)) => apps::launch(&a.id),
             Some(Hit::Window(h, _, _)) => winlist::activate(h),
             Some(Hit::File(path, _, _)) => shell_open(&path, "open"),
@@ -1742,6 +1874,10 @@ impl Launcher {
             Some(Hit::FootPin(k)) => {
                 rows.push(("unpin", "Unpin".into(), CtxAct::UnpinFoot(*k)));
                 rows.push(("up", "Move to the Pins".into(), CtxAct::FromFoot(*k)));
+            }
+            Some(Hit::Program(path, _)) => {
+                rows.push(("folder", "Open File Location".into(), CtxAct::Location(path.clone())));
+                rows.push(("shield", "Run as Administrator".into(), CtxAct::Admin(path.clone())));
             }
             Some(Hit::Folder(name)) => {
                 rows.push(("pen", "Rename".into(), CtxAct::Rename(name.clone())));
@@ -2689,6 +2825,7 @@ fn paint_item(p: &Painter, hit: &Hit, look: Look, r: &Rect, ring: Option<f32>, p
         Hit::Window(hw, title, exe) => (if exe.is_empty() { format!("hwnd:{hw}") } else { format!("exe:{exe}") }, title.clone(), String::new()),
         Hit::File(path, name, when) => (format!("shell:{path}"), name.clone(), ago(*when)),
         Hit::Setting(name, _) => (String::new(), name.to_string(), String::new()),
+        Hit::Program(path, name) => (if path.to_lowercase().ends_with(".exe") { format!("exe:{path}") } else { format!("shell:{path}") }, name.clone(), String::new()),
         _ => return,
     };
     // (half a row: what was used lately, its name and how long ago, one under the other)

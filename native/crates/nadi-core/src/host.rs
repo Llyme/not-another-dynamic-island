@@ -1260,24 +1260,27 @@ impl Host {
         }
     }
 
-    /// The hosts a plugin may reach: its manifest's, with `{{settings.key}}` read from that setting (the host of the address in it).
+    /// The hosts a plugin may reach: its manifest's, with `{{settings.key}}` read from that setting (the host of each address in it:
+    /// several, one a line, or between spaces or commas).
     fn hosts_of(&self, i: usize) -> Vec<String> {
         let p = &self.plugins[i];
         let values = self.values_of(p);
-        p.manifest
-            .permissions
-            .net
-            .iter()
-            .filter_map(|h| match h.strip_prefix("{{settings.").and_then(|r| r.strip_suffix("}}")) {
+        let mut out: Vec<String> = Vec::new();
+        for h in &p.manifest.permissions.net {
+            match h.strip_prefix("{{settings.").and_then(|r| r.strip_suffix("}}")) {
                 Some(key) => {
-                    let url = values[key].as_str().unwrap_or("").trim();
-                    let rest = url.split_once("://").map_or(url, |(_, r)| r);
-                    let host = rest.split(['/', '?', '#']).next().unwrap_or("");
-                    (!host.is_empty() && !host.contains('@')).then(|| host.to_string())
+                    for url in values[key].as_str().unwrap_or("").split(|c: char| c.is_whitespace() || c == ',' || c == ';').filter(|u| !u.is_empty()) {
+                        let rest = url.split_once("://").map_or(url, |(_, r)| r);
+                        let host = rest.split(['/', '?', '#']).next().unwrap_or("");
+                        if !host.is_empty() && !host.contains('@') && !out.iter().any(|o| o.eq_ignore_ascii_case(host)) {
+                            out.push(host.to_string());
+                        }
+                    }
                 }
-                None => Some(h.clone()),
-            })
-            .collect()
+                None => out.push(h.clone()),
+            }
+        }
+        out
     }
 
     /// One banner every few seconds from a plugin, and the same words not again within a minute (one with a key of its own is the

@@ -3428,7 +3428,8 @@ impl<'a, 'b> Ctx<'a, 'b> {
                 let groups = b["groups"].as_array().cloned().unwrap_or_default();
                 let pins = b["pins"].as_array().cloned().unwrap_or_default();
                 let tiles: Vec<(Value, Value)> = groups.iter().flat_map(|g| g["windows"].as_array().cloned().unwrap_or_default().into_iter().map(move |t| (t, g.clone()))).collect();
-                let cols = (((w + TILE_GAP) / (TILE_W + TILE_GAP)).floor() as usize).max(1).min(tiles.len().max(1));
+                let tile_w = b["tile"].as_f64().map_or(TILE_W, |t| t as f32);
+                let cols = (((w + TILE_GAP) / (tile_w + TILE_GAP)).floor() as usize).max(1).min(tiles.len().max(1));
                 let tw = ((w - (cols - 1) as f32 * TILE_GAP) / cols as f32).floor();
                 let th = (tw * 0.62).round();
                 let rows = tiles.len().div_ceil(cols);
@@ -3857,7 +3858,7 @@ impl<'a, 'b> Ctx<'a, 'b> {
                 // (`on`, `action`, `args`, `tip`); `pill` (`text`, `image` or `icon`, `dot`, `action` and `args` or `menu`: a chevron after
                 // it); `seg` (`options = { { text | icon, value, tip } }`, `value`, `action`: sent `{ value }`); `num` (`text`, `unit`,
                 // `action`: pressed, typed, sent `{ text }`); `slider` (a slider block's fields: it takes what room is left, as a space does);
-                // `space` (what room is left, shared by every space and slider)
+                // `label` (`text`: words as a heading's); `space` (what room is left, shared by every space and slider)
                 let items = b["items"].as_array().cloned().unwrap_or_default();
                 let h = 34.0;
                 let cy = y + h / 2.0;
@@ -3877,6 +3878,7 @@ impl<'a, 'b> Ctx<'a, 'b> {
                             2.0 * SEG_PAD + opts.iter().map(|o| if !s(o, "icon").is_empty() { 32.0 } else { self.p.measure(s(o, "text"), 11.5, Weight::Semibold, 120.0) + 22.0 }).sum::<f32>() + 2.0 * (opts.len().max(1) - 1) as f32
                         }
                         "num" => 20.0 + self.p.measure(s(it, "text"), 12.5, Weight::Semibold, 100.0) + if s(it, "unit").is_empty() { 0.0 } else { 4.0 + self.p.measure(s(it, "unit"), 10.5, Weight::Regular, 40.0) },
+                        "label" => self.p.measure(s(it, "text"), 10.5, Weight::Semibold, 240.0),
                         _ => 0.0,
                     }
                 };
@@ -3982,6 +3984,9 @@ impl<'a, 'b> Ctx<'a, 'b> {
                         }
                         "slider" => {
                             self.block(it, cx, cy - 16.0, iw);
+                        }
+                        "label" => {
+                            self.text(s(it, "text"), cx, cy, 10.5, Weight::Semibold, iw, DIM);
                         }
                         "num" => {
                             let nr = Rect::new(cx, cy - 14.0, iw, 28.0);

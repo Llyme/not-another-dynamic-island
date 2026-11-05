@@ -54,6 +54,7 @@ mod trayhost;
 mod viz;
 mod volume;
 mod winlist;
+mod screen;
 mod sysw;
 mod audiodev;
 mod explorer;

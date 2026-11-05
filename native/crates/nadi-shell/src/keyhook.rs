@@ -51,6 +51,15 @@ pub fn set_enabled(on: bool) {
     ENABLED.store(on, Ordering::Relaxed);
 }
 
+/// Keys pressed together, as NADI's own (its hook lets them through): each down in order, then up the other way round.
+pub fn chord(vks: &[u16]) {
+    let mut ins: Vec<INPUT> = vks.iter().map(|v| key(*v, false)).collect();
+    ins.extend(vks.iter().rev().map(|v| key(*v, true)));
+    unsafe {
+        let _ = SendInput(&ins, std::mem::size_of::<INPUT>() as i32);
+    }
+}
+
 fn key(vk: u16, up: bool) -> INPUT {
     INPUT {
         r#type: INPUT_KEYBOARD,

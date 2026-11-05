@@ -12,6 +12,8 @@ pub const PLUGIN: &str = "nadi";
 pub const DOCK: &str = "dock";
 pub const QUICK: &str = "quick";
 pub const TRAY: &str = "tray";
+/// the dock and the tray as one: an app's tray icon on its icon; apps in the tray alone, and the tray icons of no app, after a line
+pub const TASKBAR: &str = "taskbar";
 /// the launcher's button, a widget of its own (placed where you like, beside the dock or not)
 pub const APPS: &str = "apps";
 
@@ -347,6 +349,8 @@ pub struct Builtins {
     pub numbers: bool,
     /// the PC's small things (microphone and camera, USB drives, languages, desktops)
     pub sys: crate::sysw::State,
+    /// the screen, focus and the power mode, as last looked at
+    pub screen: crate::screen::State,
     /// the network (Wi-Fi in reach, Bluetooth paired, online), and the radios as last drawn
     pub net: crate::net::State,
     pub radios: crate::radios::States,
@@ -367,11 +371,13 @@ pub struct Builtins {
     history: std::collections::HashMap<String, std::collections::VecDeque<(f32, f32)>>,
     /// each tray icon's picture as it was last seen (its app pressed, or in front): another since is news
     tray_seen: std::collections::HashMap<String, u64>,
+    /// the Taskbar is placed: the tray merged into the dock's apps (the Dock alone shows the same apps, without the tray)
+    pub merge: bool,
 }
 
 impl Builtins {
     pub fn new() -> Builtins {
-        Builtins { windows: Vec::new(), order: Vec::new(), scanned: None, volume: crate::volume::get(), usage: Default::default(), used_at: None, audio: crate::appaudio::AppAudio::new(), sounding: Default::default(), looks: 0, history: Default::default(), flashing: Default::default(), numbers: false, sys: Default::default(), net: Default::default(), radios: Default::default(), net_ask: None, desk_pending: None, focus: None, outputs: Vec::new(), inputs: Vec::new(), mic: None, app_volumes: Vec::new(), tray_seen: Default::default() }
+        Builtins { windows: Vec::new(), order: Vec::new(), scanned: None, volume: crate::volume::get(), usage: Default::default(), used_at: None, audio: crate::appaudio::AppAudio::new(), sounding: Default::default(), looks: 0, history: Default::default(), flashing: Default::default(), numbers: false, sys: Default::default(), screen: Default::default(), net: Default::default(), radios: Default::default(), net_ask: None, desk_pending: None, focus: None, outputs: Vec::new(), inputs: Vec::new(), mic: None, app_volumes: Vec::new(), tray_seen: Default::default(), merge: false }
     }
 
     /// Look at the windows again (at most twice a second); true when what the dock shows changed.
@@ -473,7 +479,7 @@ impl Builtins {
             out.push(DockApp { key: k.clone(), name: winlist::app_name(k), image: format!("exe:{k}"), pinned: false, windows, open: k.clone(), tray: Vec::new() });
         }
         // (the dock and the tray as one: each tray icon on its program's app; an app only in the tray after the others)
-        if cfg.dock_tray {
+        if self.merge {
             let (by_program, _) = tray_by_program();
             for (exe, t) in by_program {
                 if let Some(a) = out.iter_mut().find(|a| a.key == exe) {
@@ -496,7 +502,7 @@ impl Builtins {
 
     /// The tray icons of no app (a driver's, a helper's): at the dock's end, small.
     pub fn dock_tray_rest(&self, cfg: &Config) -> Vec<TrayRef> {
-        if !cfg.dock_tray {
+        if !self.merge {
             return Vec::new();
         }
         let apps = self.dock_apps(cfg);
@@ -511,7 +517,7 @@ impl Builtins {
 
     /// The tray icons looked at: one first seen, as it is; an app in front, its icons seen; gone ones forgotten.
     pub fn tray_look(&mut self, cfg: &Config) {
-        if !cfg.dock_tray {
+        if !self.merge {
             self.tray_seen.clear();
             return;
         }
@@ -538,8 +544,16 @@ impl Builtins {
     /// The dock, as a widget. Each running app: what it uses (its share of the processor, of the memory), how far what it
     /// downloads is, and the sound it makes. Open, its icons become their windows: each window
     /// its live picture, an app pinned with none its picture; the launcher first.
-    pub fn dock(&self, cfg: &Config) -> Value {
-        let apps = self.dock_apps(cfg);
+    pub fn dock(&self, cfg: &Config, merged: bool) -> Value {
+        // (the Dock alone: the same apps but those in the tray alone (they come last: every app keeps its number), without the tray)
+        let mut apps = self.dock_apps(cfg);
+        if !merged {
+            apps.retain(|a| !(a.windows.is_empty() && !a.pinned && !a.tray.is_empty()));
+            for a in &mut apps {
+                a.tray.clear();
+            }
+        }
+        let rest = if merged { self.dock_tray_rest(cfg) } else { Vec::new() };
         let used = |k: &str| self.usage.get(k).copied().unwrap_or_default();
         let total = crate::procstats::total_memory().max(1) as f64;
         let progress = progress_by_program();
@@ -665,12 +679,12 @@ impl Builtins {
         let n = groups.iter().map(|g| g["windows"].as_array().map_or(0, |w| w.len())).sum::<usize>().clamp(1, 4) as f32;
         let width = (2.0 * 16.0 + 6.0 + 4.0 + n * crate::blocks::TILE_W + (n - 1.0) * crate::blocks::TILE_GAP).clamp(400.0, 1100.0);
         json!({
-            "peek": { "dock": { "items": items, "numbers": self.numbers, "trays": self.dock_tray_rest(cfg).iter().map(|t| json!({ "image": format!("trayicon:{}", t.icon), "action": t.action() })).collect::<Vec<_>>() } },
+            "peek": { "dock": { "items": items, "numbers": self.numbers, "trays": rest.iter().map(|t| json!({ "image": format!("trayicon:{}", t.icon), "action": t.action() })).collect::<Vec<_>>() } },
             "panel": { "width": width, "body": [{ "kind": "appwindows", "groups": groups, "pins": pins }] },
             "tiles": tiles,
             "tip": "Apps",
             // (nothing pinned and nothing open: nothing to show; hidden as an idle widget is, unless shown anyway)
-            "idle": items.is_empty() && self.dock_tray_rest(cfg).is_empty(),
+            "idle": items.is_empty() && rest.is_empty(),
         })
     }
 
@@ -711,7 +725,14 @@ impl Builtins {
         if let Some((mv, mm)) = self.mic {
             body.push(json!({ "kind": "slider", "icon": "mic", "value": mv, "muted": mm, "text": pc(mv), "action": "micvol", "press": "micmute", "meter": "mic" }));
         }
-        body.push(json!({ "kind": "buttons", "items": [{ "icon": "gear", "label": "Sound Settings", "action": "sound_settings" }] }));
+        // (Quick Settings' other tiles: sharing nearby, accessibility, the touch keyboard; and the sound's own settings)
+        body.push(json!({ "kind": "row", "items": [
+            { "kind": "button", "icon": "nearby", "tip": "Nearby Sharing", "action": "nearby" },
+            { "kind": "button", "icon": "a11y", "tip": "Accessibility", "action": "a11y" },
+            { "kind": "button", "icon": "keyboard", "tip": "Touch Keyboard", "action": "touchkbd" },
+            { "kind": "space" },
+            { "kind": "button", "icon": "gear", "tip": "Sound Settings", "action": "sound_settings" },
+        ] }));
         let any = peaks.values().any(|v| *v > 0.001);
         json!({
             // (at rest: its icon and a small line as long as its volume, how loud it is now faint over it; muted, its icon alone, red)
@@ -723,6 +744,26 @@ impl Builtins {
 
     /// A press on one of them.
     pub fn press(&mut self, cfg: &mut Config, action: &str, args: &Value) -> (Effect, bool) {
+        // (the screen, focus, the power mode: theirs)
+        if crate::screen::press(&self.screen, action, args) {
+            return (Effect::None, false);
+        }
+        // (the Volume Mixer's tiles)
+        match action {
+            "nearby" => {
+                apps::launch_uri("ms-settings:crossdevice");
+                return (Effect::None, false);
+            }
+            "a11y" => {
+                apps::launch_uri("ms-settings:easeofaccess");
+                return (Effect::None, false);
+            }
+            "touchkbd" => {
+                crate::screen::touch_keyboard();
+                return (Effect::None, false);
+            }
+            _ => {}
+        }
         // (lock, sleep, restart, shut down: asked first, in a modal)
         if let Some(what) = action.strip_prefix("power:") {
             power(what);
@@ -1013,6 +1054,10 @@ impl Builtins {
         if action == "btsettings" {
             apps::launch_uri("ms-settings:bluetooth");
             return (Effect::None, false);
+        }
+        if action == "netrefresh" {
+            crate::net::refresh();
+            return (Effect::Changed, false);
         }
         if action == "netsettings" {
             apps::launch_uri("ms-settings:network");

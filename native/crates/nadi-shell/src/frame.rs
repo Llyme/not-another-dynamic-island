@@ -27,6 +27,7 @@ use windows::Win32::UI::WindowsAndMessaging::*;
 
 mod edit;
 mod grip;
+mod group;
 mod pop;
 mod size;
 use pop::{is_pop, pop_key, unpop, PopMarks, PopMeta, POP_TOP};
@@ -133,6 +134,13 @@ struct Tip {
     thumbs: Vec<(isize, isize)>,
     /// something in it moves on its own (a spinning ring, chevrons): drawn again every frame
     moving: bool,
+    /// where it stands (logical, in its screen), once drawn; and what in it can be pressed (its own boxes, from its corner)
+    at: Option<Bx>,
+    hits: Vec<blocks::Hit>,
+    /// a tip of windows' tiles (as the open dock's): its ground and its tiles on a piece of the frame's own, under the live pictures
+    /// (Windows draws those over the window they are in); what is drawn over the pictures (their names, their use) on its piece on the
+    /// glass above
+    under: Option<Piece>,
 }
 
 /// A tip's live pictures gone.
@@ -202,6 +210,8 @@ struct Menu {
     closing: bool,
     /// the point it grows from (logical, in it)
     pivot: (f32, f32),
+    /// a group's: the widget in it the menu is for (its look and its bumps are its own; its place, its size, the group's)
+    member: Option<String>,
 }
 
 /// Where a held widget would go if let go now: its place, floating there or not, and in a corner, whether it is the corner's own
@@ -251,7 +261,26 @@ struct Widget {
     content: Value,
     /// when its glow last changed (a flash fades from then)
     glow_at: Instant,
+    /// a group: the widget it shows now (its plugin and its id), which hears what is pressed in it
+    via: Option<(String, String)>,
 }
+
+impl Widget {
+    /// Who hears what is pressed in it: its plugin, or (a group) the plugin of the widget it shows.
+    fn sender(&self) -> String {
+        self.via.as_ref().map(|v| v.0.clone()).unwrap_or_else(|| self.plugin.clone())
+    }
+
+    /// Its id as its plugin knows it (a group: the one it shows).
+    fn own_id(&self) -> String {
+        self.via.as_ref().map(|v| v.1.clone()).unwrap_or_else(|| self.id.clone())
+    }
+}
+
+/// How long a widget is held over another, in Edit Mode, before they become a group.
+const MERGE_HOLD: f32 = 0.7;
+/// How long a group's widget that had something to say (bumped) stays at its group's front.
+const GROUP_ATTENTION: Duration = Duration::from_secs(8);
 
 /// How far a glow reaches out of its piece (logical px).
 const GLOW: f32 = 18.0;
@@ -425,6 +454,18 @@ pub struct Frame {
     mouse: (usize, f32, f32),
     /// the tip out, and what the mouse rests on that has one (since when)
     tip: Option<Tip>,
+    /// where the tips that can be pressed were when the mouse's boxes were last set (they change: set again)
+    tip_hit: Vec<(usize, Bx)>,
+    /// a group opened on one of its other widgets (its pictogram pressed): which, till its panel shuts
+    group_opened: HashMap<String, usize>,
+    /// a widget in a group that has something to say (bumped): since when (it is at its group's front a while)
+    group_attention: HashMap<String, Instant>,
+    /// the group laid out with its pictograms beside it (the mouse on it), if any: the mouse gone from it, laid out again without
+    fan_for: Option<String>,
+    /// when the groups were last looked at for one of theirs wanting attention
+    groups_at: Instant,
+    /// in Edit Mode, a widget dragged over another that it could be grouped with: (its screen, that widget, since when)
+    merge_over: Option<(usize, String, Instant)>,
     tip_want: Option<(String, Instant)>,
     /// something held until its ring fills
     hold: Option<Hold>,
@@ -657,6 +698,12 @@ impl Frame {
             press: None,
             mouse: (0, 0.0, 0.0),
             tip: None,
+            tip_hit: Vec::new(),
+            group_opened: HashMap::new(),
+            group_attention: HashMap::new(),
+            fan_for: None,
+            groups_at: Instant::now(),
+            merge_over: None,
             tip_want: None,
             hold: None,
             slide: None,
@@ -759,6 +806,7 @@ impl Frame {
         f.make_screens();
         f.sync_builtins(true);
         crate::sysw::start();
+        crate::screen::start();
         crate::net::start();
         crate::recycle::start();
         crate::update::start(f.msg_hwnd);
@@ -783,16 +831,19 @@ impl Frame {
     /// The dock and quick settings, as they are now: widgets like any other (the windows are looked at only while the dock is placed).
     fn sync_builtins(&mut self, force: bool) {
         use crate::builtin::{DOCK, PLUGIN, QUICK};
+        self.bi.merge = self.place_of(PLUGIN, crate::builtin::TASKBAR).is_some();
         let changed = (force || self.dock_placed() || self.place_of(PLUGIN, QUICK).is_some()) && self.bi.scan(force);
         let have = self.widgets.contains_key(&key(PLUGIN, DOCK));
         if !changed && !force && have {
             return;
         }
         self.bi.tray_look(&self.config);
-        let dock = self.bi.dock(&self.config);
+        let dock = self.bi.dock(&self.config, false);
+        let taskbar = self.bi.dock(&self.config, true);
         let quick = self.bi.quick();
         self.apply(vec![
             Update::Widget { plugin: PLUGIN.into(), widget: DOCK.into(), content: dock },
+            Update::Widget { plugin: PLUGIN.into(), widget: crate::builtin::TASKBAR.into(), content: taskbar },
             Update::Widget { plugin: PLUGIN.into(), widget: QUICK.into(), content: quick },
             Update::Widget { plugin: PLUGIN.into(), widget: crate::builtin::APPS.into(), content: crate::builtin::apps_widget() },
         ]);
@@ -814,6 +865,9 @@ impl Frame {
         ups.push(Update::Widget { plugin: crate::builtin::PLUGIN.into(), widget: crate::net::NET.into(), content: crate::net::widget(&self.bi.net, self.bi.radios, self.net_speed, self.bi.net_ask.as_deref()) });
         ups.push(Update::Widget { plugin: crate::builtin::PLUGIN.into(), widget: crate::sysw::DEVICES.into(), content: crate::sysw::devices(&self.bi.sys, &self.bi.net.paired, self.bi.radios.bluetooth) });
         ups.push(Update::Widget { plugin: crate::builtin::PLUGIN.into(), widget: crate::recycle::BIN.into(), content: self.bin_widget() });
+        for (id, content) in crate::screen::widgets(&self.bi.screen) {
+            ups.push(Update::Widget { plugin: crate::builtin::PLUGIN.into(), widget: id.into(), content });
+        }
         self.apply(ups);
     }
 
@@ -892,7 +946,7 @@ impl Frame {
     /// The dock's meters, a frame on: each springs to what its program uses; the sound bars follow how loud each is. Drawn again
     /// while they move.
     fn step_dock(&mut self, dt: f32) {
-        let k = key(crate::builtin::PLUGIN, crate::builtin::DOCK);
+        let k = self.dock_in_use();
         let Some(w) = self.widgets.get(unpop(&k)) else { return };
         let mut moving = false;
         let mut seen = HashSet::new();
@@ -969,9 +1023,24 @@ impl Frame {
         }
     }
 
-    /// Is the dock on a screen (not put away)?
+    /// Is a dock on a screen (the Dock, or the Taskbar: not put away)?
     pub(super) fn dock_placed(&self) -> bool {
-        self.place_of(crate::builtin::PLUGIN, crate::builtin::DOCK).is_some()
+        self.place_of(crate::builtin::PLUGIN, crate::builtin::DOCK).is_some() || self.place_of(crate::builtin::PLUGIN, crate::builtin::TASKBAR).is_some()
+    }
+
+    /// The dock in use: the Taskbar when it is placed and the Dock is not, else the Dock.
+    pub(super) fn dock_in_use(&self) -> String {
+        if self.place_of(crate::builtin::PLUGIN, crate::builtin::TASKBAR).is_some() && self.place_of(crate::builtin::PLUGIN, crate::builtin::DOCK).is_none() {
+            key(crate::builtin::PLUGIN, crate::builtin::TASKBAR)
+        } else {
+            key(crate::builtin::PLUGIN, crate::builtin::DOCK)
+        }
+    }
+
+    /// Is this a dock (the Dock, or the Taskbar)?
+    pub(super) fn is_dock(k: &str) -> bool {
+        let k = unpop(k);
+        k == key(crate::builtin::PLUGIN, crate::builtin::DOCK) || k == key(crate::builtin::PLUGIN, crate::builtin::TASKBAR)
     }
 
     /// Where a plugin's banner comes out: its widget, which becomes the banner for a while (the one the banner names, else the first
@@ -1003,7 +1072,7 @@ impl Frame {
             if look == "eyes" {
                 let k = key(id, "eyes");
                 if !self.widgets.contains_key(&k) {
-                    self.widgets.insert(k, Widget { plugin: id.clone(), id: "eyes".into(), content: json!({ "peek": { "face": "eyes" }, "tip": "Eyes" }), glow_at: Instant::now() });
+                    self.widgets.insert(k, Widget { plugin: id.clone(), id: "eyes".into(), content: json!({ "peek": { "face": "eyes" }, "tip": "Eyes" }), glow_at: Instant::now(), via: None });
                 }
             }
             if look == "aura" {
@@ -1145,7 +1214,7 @@ impl Frame {
                 let bumping = self.bumps.get(&k).is_some_and(|t| Instant::now() < *t);
                 // (files being dragged: the Recycle Bin out, to take them, for as long as they are)
                 let takes_drag = self.files_dragging && k == key(crate::builtin::PLUGIN, crate::recycle::BIN);
-                let busy = bumping || takes_drag || (it.open.to == 1.0 && !self.always_open(&k)) || it.pinned || it.drag_place.is_some() || hovered || menu_here || editing || (always.contains(&k) && !sc.full) || self.over_full(&k);
+                let busy = bumping || takes_drag || self.tip_holds(&k) || (it.open.to == 1.0 && !self.always_open(&k)) || it.pinned || it.drag_place.is_some() || hovered || menu_here || editing || (always.contains(&k) && !sc.full) || self.over_full(&k);
                 let want = all
                     || busy
                     || attention
@@ -1311,6 +1380,18 @@ impl Frame {
 
     /// A press on a widget: the plugin's is told; the frame's own is done here.
     fn act(&mut self, plugin: String, action: String, args: Value) {
+        // (a group's pictogram pressed: its widget's own panel, opened)
+        if let Some((gid, i)) = action.strip_prefix("\u{0}group:").and_then(|r| r.split_once(':')).and_then(|(g, i)| Some((g.to_string(), i.parse::<usize>().ok()?))) {
+            self.group_opened.insert(gid.clone(), i);
+            let gk = key(crate::builtin::PLUGIN, &format!("group:{gid}"));
+            self.refresh_groups(None);
+            if let Some(si) = (0..self.screens.len()).find(|s| self.screens[*s].items.contains_key(&gk)) {
+                self.open_only(si, &gk);
+                self.relayout_with(Some(&[gk.clone()].into_iter().collect()));
+                self.commit();
+            }
+            return;
+        }
         // (its args say `paste`: the clipboard's picture kept in the plugin's folder first, and the plugin told its name and size)
         if plugin != crate::builtin::PLUGIN && args["paste"] == true {
             let tx = self.tx.clone();
@@ -1467,7 +1548,8 @@ impl Frame {
             HSHELL_FLASH => {
                 let new = self.bi.flashing.insert(hwnd);
                 if new {
-                    self.bump(&key(crate::builtin::PLUGIN, crate::builtin::DOCK));
+                    let dk = self.dock_in_use();
+                    self.bump(&dk);
                 }
                 new
             }
@@ -1573,6 +1655,7 @@ impl Frame {
         }
         add(crate::builtin::PLUGIN, "NADI", crate::builtin::APPS, "Apps");
         add(crate::builtin::PLUGIN, "NADI", crate::builtin::DOCK, "Dock");
+        add(crate::builtin::PLUGIN, "NADI", crate::builtin::TASKBAR, "Taskbar");
         add(crate::builtin::PLUGIN, "NADI", crate::builtin::QUICK, "Volume Mixer");
         add(crate::builtin::PLUGIN, "NADI", crate::builtin::TRAY, "Tray");
         add(crate::builtin::PLUGIN, "NADI", crate::sysw::PRIVACY, "Mic and Camera");
@@ -1581,6 +1664,9 @@ impl Frame {
         add(crate::builtin::PLUGIN, "NADI", crate::sysw::DESKS, "Desktops");
         add(crate::builtin::PLUGIN, "NADI", crate::net::NET, "Network");
         add(crate::builtin::PLUGIN, "NADI", crate::sysw::DEVICES, "Bluetooth");
+        add(crate::builtin::PLUGIN, "NADI", crate::screen::SCREEN, "Screen");
+        add(crate::builtin::PLUGIN, "NADI", crate::screen::FOCUS, "Focus");
+        add(crate::builtin::PLUGIN, "NADI", crate::screen::POWER, "Power Mode");
         add(crate::builtin::PLUGIN, "NADI", crate::recycle::BIN, "Recycle Bin");
         out
     }
@@ -2266,6 +2352,10 @@ impl Frame {
         if is_pop(k) {
             return true;
         }
+        // (a group: never kept open (its panel is whichever of its widgets was opened))
+        if self.widgets.get(k).is_some_and(|w| w.content["group"].is_object()) {
+            return false;
+        }
         self.config.widgets.get(k).and_then(|c| c.always_open) == Some(true)
     }
 
@@ -2353,6 +2443,10 @@ impl Frame {
 
     /// At rest, its icon alone? (The person's word, else its manifest's.)
     fn icon_alone(&self, k: &str) -> bool {
+        // (a group: as the widget it shows says)
+        if let Some(m) = self.shown_member(k) {
+            return self.icon_alone(&m);
+        }
         if self.icon_always(k) {
             return true;
         }
@@ -2365,6 +2459,9 @@ impl Frame {
 
     /// Its icon alone, always: its manifest says so, or it has no words to show (its icon and a dot at most).
     fn icon_always(&self, k: &str) -> bool {
+        if let Some(m) = self.shown_member(k) {
+            return self.icon_always(&m);
+        }
         let Some(w) = self.widgets.get(unpop(k)) else { return false };
         if self.plugins.iter().find(|p| p.id == w.plugin).and_then(|p| p.widgets.iter().find(|x| x.id == w.id)).is_some_and(|x| x.icon_only) {
             return true;
@@ -2379,6 +2476,10 @@ impl Frame {
     /// Its glow now, if it has one: its colour, how strong (0..1), and whether it changes (it breathes, or fades). A widget asks for one
     /// (`glow`: a colour, or `{ color, style: "steady" | "breathe" | "flash" }`); an icon alone with something new glows amber.
     fn glow_of(&self, k: &str) -> Option<(crate::paint::Color, f32, bool)> {
+        // (a widget held over it in Edit Mode: lit, more as the hold fills (full: they will be a group))
+        if let Some(f) = self.merge_fill(k) {
+            return Some((crate::draw::accent(), GLOW_SETTLED + (GLOW_FRESH - GLOW_SETTLED) * f, f >= 1.0));
+        }
         // (named by Edit Mode's Find: lit where it is)
         if self.found_by_find(k) {
             return Some((crate::draw::accent(), GLOW_FRESH, false));
@@ -2392,7 +2493,7 @@ impl Frame {
         let g = &w.content["glow"];
         // (every glow in the theme's colour, whatever its plugin asks; one whose manifest names its own colour, in that, as its banners
         // are)
-        let theme = self.plugin_accent(&w.plugin).unwrap_or_else(crate::draw::accent);
+        let theme = self.plugin_accent(&w.sender()).unwrap_or_else(crate::draw::accent);
         let (c, style) = if g["from"].is_string() || g.is_object() {
             (if g["second"] == true { crate::draw::accent2() } else { theme }, g["style"].as_str().unwrap_or("steady"))
         } else if g.is_string() {
@@ -2449,6 +2550,32 @@ impl Frame {
         }
         if peek["dock"].is_object() {
             peek["dock"]["depth"] = json!(self.even_depth(k));
+        }
+        // (a group, the mouse on it: its other widgets' pictograms beside it, each opening its own panel)
+        if let Some(members) = w.content["group"]["members"].as_array().filter(|_| self.edit.is_none() && self.hover.as_ref().is_some_and(|(_, h)| h == k)) {
+            let shown = w.content["group"]["shown"].as_u64().unwrap_or(0) as usize;
+            // (each as it looks alone: its icon alone or its words, as it is set; at the group's size)
+            let scale = peek["scale"].clone();
+            let fan: Vec<Value> = members
+                .iter()
+                .enumerate()
+                .filter(|(i, _)| *i != shown)
+                .map(|(_, m)| {
+                    let mut m = m.clone();
+                    if let Some(mw) = m["key"].as_str().and_then(|mk| self.widgets.get(mk).map(|w| (mk.to_string(), w))) {
+                        let (mk, w) = mw;
+                        let mut mp = if self.icon_alone(&mk) { peek::icon_only(&w.content["peek"]) } else { w.content["peek"].clone() };
+                        if mp.is_object() && !mp["dock"].is_object() {
+                            mp["scale"] = scale.clone();
+                            m["peek"] = mp;
+                        }
+                    }
+                    m
+                })
+                .collect();
+            if !fan.is_empty() && peek.is_object() {
+                peek["fan"] = json!(fan);
+            }
         }
         // (the app in front just changed: how far its coming has got, and which it was before)
         if peek["dock"].is_object() {
@@ -2508,6 +2635,10 @@ impl Frame {
             Some("small") => return false,
             _ => {}
         }
+        // (a group not sized by hand: as the widget it shows is made)
+        if let Some(m) = self.shown_member(k) {
+            return self.large(&m);
+        }
         let Some(w) = self.widgets.get(unpop(k)) else { return false };
         self.plugins.iter().find(|p| p.id == w.plugin).and_then(|p| p.widgets.iter().find(|x| x.id == w.id)).is_some_and(|x| x.large)
     }
@@ -2532,11 +2663,16 @@ impl Frame {
 
     /// Where a widget goes, and in what order: the config's word, else its manifest's.
     fn place_of(&self, plugin: &str, widget: &str) -> Option<(Place, i32)> {
+        // (in a group: the group is placed, not it)
+        if self.group_of(&key(plugin, widget)).is_some() {
+            return None;
+        }
         let (spec_place, spec_rank) = if plugin == crate::builtin::PLUGIN {
             // (the frame's own widgets are widgets like any other: each has a place until it is moved or put away; the taskbar shown
             // or not changes nothing. The tray alone is put away until placed: placing it takes the tray from Explorer)
             match widget {
                 crate::builtin::DOCK => ("bottom".to_string(), -1000),
+                crate::builtin::TASKBAR => ("off".to_string(), -1000),
                 crate::builtin::APPS => ("bottom".to_string(), -1100),
                 crate::builtin::TRAY => ("off".to_string(), 20),
                 crate::sysw::PRIVACY => ("top".to_string(), 50),
@@ -2545,6 +2681,9 @@ impl Frame {
                 crate::sysw::LANG => ("bottom-right".to_string(), 12),
                 crate::net::NET => ("bottom-right".to_string(), 14),
                 crate::sysw::DEVICES => ("bottom-right".to_string(), 13),
+                crate::screen::SCREEN => ("bottom-right".to_string(), 15),
+                crate::screen::FOCUS => ("bottom-right".to_string(), 16),
+                crate::screen::POWER => ("bottom-right".to_string(), 17),
                 crate::recycle::BIN => ("bottom-right".to_string(), 16),
                 _ => ("bottom-right".to_string(), 0),
             }
@@ -2635,7 +2774,7 @@ impl Frame {
                             _ => Instant::now(),
                         };
                         windows_asked.push((k.clone(), self.widgets.get(unpop(&k)).map(|w| w.content["panel"]["out"].clone()), content["panel"]["out"].clone()));
-                        self.widgets.insert(k.clone(), Widget { plugin, id: widget, content, glow_at });
+                        self.widgets.insert(k.clone(), Widget { plugin, id: widget, content, glow_at, via: None });
                         redraw.insert(k);
                     }
                 }
@@ -2672,6 +2811,15 @@ impl Frame {
             for k in bump_now {
                 self.bump(&k);
             }
+        }
+        // (a group's widget changed: the group made again from it)
+        for gk in self.refresh_groups(Some(&redraw)) {
+            if self.screens.iter().any(|sc| sc.items.contains_key(&gk)) {
+                reshaped.push(gk.clone());
+            } else {
+                layout = true;
+            }
+            redraw.insert(gk);
         }
         let t_size = Instant::now();
         if !layout {
@@ -2790,7 +2938,7 @@ impl Frame {
 
     /// The dock's app in front: changed, its coming forward starts now (the one before it noted, to go back).
     fn note_front(&mut self) {
-        let dk = key(crate::builtin::PLUGIN, crate::builtin::DOCK);
+        let dk = self.dock_in_use();
         let now = self.widgets.get(&dk).and_then(|w| w.content["peek"]["dock"]["items"].as_array().and_then(|a| a.iter().find(|i| i["front"] == true)).and_then(|i| i["key"].as_str().map(str::to_string)));
         if let Some(now) = now.filter(|n| self.dock_front.as_ref().map(|f| &f.0) != Some(n)) {
             let prev = self.dock_front.take().map(|f| f.0);
@@ -4363,6 +4511,10 @@ impl Frame {
                 let b = m.at;
                 boxes.push(RECT { left: (b.x * s) as i32, top: (b.y * s) as i32, right: ((b.x + b.w) * s).ceil() as i32, bottom: ((b.y + b.h) * s).ceil() as i32 });
             }
+            // (a tip that can be pressed, and the way to it: the mouse comes to the frame there)
+            for b in self.tip_boxes(si) {
+                boxes.push(RECT { left: (b.x * s) as i32, top: (b.y * s) as i32, right: ((b.x + b.w) * s).ceil() as i32, bottom: ((b.y + b.h) * s).ceil() as i32 });
+            }
             if let Some(g) = self.ghost.as_ref().filter(|g| g.si == si) {
                 let b = g.rest.now();
                 boxes.push(RECT { left: (b.x * s) as i32, top: (b.y * s) as i32, right: ((b.x + b.w) * s).ceil() as i32, bottom: ((b.y + b.h) * s).ceil() as i32 });
@@ -4848,7 +5000,56 @@ impl Frame {
         self.prof.clear();
     }
 
+    /// A group opened on one of its other widgets (its pictogram pressed), shut: the one shown at rest again.
+    /// The group under the mouse (its pictograms out beside it): changed, however the mouse came or went (onto another widget, off the
+    /// frame altogether), laid out again.
+    fn sync_fan(&mut self) {
+        let now = self.hover.as_ref().map(|(_, k)| k.clone()).filter(|k| self.widgets.get(k).is_some_and(|w| w.content["group"].is_object()));
+        if now != self.fan_for {
+            self.fan_for = now;
+            self.relayout_with(Some(&HashSet::new()));
+        }
+    }
+
+    fn step_groups(&mut self) {
+        self.sync_fan();
+        // (twice a second: one of a group's that wants attention, or no longer does, comes forward or goes back)
+        if !self.config.groups.is_empty() && self.groups_at.elapsed() >= Duration::from_millis(500) {
+            self.groups_at = Instant::now();
+            self.group_attention.retain(|_, t| t.elapsed() < GROUP_ATTENTION);
+            let changed = self.refresh_groups(None);
+            if !changed.is_empty() {
+                self.relayout_with(Some(&changed.into_iter().collect()));
+            }
+        }
+        let shut: Vec<String> = self
+            .group_opened
+            .keys()
+            .filter(|g| {
+                let gk = key(crate::builtin::PLUGIN, &format!("group:{g}"));
+                !self.screens.iter().any(|sc| sc.items.get(&gk).is_some_and(|it| it.open.to > 0.0 || it.open.now > 0.05))
+            })
+            .cloned()
+            .collect();
+        if !shut.is_empty() {
+            for g in shut {
+                self.group_opened.remove(&g);
+            }
+            let changed = self.refresh_groups(None);
+            if !changed.is_empty() {
+                self.relayout_with(Some(&changed.into_iter().collect()));
+            }
+        }
+        // (a widget held over another in Edit Mode: its glow grows as the hold fills; full, drawn once more)
+        if let Some((si, target, _)) = self.merge_over.clone() {
+            if self.screens.get(si).is_some_and(|sc| sc.items.contains_key(&target)) {
+                self.render(si, &target);
+            }
+        }
+    }
+
     fn tick_inner(&mut self) {
+        self.step_groups();
         let dt = self.last.elapsed().as_secs_f32().min(0.05);
         self.last = Instant::now();
         let mut relayer = false;
@@ -4927,6 +5128,16 @@ impl Frame {
         if dragging != self.files_dragging {
             self.files_dragging = dragging;
             self.sync_bin();
+        }
+        // (the screen, focus, the power mode: looked at again; a focus session keeps NADI's banners waiting)
+        if let Some(s) = crate::screen::take() {
+            if crate::screen::focusing(&s) {
+                self.quiet.insert("\u{0}focus".into());
+            } else {
+                self.quiet.remove("\u{0}focus");
+            }
+            self.bi.screen = s;
+            self.sync_sys();
         }
         let sys = crate::sysw::take();
         let net = crate::net::take().or_else(|| crate::net::status_changed().then(|| self.bi.net.clone()));
@@ -5018,7 +5229,7 @@ impl Frame {
         // the Volume Mixer's meters: how loud the output, the microphone and each program are now, springing (up at once, down
         // slowly); only while it is seen
         let qk = key(crate::builtin::PLUGIN, crate::builtin::QUICK);
-        let dock_open = self.screens.iter().any(|sc| sc.items.get(&key(crate::builtin::PLUGIN, crate::builtin::DOCK)).is_some_and(|it| it.open.now > 0.5));
+        let dock_open = self.screens.iter().any(|sc| sc.items.iter().any(|(k, it)| Self::is_dock(k) && it.open.now > 0.5));
         if (self.place_of(crate::builtin::PLUGIN, crate::builtin::QUICK).is_some() && self.seen_anywhere(&qk)) || dock_open {
             let (out, mic) = crate::volume::peaks();
             let mut raw: HashMap<String, f32> = self.bi.audio.peaks().into_iter().map(|(k, v)| (format!("app:{k}"), v)).collect();
@@ -5039,9 +5250,9 @@ impl Frame {
         }
         // the windows (for the dock), twice a second; its meters spring, its sound bars move; Win held, its numbers. Only while the
         // dock shows (hidden at its edge till the mouse comes: nothing is looked at or drawn; as it comes, it is looked at at once)
-        let dock_seen = self.dock_placed() && self.seen_anywhere(&key(crate::builtin::PLUGIN, crate::builtin::DOCK));
+        let dock_seen = self.dock_placed() && self.seen_anywhere(&self.dock_in_use());
         // (the dock at its largest, out: what plays is looked at, for its card)
-        let card = dock_seen && self.large(&key(crate::builtin::PLUGIN, crate::builtin::DOCK));
+        let card = dock_seen && self.large(&self.dock_in_use());
         self.pc.want.shell_media.store(card || dock_open, Ordering::Relaxed);
         // quick settings, placed and seen without the dock: its sound looked at with the windows
         if !dock_seen && self.place_of(crate::builtin::PLUGIN, crate::builtin::QUICK).is_some() && self.seen_anywhere(&key(crate::builtin::PLUGIN, crate::builtin::QUICK)) {
@@ -5374,9 +5585,9 @@ impl Frame {
 
     /// A new config: screens made again when their size or number changed, the taskbar hidden or given back, and the frame laid out.
     /// Does NADI hold the tray (so other apps' icons come to it)?
-    /// NADI holds the tray while its Tray widget is placed, or the dock has the tray merged into it.
+    /// NADI holds the tray while its Tray widget is placed, or the Taskbar (the dock and the tray as one).
     pub fn tray_held(&self) -> bool {
-        self.place_of(crate::builtin::PLUGIN, crate::builtin::TRAY).is_some() || (self.config.dock_tray && self.dock_placed())
+        self.place_of(crate::builtin::PLUGIN, crate::builtin::TRAY).is_some() || self.place_of(crate::builtin::PLUGIN, crate::builtin::TASKBAR).is_some()
     }
 
     /// Hold the tray, or give it back, as the config says.
@@ -5390,10 +5601,10 @@ impl Frame {
         self.sync_tray_widget();
     }
 
-    /// The tray's icons changed: the Tray widget drawn again, and the dock (the tray merged into it).
+    /// The tray's icons changed: the Tray widget drawn again, and the Taskbar (the tray merged into it).
     pub fn tray_changed(&mut self) {
         self.sync_tray_widget();
-        if self.config.dock_tray && self.dock_placed() {
+        if self.place_of(crate::builtin::PLUGIN, crate::builtin::TASKBAR).is_some() {
             self.sync_builtins(true);
         }
     }
@@ -5605,8 +5816,10 @@ impl Frame {
 
     /// What the dock keeps free at the bottom of the screens while the taskbar is hidden.
     fn reserve(&self) -> f32 {
-        if !self.floating(&key(crate::builtin::PLUGIN, crate::builtin::DOCK)) && self.place_of(crate::builtin::PLUGIN, crate::builtin::DOCK).map(|(p, _)| p) == Some(Place::Edge(Edge::Bottom)) {
-            self.even_depth(&key(crate::builtin::PLUGIN, crate::builtin::DOCK))
+        let dk = self.dock_in_use();
+        let (dp, dw) = dk.split_once('/').unwrap_or(("", ""));
+        if !self.floating(&dk) && self.place_of(dp, dw).map(|(p, _)| p) == Some(Place::Edge(Edge::Bottom)) {
+            self.even_depth(&dk)
         } else {
             0.0
         }
@@ -5663,7 +5876,7 @@ impl Frame {
     fn set_open(&self, si: usize, k: &str, open: bool) {
         let _ = si;
         if let Some(w) = self.widgets.get(unpop(k)) {
-            let _ = self.tx.send(Command::Open { plugin: w.plugin.clone(), widget: w.id.clone(), open });
+            let _ = self.tx.send(Command::Open { plugin: w.sender(), widget: w.own_id(), open });
         }
     }
 
@@ -5755,6 +5968,10 @@ impl Frame {
 
     /// The left button went down: on a widget, it may be a press or the start of a drag.
     pub fn mouse_down(&mut self, si: usize, x: f32, y: f32) {
+        // (on a tip that can be pressed: taken when let go)
+        if self.on_tip(si, x, y) {
+            return;
+        }
         // (on a free side of a panel: it is resized)
         if !self.menu_open() && self.size_press(si, x, y) {
             return;
@@ -5828,7 +6045,7 @@ impl Frame {
                         _ => None,
                     });
                     if let (Some((id, spec)), Some(w)) = (point, self.widgets.get(unpop(&k))) {
-                        let plugin = w.plugin.clone();
+                        let plugin = w.sender();
                         if !id.is_empty() {
                             let pick = spec["pick"].as_str().unwrap_or("").to_string();
                             if !pick.is_empty() {
@@ -5850,7 +6067,7 @@ impl Frame {
                     if let (Some((action, rect)), Some(w)) = (seek, self.widgets.get(unpop(&k))) {
                         let frac = slide_frac(rect, lx);
                         let live = blocks::slider_value(&action).is_some();
-                        let plugin = w.plugin.clone();
+                        let plugin = w.sender();
                         self.slide = Some(Slide { si, key: k.clone(), plugin: plugin.clone(), action: action.clone(), rect, frac, told: Instant::now(), told_frac: frac, live });
                         if live {
                             self.act(plugin, action.clone(), json!({ "fraction": frac }));
@@ -5872,7 +6089,7 @@ impl Frame {
                                 _ => String::new(),
                             };
                             let spec = confirm_spec("bang", &label, "", a);
-                            self.hold = Some(Hold { si, key: Some(k.clone()), row: None, rect: h.rect, plugin: w.plugin.clone(), action: a.clone(), spec });
+                            self.hold = Some(Hold { si, key: Some(k.clone()), row: None, rect: h.rect, plugin: w.sender(), action: a.clone(), spec });
                             self.tick_rate();
                             return;
                         }
@@ -6045,14 +6262,16 @@ impl Frame {
         let pk = &w.content["peek"];
         let wordless = ["text", "sub", "clock", "bars", "vessel", "roll", "desks", "cells", "subtitle"].iter().all(|f| pk[*f].is_null() || pk[*f] == "");
         // (as deep as on a top or bottom edge, not the side's deeper strip: a square the same size on every edge)
+        // (a group, the mouse on it: its other widgets' pictograms after it, that much longer)
+        let fan = peek::fan_len(p, &self.peek_of(k), look.horizontal());
         if !look.horizontal() && wordless && !(pk["dock"].is_object() || pk["tray"].is_object() || pk["face"].is_string() || pk["desks"].is_object()) {
             let sq = self.even_depth(k);
-            return (sq, sq);
+            return (sq + fan, sq);
         }
         // (its icon alone: square, as long as it is deep; the same size on every edge, a side's too)
         if self.icon_alone(k) && !pk["face"].is_string() {
             let base = self.even_depth(k);
-            return (base, base);
+            return (base + fan, base);
         }
         let want = match self.screens.get(si) {
             Some(sc) if pk["dock"].is_object() && !look.horizontal() => want.min(sc.area.h * 0.9),
@@ -6107,6 +6326,18 @@ impl Frame {
         }
         let spot = self.drop_place(si, x, y);
         let b = self.drag_box(si, &k, x, y, gx, gy, spot);
+        // (over another widget that can be grouped with it: held there, they become a group)
+        let over = self.merge_target(si, &k, x, y);
+        let same = self.merge_over.as_ref().is_some_and(|(s, t, _)| *s == si && Some(t) == over.as_ref());
+        if !same {
+            let was = self.merge_over.take();
+            self.merge_over = over.map(|t| (si, t, Instant::now()));
+            if let Some((ws, wt, _)) = was {
+                if self.screens.get(ws).is_some_and(|sc| sc.items.contains_key(&wt)) {
+                    self.render(ws, &wt);
+                }
+            }
+        }
         let join = self.join_for(si, &k, spot, x, y);
         let join_changed = self.drag_join.as_ref() != Some(&join);
         self.drag_join = Some(join);
@@ -6140,6 +6371,24 @@ impl Frame {
         let Some((ds, k, _, _)) = self.drag.take() else { return };
         unsafe {
             let _ = windows::Win32::UI::Input::KeyboardAndMouse::ReleaseCapture();
+        }
+        // (held over another long enough: they are a group)
+        if let Some((ms, target, at)) = self.merge_over.take() {
+            if ms == ds && at.elapsed().as_secs_f32() >= MERGE_HOLD {
+                self.drag_at = None;
+                self.drag_join = None;
+                if let Some(it) = self.screens[ds].items.get_mut(&k) {
+                    it.drag_place = None;
+                    it.drag_down = false;
+                    it.drag_head = false;
+                    it.drag_float = false;
+                }
+                self.merge(&target, &k);
+                return;
+            }
+            if self.screens.get(ms).is_some_and(|sc| sc.items.contains_key(&target)) {
+                self.render(ms, &target);
+            }
         }
         // (where the ghost was: let go off its screen, or before it moved, where the mouse is)
         let at = self.drag_at.take();
@@ -6217,8 +6466,13 @@ impl Frame {
     }
 
     pub fn mouse_move(&mut self, si: usize, x: f32, y: f32) {
+        // (on a tip that can be pressed: only it answers)
+        if self.tip_hover(si, x, y) {
+            self.mouse = (si, x, y);
+            return;
+        }
         // (the mouse onto one of the dock's grips, or off: its dot lit or not)
-        let dock = key(crate::builtin::PLUGIN, crate::builtin::DOCK);
+        let dock = self.dock_in_use();
         let g = self.grip_end(si, &dock, x, y);
         if g != self.grip_at {
             self.grip_at = g;
@@ -6313,8 +6567,9 @@ impl Frame {
             }
             // (the one it left, pinned open by a press, shuts when the mouse comes back to another)
             let old = std::mem::replace(&mut self.hover, now);
+            self.sync_fan();
             // (the dock's grip shows while the mouse is on it: drawn again as it comes or goes)
-            let dock = key(crate::builtin::PLUGIN, crate::builtin::DOCK);
+            let dock = self.dock_in_use();
             for (hs, hk) in old.iter().chain(self.hover.clone().iter()) {
                 // (and a panel that scrolls: its scrollbar comes and goes with the mouse)
                 // (and an open panel: its handle comes and goes with the mouse)
@@ -6471,7 +6726,7 @@ impl Frame {
             if let Some((k, r, live, hint, value, secret, look)) = found {
                 let Some(it) = self.screens[si].items.get(&k) else { return };
                 let Ok((_, b)) = self.shape_now(si, it) else { return };
-                let plugin = self.widgets.get(unpop(&k)).map(|w| w.plugin.clone()).unwrap_or_default();
+                let plugin = self.widgets.get(unpop(&k)).map(|w| w.sender()).unwrap_or_default();
                 self.focus_field = None;
                 self.open_field(si, &k, b, r, plugin, action, live, hint, value, secret, look);
                 return;
@@ -6490,6 +6745,17 @@ impl Frame {
     pub(super) fn bump(&mut self, k: &str) {
         const HOLD: Duration = Duration::from_millis(1600);
         const EVERY: Duration = Duration::from_secs(30);
+        // (in a group: it comes to the front of its group a while, and the group comes out)
+        if let Some(g) = self.group_of(k) {
+            self.group_attention.insert(unpop(k).to_string(), Instant::now());
+            let gk = Self::group_key(&g);
+            let changed = self.refresh_groups(None);
+            if !changed.is_empty() {
+                self.relayout_with(Some(&changed.into_iter().collect()));
+            }
+            self.bump(&gk);
+            return;
+        }
         if !self.bumps_on(k) || self.edit.is_some() {
             return;
         }
@@ -6647,7 +6913,7 @@ impl Frame {
             let old = self.hover.take();
             // (the dock's grip goes with the mouse)
             // (and a panel's scrollbar)
-            if let Some((hs, hk)) = old.filter(|(s, h)| *h == key(crate::builtin::PLUGIN, crate::builtin::DOCK) || self.screens.get(*s).and_then(|sc| sc.items.get(h)).is_some_and(|i| i.content_h > i.visible + 1.0)) {
+            if let Some((hs, hk)) = old.filter(|(s, h)| Self::is_dock(h) || self.screens.get(*s).and_then(|sc| sc.items.get(h)).is_some_and(|i| i.content_h > i.visible + 1.0)) {
                 if self.screens.get(hs).is_some_and(|sc| sc.items.contains_key(&hk)) {
                     self.render(hs, &hk);
                 }
@@ -6656,11 +6922,16 @@ impl Frame {
         for it in self.screens[si].items.values_mut() {
             it.pinned = false;
         }
+        // (off the frame from a group: its pictograms go)
+        self.sync_fan();
         self.tick_rate();
     }
 
     pub fn click(&mut self, si: usize, x: f32, y: f32) {
         if self.size_release() {
+            return;
+        }
+        if self.tip_click(si, x, y) {
             return;
         }
         // (a desktop's card let go: carried, it goes where it was dropped; else its action)
@@ -6722,7 +6993,7 @@ impl Frame {
                 self.curve_click = None;
                 let add = spec["add"].as_str().unwrap_or("").to_string();
                 if let (false, Some(w)) = (add.is_empty(), self.widgets.get(unpop(&k))) {
-                    let plugin = w.plugin.clone();
+                    let plugin = w.sender();
                     let b = self.screens[si].items.get(&k).and_then(|it| self.shape_now(si, it).ok()).map(|(_, b)| b);
                     if let Some(b) = b {
                         let (vx, vy) = blocks::curve_value(&spec, x - b.x, y - b.y - self.content_top(&k));
@@ -6801,7 +7072,7 @@ impl Frame {
         }
         let Some(k) = self.item_at(si, x, y) else { return };
         let Some(w) = self.widgets.get(unpop(&k)) else { return };
-        let plugin = w.plugin.clone();
+        let plugin = w.sender();
         if w.content["peek"]["face"] == "eyes" {
             self.eyes.poke(self.start.elapsed().as_secs_f32() * 1000.0);
             return;
@@ -7007,7 +7278,7 @@ impl Frame {
                 let (lx, ly) = (x - b.x, y - b.y);
                 let own = it.hits.iter().find(|h| h.menu.is_array() && lx >= h.rect.x && lx < h.rect.x + h.rect.w && ly >= h.rect.y && ly < h.rect.y + h.rect.h).map(|h| h.menu.as_array().cloned().unwrap_or_default());
                 if let (Some(items), Some(w)) = (own, k.as_ref().and_then(|k| self.widgets.get(unpop(k)))) {
-                    let plugin = w.plugin.clone();
+                    let plugin = w.sender();
                     self.open_items_menu(si, plugin, items, x, y);
                     return;
                 }
@@ -7020,6 +7291,8 @@ impl Frame {
 
     /// Open a menu: a widget's (beside it), or the short one by a point (`k`: none).
     pub fn open_menu(&mut self, si: usize, k: Option<String>, x: f32, y: f32) {
+        // (a group's: for the widget in it under the mouse)
+        let member = k.as_ref().and_then(|k| self.group_member_at(si, k, x, y));
         self.drop_menu();
         // (its widget's panel shuts while its menu is open)
         if let Some(k) = &k {
@@ -7043,7 +7316,7 @@ impl Frame {
         };
         let s = self.screens[si].s;
         let Ok(piece) = self.screens[si].ov.piece(&self.g, (w * s).ceil() as u32 + 4, (h * s).ceil() as u32 + 4) else { return };
-        self.menu = Some(Menu { si, key: k, items: None, piece, at: Bx { x, y, w, h }, point: (x, y), hits: Vec::new(), names: Vec::new(), hover: None, marquee: false, grow: Spring { now: 0.0, to: 1.0, vel: 0.0 }, closing: false, pivot: (w / 2.0, 0.0) });
+        self.menu = Some(Menu { si, key: k, items: None, piece, at: Bx { x, y, w, h }, point: (x, y), hits: Vec::new(), names: Vec::new(), hover: None, marquee: false, grow: Spring { now: 0.0, to: 1.0, vel: 0.0 }, closing: false, pivot: (w / 2.0, 0.0), member });
         self.render_menu();
         self.hit_regions();
         self.commit();
@@ -7056,7 +7329,7 @@ impl Frame {
         let (w, h) = crate::menu::items_size(items.len());
         let s = self.screens[si].s;
         let Ok(piece) = self.screens[si].ov.piece(&self.g, (w * s).ceil() as u32 + 4, (h * s).ceil() as u32 + 4) else { return };
-        self.menu = Some(Menu { si, key: None, items: Some((plugin, items)), piece, at: Bx { x, y, w, h }, point: (x, y), hits: Vec::new(), names: Vec::new(), hover: None, marquee: false, grow: Spring { now: 0.0, to: 1.0, vel: 0.0 }, closing: false, pivot: (w / 2.0, h) });
+        self.menu = Some(Menu { si, key: None, items: Some((plugin, items)), piece, at: Bx { x, y, w, h }, point: (x, y), hits: Vec::new(), names: Vec::new(), hover: None, marquee: false, grow: Spring { now: 0.0, to: 1.0, vel: 0.0 }, closing: false, pivot: (w / 2.0, h), member: None });
         self.render_menu();
         self.hit_regions();
         self.commit();
@@ -7150,7 +7423,8 @@ impl Frame {
         let si = m.si;
         let s = self.screens[si].s;
         let state = m.key.as_ref().map(|k| unpop(k)).map(|k| crate::menu::State {
-            can_pop: self.widgets.get(k).is_some_and(|w| w.content["panel"].is_object()),
+            // (a group: its panel is whichever of its widgets is open, so it is never kept open or popped out)
+            can_pop: self.widgets.get(k).is_some_and(|w| w.content["panel"].is_object() && !w.content["group"].is_object()),
             popped: self.popped(k),
             floating: self.floating(k),
             place: self.widgets.get(unpop(k)).and_then(|w| self.place_of(&w.plugin, &w.id)).map(|(p, _)| p.name().to_string()).unwrap_or_default(),
@@ -7160,9 +7434,14 @@ impl Frame {
             over_full: self.over_full(k),
             always_open: self.always_open(k),
             hide_idle: self.config.widgets.get(k).and_then(|c| c.show_idle) != Some(true),
-            bump: self.bumps_on(k),
-            icon_only: if self.icon_always(k) { None } else { Some(self.icon_alone(k)) },
-            merge_tray: (k == key(crate::builtin::PLUGIN, crate::builtin::DOCK)).then_some(self.config.dock_tray),
+            group: self.widgets.get(k).is_some_and(|w| w.content["group"].is_object()),
+            bump: self.bumps_on(m.member.as_deref().unwrap_or(k)),
+            icon_only: match m.member.as_deref() {
+                Some(mk) => if self.icon_always(mk) { None } else { Some(self.icon_alone(mk)) },
+                None => if self.icon_always(k) { None } else { Some(self.icon_alone(k)) },
+            },
+            take_out: m.member.is_some(),
+            front: m.member.as_deref().and_then(|mk| self.group_of(mk).and_then(|g| self.config.groups.get(&g).map(|gr| gr.members.iter().filter(|x| self.widgets.contains_key(*x)).position(|x| x == mk) == Some(gr.shown.min(gr.members.len().saturating_sub(1)))))),
         });
         let hover = m.hover;
         let items = m.items.as_ref().map(|(_, i)| i.clone());
@@ -7246,7 +7525,7 @@ impl Frame {
 
     /// Which of the dock's grips the mouse is on: its first end (0) or its last (1).
     fn grip_end(&self, si: usize, k: &str, x: f32, y: f32) -> Option<u8> {
-        if k != key(crate::builtin::PLUGIN, crate::builtin::DOCK) || !self.click_to_open() {
+        if !Self::is_dock(k) || !self.click_to_open() {
             return None;
         }
         let it = self.screens.get(si).and_then(|sc| sc.items.get(k))?;
@@ -7278,6 +7557,67 @@ impl Frame {
     /// What the mouse rests on that has a tip: (its screen, what it is, the tip, what it comes out of, the way out). A widget at rest
     /// has its own (where a click opens it: resting the mouse opens it otherwise); in an open panel, a thing that says what it is; on
     /// the dock and the tray at rest, each app and icon.
+    /// Is a point on a tip that can be pressed (out, standing still, with something in it to press), or on the way to it from what it
+    /// came out of (so the mouse can go from one to the other)?
+    pub(super) fn on_tip(&self, si: usize, x: f32, y: f32) -> bool {
+        self.tip_boxes(si).iter().any(|r| x >= r.x && x < r.x + r.w && y >= r.y && y < r.y + r.h)
+    }
+
+    /// A tip that can be pressed, on this screen: its box, and the way to it from what it came out of (none: no such tip).
+    fn tip_boxes(&self, si: usize) -> Vec<Bx> {
+        let Some(t) = self.tip.as_ref().filter(|t| t.si == si && t.grow.now > 0.6 && t.grow.to == 1.0 && !t.hits.is_empty()) else { return Vec::new() };
+        let Some(b) = t.at else { return Vec::new() };
+        let a = t.anchor;
+        // (the gap between them, as wide as the narrower)
+        let (x0, x1) = (a.x.max(b.x), (a.x + a.w).min(b.x + b.w));
+        let (y0, y1) = (a.y.max(b.y), (a.y + a.h).min(b.y + b.h));
+        let bridge = match t.out {
+            Edge::Top => Bx { x: x0, y: b.y + b.h - 2.0, w: (x1 - x0).max(0.0), h: a.y - (b.y + b.h) + 4.0 },
+            Edge::Bottom => Bx { x: x0, y: a.y + a.h - 2.0, w: (x1 - x0).max(0.0), h: b.y - (a.y + a.h) + 4.0 },
+            Edge::Left => Bx { x: b.x + b.w - 2.0, y: y0, w: a.x - (b.x + b.w) + 4.0, h: (y1 - y0).max(0.0) },
+            Edge::Right => Bx { x: a.x + a.w - 2.0, y: y0, w: b.x - (a.x + a.w) + 4.0, h: (y1 - y0).max(0.0) },
+        };
+        vec![b, bridge]
+    }
+
+    /// The mouse on a tip that can be pressed: what is under it lit (drawn again as the mouse goes). True: it is on one.
+    fn tip_hover(&mut self, si: usize, x: f32, y: f32) -> bool {
+        if !self.on_tip(si, x, y) {
+            return false;
+        }
+        self.render_tip();
+        self.commit();
+        true
+    }
+
+    /// A press let go on a tip that can be pressed: what it was on, done, and the tip put away. True: taken.
+    fn tip_click(&mut self, si: usize, x: f32, y: f32) -> bool {
+        if !self.on_tip(si, x, y) {
+            return false;
+        }
+        let Some(t) = self.tip.as_ref() else { return false };
+        let Some(b) = t.at else { return false };
+        let (lx, ly) = (x - b.x, y - b.y);
+        let hit = t.hits.iter().find(|h| lx >= h.rect.x && lx < h.rect.x + h.rect.w && ly >= h.rect.y && ly < h.rect.y + h.rect.h).map(|h| h.press.clone());
+        // (whose it is: the widget it came out of)
+        let owner = t.owner.split('@').next().unwrap_or("").to_string();
+        let plugin = self.widgets.get(unpop(&owner)).map(|w| w.sender()).unwrap_or_else(|| crate::builtin::PLUGIN.to_string());
+        if let Some(Press::Action(a, args)) = hit {
+            if let Some(t) = &mut self.tip {
+                t.grow.to = 0.0;
+            }
+            self.act(plugin, a, if args.is_null() { json!({}) } else { args });
+            self.tick_rate();
+        }
+        true
+    }
+
+    /// The widget a tip that can be pressed came out of, while the mouse is on that tip (it stays out with it).
+    fn tip_holds(&self, k: &str) -> bool {
+        let (msi, mx, my) = self.mouse;
+        self.tip.as_ref().is_some_and(|t| t.owner.split('@').next() == Some(k)) && self.on_tip(msi, mx, my)
+    }
+
     fn tip_wanted(&self) -> Option<(usize, String, Value, Bx, Edge)> {
         // (in a widget's menu: the name of the picture under the mouse)
         if let Some(m) = self.menu.as_ref().filter(|m| !m.closing && m.grow.now > 0.9) {
@@ -7287,6 +7627,13 @@ impl Frame {
             let a = Bx { x: m.at.x + r.x, y: m.at.y + r.y, w: r.w, h: r.h };
             let out = if a.y > 70.0 { Edge::Top } else { Edge::Bottom };
             return Some((m.si, format!("\u{0}menu#{i}"), Value::String(name.to_string()), a, out));
+        }
+        // (the mouse on a tip with something in it to press (a window's picture): it stays, to be pressed)
+        if let Some(t) = self.tip.as_ref().filter(|t| t.grow.to == 1.0) {
+            let (msi, mx, my) = self.mouse;
+            if self.menu.is_none() && self.edit.is_none() && self.on_tip(msi, mx, my) {
+                return Some((t.si, t.owner.clone(), t.content.clone(), t.anchor, t.out));
+            }
         }
         if self.menu.is_some() || self.edit.is_some() || self.drag.is_some() || self.press.is_some() || self.launcher.as_ref().is_some_and(|l| l.shown) {
             return None;
@@ -7325,7 +7672,19 @@ impl Frame {
             if let Some(app) = a.strip_prefix("app:").and_then(|i| i.parse::<usize>().ok()).and_then(|i| self.bi.dock_apps(&self.config).get(i).cloned()) {
                 let tiles: Vec<Value> = self.widgets.get(unpop(&k)).map(|w| w.content["tiles"].as_array().cloned().unwrap_or_default()).unwrap_or_default().into_iter().filter(|t| t["key"].as_str() == Some(app.key.as_str())).collect();
                 if !tiles.is_empty() {
-                    // (its windows' pictures, big enough to read; four at most side by side)
+                    // (its windows as the open dock's tiles (their names inside them, what they use, their sound), larger; four at
+                    // most side by side)
+                    let group = self.widgets.get(unpop(&k)).and_then(|w| w.content["panel"]["body"][0]["groups"].as_array().and_then(|gs| gs.iter().find(|g| g["key"].as_str() == Some(app.key.as_str())).cloned()));
+                    if let Some(mut group) = group {
+                        if let Some(ws) = group["windows"].as_array_mut() {
+                            ws.truncate(4);
+                        }
+                        let n = group["windows"].as_array().map_or(1, |w| w.len()).max(1) as f32;
+                        let tile = if n <= 1.0 { 340.0 } else if n <= 2.0 { 290.0 } else if n <= 3.0 { 250.0 } else { 220.0 };
+                        let width = 2.0 * 12.0 + 6.0 + n * tile + (n - 1.0) * blocks::TILE_GAP;
+                        let anchor = Bx { x: b.x + r.x, y: b.y + r.y, w: r.w, h: r.h };
+                        return Some((hsi, format!("{k}@{a}"), json!({ "width": width, "body": [{ "kind": "appwindows", "groups": [group], "pins": [], "tile": tile }] }), anchor, away));
+                    }
                     let tiles: Vec<Value> = tiles.into_iter().take(4).collect();
                     let n = tiles.len() as f32;
                     let pic = if n <= 1.0 { 300.0 } else if n <= 2.0 { 250.0 } else if n <= 3.0 { 210.0 } else { 180.0 };
@@ -7342,6 +7701,9 @@ impl Frame {
                 })
             } else if a == "launcher" {
                 Some("Apps".to_string())
+            } else if let Some((gid, i)) = a.strip_prefix("\u{0}group:").and_then(|r| r.split_once(':')) {
+                let i: usize = i.parse().ok()?;
+                self.config.groups.get(gid).and_then(|g| g.members.iter().filter(|m| self.widgets.contains_key(*m)).nth(i)).map(|m| self.widget_label(m))
             } else if let Some(rest) = a.strip_prefix("tray:") {
                 let (owner, uid) = rest.split_once(':')?;
                 crate::trayhost::icons().into_iter().find(|i| i.owner.to_string() == owner && i.uid.to_string() == uid).map(|i| i.tip.lines().next().unwrap_or("").to_string())
@@ -7389,8 +7751,11 @@ impl Frame {
                     }
                     let piece = match old {
                         Some(t) if t.si == si => Some(t.piece),
-                        Some(t) => {
+                        Some(mut t) => {
                             self.screens[t.si].ov.remove_top(&t.piece);
+                            if let Some(u) = t.under.take() {
+                                let _ = self.screens[t.si].ov.remove(&u);
+                            }
                             None
                         }
                         None => None,
@@ -7402,7 +7767,7 @@ impl Frame {
                             Err(_) => return,
                         },
                     };
-                    self.tip = Some(Tip { si, owner, content, anchor, out, piece, grow: Spring { now: 0.0, to: 1.0, vel: 0.0 }, drawn: None, thumbs: Vec::new(), moving: false });
+                    self.tip = Some(Tip { si, owner, content, anchor, out, piece, grow: Spring { now: 0.0, to: 1.0, vel: 0.0 }, drawn: None, thumbs: Vec::new(), moving: false, at: None, hits: Vec::new(), under: None });
                 }
             }
             Some(_) => {}
@@ -7422,7 +7787,11 @@ impl Frame {
             let t = self.tip.take().unwrap();
             if let Some(sc) = self.screens.get(t.si) {
                 sc.ov.remove_top(&t.piece);
+                if let Some(u) = &t.under {
+                    let _ = sc.ov.remove(u);
+                }
             }
+            self.sync_tip_hit();
             return;
         }
         let changed = t.drawn.as_ref().map_or(true, |(c, a)| *c != t.content || *a != t.anchor);
@@ -7430,6 +7799,16 @@ impl Frame {
         let wants_thumbs = t.grow.to == 1.0 && !moved && t.thumbs.is_empty() && t.content["body"].to_string().contains("\"hwnd\":");
         if moved || changed || wants_thumbs || t.moving {
             self.render_tip();
+        }
+        self.sync_tip_hit();
+    }
+
+    /// A tip that can be pressed came, moved or went: where the mouse comes to the frame set again.
+    fn sync_tip_hit(&mut self) {
+        let now: Vec<(usize, Bx)> = (0..self.screens.len()).flat_map(|si| self.tip_boxes(si).into_iter().map(move |b| (si, b))).collect();
+        if now != self.tip_hit {
+            self.tip_hit = now;
+            self.hit_regions();
         }
     }
 
@@ -7491,10 +7870,35 @@ impl Frame {
             }
         }
         let _ = t.piece.place((x * s).round() as i32, (y * s).round() as i32);
-        let surface = t.piece.surface.clone();
+        // (windows' tiles: drawn on a piece of the frame's own, under their live pictures; the glass's piece takes what goes over them)
+        let split = content["body"].to_string().contains("\"appwindows\"");
+        if split {
+            let fits = t.under.as_ref().is_some_and(|u| u.alloc.0 >= need.0 && u.alloc.1 >= need.1);
+            if !fits {
+                if let Some(u) = t.under.take() {
+                    let _ = self.screens[si].ov.remove(&u);
+                }
+                if let Ok(u) = self.screens[si].ov.piece(g, need.0 + 32, need.1 + 32) {
+                    self.screens[si].ov.to_front(&u.visual);
+                    t.under = Some(u);
+                }
+            }
+            if let Some(u) = t.under.as_mut() {
+                let _ = u.place((x * s).round() as i32, (y * s).round() as i32);
+            }
+        } else if let Some(u) = t.under.take() {
+            let _ = self.screens[si].ov.remove(&u);
+        }
+        let over_surface = t.piece.surface.clone();
+        let surface = t.under.as_ref().filter(|_| split).map_or_else(|| t.piece.surface.clone(), |u| u.surface.clone());
         let p = self.painter(s);
         let g = &self.g;
+        let _ = blocks::take_overs();
         let mut boxes: Vec<(isize, Rect)> = Vec::new();
+        let mut hits: Vec<blocks::Hit> = Vec::new();
+        // (the mouse on it: what is under it lit)
+        let (msi, mx, my) = self.mouse;
+        blocks::set_hover((msi == si && settled).then_some((mx - x, my - y)));
         let _ = g.draw_surface(&surface, |dc| unsafe {
             let k = (0.5 + 0.5 * g_now).max(0.05);
             let mut base = windows::Foundation::Numerics::Matrix3x2::default();
@@ -7514,14 +7918,30 @@ impl Frame {
                     let head = blocks::head(&mut c, &content, P, P, inner);
                     c.body(content["body"].as_array().map(|v| v.as_slice()).unwrap_or(&[]), P, P + head + if head > 0.0 { 10.0 } else { 0.0 }, inner);
                     boxes = std::mem::take(&mut c.thumbs);
+                    hits = std::mem::take(&mut c.hits);
                 }
             });
         });
+        // (what goes over the live pictures: on the glass, over them, once they are out)
+        let overs = blocks::take_overs();
+        if split {
+            let hover = (msi == si && settled).then_some((mx - x, my - y));
+            let _ = g.draw_surface(&over_surface, |_| {
+                if settled {
+                    for (_, r, tile, grp) in &overs {
+                        blocks::tile_over(&p, *r, tile, grp, hover);
+                    }
+                }
+            });
+        }
+        blocks::set_hover(None);
         drop(p);
-        let glass = self.screens[si].ov.top_hwnd();
+        let glass = if split { self.screens[si].ov.hwnd } else { self.screens[si].ov.top_hwnd() };
         let t = self.tip.as_mut().unwrap();
         t.moving = crate::draw::take_marquee();
         t.drawn = Some((t.content.clone(), t.anchor));
+        t.at = Some(Bx { x, y, w, h });
+        t.hits = hits.into_iter().filter(|h| matches!(&h.press, Press::Action(a, _) if !a.is_empty())).collect();
         // (its windows' live pictures: once it stands still, in their boxes; while it springs, none)
         if settled && !boxes.is_empty() {
             t.thumbs.retain(|(wnd, th)| {
@@ -7584,19 +8004,45 @@ impl Frame {
             self.act(plugin, action, json!({}));
             return;
         }
+        let member = self.menu.as_ref().and_then(|m| m.member.clone());
         match (act, k) {
             (Act::Look(f, l, i), Some(k)) => {
-                // (one only ever its icon keeps it)
-                let fixed = self.icon_always(&k);
+                // (one only ever its icon keeps it; in a group, its icon alone is its own, its look and size the group's)
+                let own = member.clone().unwrap_or_else(|| k.clone());
+                let fixed = self.icon_always(&own);
                 self.change_config(|c| {
                     set(c, &k, &|w| {
                         w.style = Some(if f { "floating" } else { "merged" }.into());
                         w.size = Some(if l { "large" } else { "small" }.into());
-                        if !fixed {
-                            w.icon_only = Some(i);
-                        }
-                    })
-                })
+                    });
+                    if !fixed {
+                        set(c, &own, &|w| w.icon_only = Some(i));
+                    }
+                });
+                self.refresh_groups(None);
+                self.relayout();
+            }
+            (Act::Front, Some(_)) => {
+                if let Some(mk) = &member {
+                    if let Some(g) = self.group_of(mk) {
+                        let i = self.config.groups.get(&g).and_then(|gr| gr.members.iter().filter(|x| self.widgets.contains_key(*x)).position(|x| x == mk)).unwrap_or(0);
+                        self.change_config(|c| {
+                            if let Some(gr) = c.groups.get_mut(&g) {
+                                gr.shown = i;
+                            }
+                        });
+                        self.group_opened.remove(&g);
+                        self.refresh_groups(None);
+                        self.relayout();
+                    }
+                }
+            }
+            (Act::TakeOut, Some(k)) => {
+                self.close_menu();
+                if let Some(mk) = &member {
+                    self.take_out(&k, mk);
+                }
+                return;
             }
             (Act::Move(p), Some(k)) => self.change_config(|c| {
                 set(c, &k, &|w| {
@@ -7611,9 +8057,13 @@ impl Frame {
             }
             (Act::AlwaysShow, Some(k)) => self.change_config(|c| set(c, &k, &|w| w.always_shown = if w.always_shown == Some(true) { None } else { Some(true) })),
             (Act::OverFull, Some(k)) => self.change_config(|c| set(c, &k, &|w| w.over_full = if w.over_full == Some(true) { None } else { Some(true) })),
-            (Act::MergeTray, Some(_)) => self.change_config(|c| c.dock_tray = !c.dock_tray),
+            (Act::Ungroup, Some(k)) => {
+                self.close_menu();
+                self.ungroup(&k);
+            }
             (Act::HideIdle, Some(k)) => self.change_config(|c| set(c, &k, &|w| w.show_idle = if w.show_idle == Some(true) { None } else { Some(true) })),
             (Act::Bump, Some(k)) => {
+                let k = member.clone().unwrap_or(k);
                 let on = self.bumps_on(&k);
                 self.change_config(|c| set(c, &k, &|w| w.bump = Some(!on)));
             }
@@ -7632,6 +8082,13 @@ impl Frame {
             }
             (Act::Hide, Some(k)) => {
                 self.close_menu();
+                // (one of a group's: out of it, and hidden)
+                if let Some(mk) = &member {
+                    self.take_out(&k, mk);
+                    let mk = mk.clone();
+                    self.change_config(|c| set(c, &mk, &|w| w.place = Some("off".into())));
+                    return;
+                }
                 self.change_config(|c| set(c, &k, &|w| w.place = Some("off".into())));
                 return;
             }
@@ -7715,13 +8172,13 @@ impl Frame {
         // (a widget at rest that asks for the wheel: it is told, up or down (Now Playing: its players one after another))
         if let Some(w) = self.widgets.get(unpop(&k)).filter(|w| w.content["wheel"].is_string()) {
             if self.screens[si].items.get(&k).is_some_and(|i| i.open.now < 0.6) {
-                let (plugin, a) = (w.plugin.clone(), w.content["wheel"].as_str().unwrap_or("").to_string());
+                let (plugin, a) = (w.sender(), w.content["wheel"].as_str().unwrap_or("").to_string());
                 self.act(plugin, a, json!({ "up": delta > 0.0 }));
                 return;
             }
         }
         // (the dock at rest, the wheel over an app: its windows one after another)
-        if k == key(crate::builtin::PLUGIN, crate::builtin::DOCK) && self.screens[si].items.get(&k).is_some_and(|i| i.open.now < 0.6) {
+        if Self::is_dock(&k) && self.screens[si].items.get(&k).is_some_and(|i| i.open.now < 0.6) {
             let it = &self.screens[si].items[&k];
             if let Ok((_, b)) = self.shape_now(si, it) {
                 let (lx, ly) = (x - b.x, y - b.y);
@@ -7759,7 +8216,7 @@ impl Frame {
                 });
                 if let (Some((id, action)), Some(w)) = (on, self.widgets.get(unpop(&k))) {
                     if !action.is_empty() {
-                        let plugin = w.plugin.clone();
+                        let plugin = w.sender();
                         self.act(plugin, action, json!({ "id": id, "up": delta > 0.0 }));
                     }
                     return;
@@ -7777,7 +8234,7 @@ impl Frame {
                 if let (Some((action, v)), Some(w)) = (on, self.widgets.get(unpop(&k))) {
                     let base = self.slid.as_ref().filter(|(_, sk, _)| *sk == k).and_then(|_| blocks::sliding_at(&action)).unwrap_or(v);
                     let to = (((base + if delta > 0.0 { 0.02 } else { -0.02 }) * 50.0).round() / 50.0).clamp(0.0, 1.0);
-                    let plugin = w.plugin.clone();
+                    let plugin = w.sender();
                     self.act(plugin, action.clone(), json!({ "fraction": to }));
                     blocks::set_sliding(Some((action, to)));
                     self.slid = Some((si, k.clone(), Instant::now()));
@@ -7880,7 +8337,9 @@ pub fn paint_piece(p: &Painter, g: &Gfx, dc: &windows::Win32::Graphics::Direct2D
                     }
                 }
             });
+            // (a song playing: drawn each frame, so its bars rise again as soon as its sound comes back)
             alive = (shows_bars(pk) || pk["level"]["playing"] == true) && p.viz.iter().any(|v| *v > 0.0)
+                || (shows_bars(pk) && pk["song"]["playing"] == true)
                 || pk["level"]["playing"] == true
                 || matches!(pk["voice"]["state"].as_str(), Some("listening" | "review"))
                 || matches!(pk["live"]["tone"].as_str(), Some("working" | "waiting" | "permission"))

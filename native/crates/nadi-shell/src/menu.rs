@@ -17,9 +17,13 @@ pub enum Act {
     OverFull,
     AlwaysOpen,
     HideIdle,
+    /// a group: undone, its widgets back on the edge
+    Ungroup,
+    /// one of a group's: out of it, beside it
+    TakeOut,
+    /// one of a group's: the one it shows at rest
+    Front,
     Bump,
-    /// the dock: the tray merged into it, or not
-    MergeTray,
     Hide,
     Edit,
     Settings,
@@ -40,6 +44,12 @@ pub struct State {
     pub over_full: bool,
     pub always_open: bool,
     pub hide_idle: bool,
+    /// it is a group (it can be undone)
+    pub group: bool,
+    /// the menu is for one of a group's widgets (it can be taken out)
+    pub take_out: bool,
+    /// one of a group's: whether it is the one shown at rest (none: not in a group)
+    pub front: Option<bool>,
     /// it bumps: comes out for a moment when something happens
     pub bump: bool,
     /// none: it is its icon alone always (no switch)
@@ -48,8 +58,6 @@ pub struct State {
     pub can_pop: bool,
     /// its panel is out as a window
     pub popped: bool,
-    /// the dock: the tray merged into it (none: not the dock)
-    pub merge_tray: Option<bool>,
 }
 
 pub const W: f32 = 240.0;
@@ -240,10 +248,16 @@ pub fn draw_widget(p: &Painter, st: &State, hover: Option<usize>, names: &mut Ve
         toggles.push(("window-new", "Always Open", st.always_open, Act::AlwaysOpen));
     }
     toggles.push(("moon", "Hide When Idle", st.hide_idle, Act::HideIdle));
-    toggles.push(("sparkle", "Bump When Something Happens", st.bump, Act::Bump));
-    if let Some(on) = st.merge_tray {
-        toggles.push(("merge", "Merge Tray", on, Act::MergeTray));
+    if let Some(on) = st.front {
+        toggles.push(("star", "Show at Front", on, Act::Front));
     }
+    if st.take_out {
+        toggles.push(("external", "Take Out of Group", false, Act::TakeOut));
+    }
+    if st.group {
+        toggles.push(("grid", "Ungroup", false, Act::Ungroup));
+    }
+    toggles.push(("sparkle", "Bump When Something Happens", st.bump, Act::Bump));
     let n = toggles.len() as f32;
     let step = (w - TOG) / (n - 1.0).max(1.0);
     for (i, (icon, name, on, act)) in toggles.into_iter().enumerate() {
@@ -299,7 +313,7 @@ pub fn preview(g: &crate::gfx::Gfx, pc: &std::sync::Arc<nadi_core::pc::Pc>) -> w
     let p = Painter { g, dc: &g.dc, s, pc, t: 0.0, viz: [0.0; 3] };
     let big = crate::shape::floating(&g.d2d_factory, w * s, h * s, RADIUS * s)?;
     let small = crate::shape::floating(&g.d2d_factory, mw * s, mh * s, RADIUS * s)?;
-    let st = State { floating: false, large: true, place: "top".into(), pinned: false, always_shown: true, over_full: false, always_open: false, hide_idle: true, bump: true, icon_only: Some(false), can_pop: true, popped: false, merge_tray: None };
+    let st = State { floating: false, large: true, place: "top".into(), pinned: false, always_shown: true, over_full: false, always_open: false, hide_idle: true, group: false, take_out: false, front: None, bump: true, icon_only: Some(false), can_pop: true, popped: false };
     let (tw, th) = (((w + mw + 60.0) * s) as u32, ((h + 40.0) * s) as u32);
     let px = g.snapshot(tw, th, [0.17, 0.2, 0.3, 1.0], |dc| unsafe {
         dc.SetTransform(&windows::Foundation::Numerics::Matrix3x2::translation(20.0 * s, 20.0 * s));

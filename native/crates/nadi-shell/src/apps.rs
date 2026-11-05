@@ -163,8 +163,21 @@ pub fn program_dir(path: &str) -> Option<HSTRING> {
 
 /// Open an address (`ms-settings:`, a web page) as the PC opens it.
 pub fn launch_uri(uri: &str) {
+    // (a page of the Control Panel by its name ("appwiz.cpl"): through the Control Panel, which finds it; a console by its name
+    // ("services.msc"): where Windows keeps it)
+    let low = uri.to_lowercase();
+    let bare = !uri.contains(['\\', '/', ':']);
+    let system = std::env::var("SystemRoot").unwrap_or_else(|_| r"C:\Windows".into()) + r"\System32\";
+    let (file, params) = if bare && low.ends_with(".cpl") {
+        (format!("{system}control.exe"), Some(uri.to_string()))
+    } else if bare && low.ends_with(".msc") {
+        (format!("{system}{uri}"), None)
+    } else {
+        (uri.to_string(), None)
+    };
     unsafe {
-        let _ = ShellExecuteW(None, &HSTRING::from("open"), &HSTRING::from(uri), None, None, SW_SHOWNORMAL);
+        let p = params.map(|p| HSTRING::from(p));
+        let _ = ShellExecuteW(None, &HSTRING::from("open"), &HSTRING::from(file), p.as_ref().map_or(windows::core::PCWSTR::null(), |p| windows::core::PCWSTR(p.as_ptr())), None, SW_SHOWNORMAL);
     }
 }
 

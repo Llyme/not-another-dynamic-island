@@ -72,6 +72,7 @@ main { flex: 1; overflow-y: auto; padding: 22px 26px 60px; min-width: 0; }
 .switch::after { content: ""; position: absolute; left: 3px; top: 3px; width: 14px; height: 14px; border-radius: calc(7px * var(--rk, 1)); background: #fff; transition: transform .25s cubic-bezier(.3, 1.6, .5, 1); }
 .switch.on { background: var(--accent); }
 .switch.on::after { transform: translateX(14px); }
+textarea.lines { all: unset; display: block; background: var(--card2); padding: 6px 10px; border-radius: calc(9px * var(--rk, 1)); width: 100%; box-sizing: border-box; min-height: 56px; color: var(--text); font-size: 12px; white-space: pre; overflow-x: auto; line-height: 1.6; }
 input[type=text], input[type=number], select { all: unset; background: var(--card2); padding: 6px 10px; border-radius: calc(9px * var(--rk, 1)); min-width: 150px; color: var(--text); font-size: 12px; }
 select option { background: #1b1b20; }
 /* sliders as NADI's own panels draw them: a thin dark track filled in the theme colour up to a white knob with a soft shadow; the
@@ -529,6 +530,13 @@ function settingField(p, s) {
   } else if (s.type === "range") {
     control = picSlider(s.min ?? 0, s.max ?? 100, s.step ?? 1, s.value, v => put(v), lessPic(), morePic(), v => v + (s.unit || ""));
     control.style.width = "260px";
+  } else if (s.type === "lines") {
+    // (several, one a line: a box as wide as the card, under its name)
+    control = el("textarea", "lines"); control.value = s.value ?? ""; control.rows = 3; control.spellcheck = false;
+    control.onchange = () => put(control.value);
+    const r = el("div", "row"); r.style.flexDirection = "column"; r.style.alignItems = "stretch"; r.style.gap = "8px";
+    r.append(el("span", "grow", s.label), control);
+    return r;
   } else {
     control = el("input"); control.type = s.type === "number" ? "number" : "text"; control.value = s.value ?? "";
     control.onchange = () => put(s.type === "number" ? Number(control.value) : control.value);
