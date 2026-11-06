@@ -1056,7 +1056,7 @@ fn measure_at(p: &Painter, peek: &Value, horizontal: bool) -> f32 {
         // (at its ends, its grips)
         let stages: f32 = if horizontal { items.iter().filter(|i| staged(peek, i)).map(|i| stage_w(p, peek, i) - icon).sum() } else { 0.0 };
         let _ = n;
-        return DOCK_END * 2.0 + dock_along(peek, icon).max(icon) + stages;
+        return DOCK_END * 2.0 + dock_along(p, peek, icon, horizontal).max(icon) + stages;
     }
     if !horizontal {
         let (text, _) = words_of(peek);
@@ -1342,6 +1342,9 @@ fn dock_margins(depth: f32) -> (f32, f32) {
 /// app): `TRAY_SEP` each side of it, in place of a gap. Each of the tray's takes an app's room, its picture small in it, as a tray
 /// icon is, its marks the size of an app's.
 const TRAY_SEP: f32 = 9.0;
+/// each of the tray's in the dock: this much of an app's room (a square, in the middle of the dock's depth), this far apart
+const TRAY_K: f32 = 0.8;
+const TRAY_DOCK_GAP: f32 = 5.0;
 
 /// How many apps, and how many of the tray, the dock has.
 fn dock_counts(peek: &Value) -> (usize, usize) {
@@ -1352,13 +1355,58 @@ fn dock_counts(peek: &Value) -> (usize, usize) {
 }
 
 /// How long the dock's icons are end to end (an app on its card aside), the line between its apps and its tray too.
-fn dock_along(peek: &Value, icon: f32) -> f32 {
+fn dock_along(p: &Painter, peek: &Value, icon: f32, horizontal: bool) -> f32 {
     let (apps, tray) = dock_counts(peek);
-    let n = (apps + tray) as f32;
-    if n == 0.0 {
+    if apps + tray == 0 {
         return 0.0;
     }
-    n * icon + (n - 1.0) * DOCK_GAP + if apps > 0 && tray > 0 { 2.0 * TRAY_SEP - DOCK_GAP } else { 0.0 }
+    let tz = (icon * TRAY_K).round();
+    let trays = peek["dock"]["items"].as_array().into_iter().flatten().filter(|i| i["tray_only"] == true).chain(peek["dock"]["trays"].as_array().into_iter().flatten());
+    let slots: f32 = trays.map(|i| tray_slot(p, i, tz, horizontal && peek["dock"]["large"] == true)).sum();
+    let (a, t) = (apps as f32, tray as f32);
+    a * icon + (a - 1.0).max(0.0) * DOCK_GAP + slots + (t - 1.0).max(0.0) * TRAY_DOCK_GAP + if apps > 0 && tray > 0 { 2.0 * TRAY_SEP } else { 0.0 }
+}
+
+/// One of the tray's in the dock, how long: its small square; one with something to say (`chip`), the dock large along the bottom or the top, a
+/// chip as long as its icon and that.
+const TRAY_CHIP_TEXT: f32 = 11.0;
+
+fn tray_slot(p: &Painter, it: &Value, tz: f32, chips: bool) -> f32 {
+    let chip = &it["chip"];
+    if !chips || chip.is_null() {
+        return tz;
+    }
+    let pad = ((tz - TRAY_PIC) / 2.0).max(3.0);
+    let say = if chip["mark"].is_string() { 12.0 } else { p.measure(chip["text"].as_str().unwrap_or(""), TRAY_CHIP_TEXT, Weight::Semibold, 120.0) };
+    pad + TRAY_PIC + 5.0 + say + pad + 2.0
+}
+
+/// One of the tray's in the dock, in its slot: its picture (none: `fallback`'s, small), and a chip's ground and what it says.
+fn draw_tray_slot(p: &Painter, it: &Value, image: &str, fallback: &str, r: Rect, tz: f32) {
+    let chip = &it["chip"];
+    let wide = r.w > r.h + 0.5;
+    let pic = if wide { Rect::new(r.x + ((tz - TRAY_PIC) / 2.0).max(3.0) - (tz - TRAY_PIC) / 2.0, r.y, tz, r.h) } else { r };
+    if wide {
+        p.round(r, r.h / 2.0, crate::paint::Color(0.106, 0.106, 0.125, 1.0));
+    }
+    if !tray_icon(p, image, pic) {
+        let s = TRAY_PIC.min(tz);
+        p.picture(fallback, Rect::new(pic.x + (pic.w - s) / 2.0, pic.y + (pic.h - s) / 2.0, s, s), s * 0.22);
+    }
+    if !wide {
+        return;
+    }
+    let tx = pic.x + (pic.w + TRAY_PIC) / 2.0 + 5.0;
+    let cy = r.y + r.h / 2.0;
+    match chip["mark"].as_str() {
+        Some("ok") => p.icon("check", tx, cy - 6.0, 12.0, GREEN),
+        Some(_) => p.icon("x", tx, cy - 6.0, 12.0, crate::draw::RED),
+        None => {
+            let t = chip["text"].as_str().unwrap_or("");
+            let c = if t.starts_with('↓') || t.starts_with('↑') || t.ends_with('%') { crate::paint::Color(0.35, 0.78, 0.9, 1.0) } else { TEXT };
+            p.text(t, tx, cy, TRAY_CHIP_TEXT, Weight::Semibold, 120.0, c);
+        }
+    }
 }
 
 /// Its icons: what the depth leaves past its margins.
@@ -1506,6 +1554,11 @@ fn has_mark(it: &Value) -> bool {
 /// A dock app's one mark, over its picture (`pic`, rounded by `radius`): downloading, the picture dimmed and a ring over it filling
 /// as the download goes; else making sound, dimmed and its sound's bars over its middle. A download comes first.
 fn icon_mark(p: &Painter, it: &Value, pic: Rect, radius: f32) {
+    icon_mark_at(p, it, pic, radius, 0.42);
+}
+
+/// The same, its sound's bars `bars` of the picture tall (over a cover, with nothing else on it: taller).
+fn icon_mark_at(p: &Painter, it: &Value, pic: Rect, radius: f32, bars: f32) {
     if !has_mark(it) {
         return;
     }
@@ -1515,7 +1568,7 @@ fn icon_mark(p: &Painter, it: &Value, pic: Rect, radius: f32) {
     if let Some(f) = it["progress"].as_f64() {
         p.ring(cx, cy, z * 0.34, (z * 0.09).clamp(1.8, 2.6), (f as f32).clamp(0.0, 1.0), 0.0, BLUE, TEXT.alpha(0.2));
     } else if let Some(v) = it["audio"].as_array() {
-        sound_bars(p, v, cx, cy, (z * 0.42).max(7.0));
+        sound_bars(p, v, cx, cy, (z * bars).max(7.0));
     }
 }
 
@@ -1647,7 +1700,7 @@ fn dock(p: &Painter, peek: &Value, body: Rect, horizontal: bool) -> Vec<(Rect, S
     let n = items.len().max(1) as f32;
     // (on a side edge, more apps than fit: each smaller, down to a size)
     let _ = n;
-    let z = if horizontal { icon } else { (icon * (body.h - 2.0 * DOCK_END) / dock_along(peek, icon).max(icon)).clamp(14.0, icon) };
+    let z = if horizontal { icon } else { (icon * (body.h - 2.0 * DOCK_END) / dock_along(p, peek, icon, horizontal).max(icon)).clamp(14.0, icon) };
     // (past its ends, its grips)
     let mut at = if horizontal { body.x + DOCK_END } else { body.y + DOCK_END };
     // (on a side edge: a column of icons, as wide as every widget there; their names in their tips)
@@ -1658,6 +1711,8 @@ fn dock(p: &Painter, peek: &Value, body: Rect, horizontal: bool) -> Vec<(Rect, S
     // (toward the middle of the screen: which way a hop goes)
     let inward = if inner == "bottom" || inner == "right" { 1.0 } else { -1.0 };
     let place = |at: f32| if horizontal { Rect::new(at, cross - z / 2.0, z, z) } else { Rect::new(cross - z / 2.0, at, z, z) };
+    let tz = (z * TRAY_K).round();
+    let tray_place = |at: f32, len: f32| if horizontal { Rect::new(at, cross - tz / 2.0, len, tz) } else { Rect::new(cross - tz / 2.0, at, tz, len) };
     let mut last_gap = DOCK_GAP;
     // (the line between the apps and the tray, from the end of the last app (`at`, its gap after it): where the tray starts)
     let line = |at: f32| -> f32 {
@@ -1677,18 +1732,14 @@ fn dock(p: &Painter, peek: &Value, body: Rect, horizontal: bool) -> Vec<(Rect, S
         }
         // (in the tray alone: an app's room, its tray icon's picture small in it, as a tray icon is; its marks an app's size)
         if it["tray_only"] == true {
-            let r = place(at);
+            let len = tray_slot(p, it, tz, horizontal && peek["dock"]["large"] == true);
+            let r = tray_place(at, len);
             if it["key"].as_str() == Some(hovered) {
-                p.round(Rect::new(r.x - 3.0, r.y - 3.0, r.w + 6.0, r.h + 6.0), (z + 6.0) * 0.3, FAINT);
+                p.round(Rect::new(r.x - 3.0, r.y - 3.0, r.w + 6.0, r.h + 6.0), (tz + 6.0) / 2.0, FAINT);
             }
-            let img = it["tray_image"].as_str().unwrap_or("");
-            if !tray_icon(p, img, r) {
-                let s = TRAY_PIC.min(z);
-                p.picture(it["image"].as_str().unwrap_or(""), Rect::new(r.x + (z - s) / 2.0, r.y + (z - s) / 2.0, s, s), s * 0.22);
-            }
-            icon_mark(p, it, r, z * 0.22);
+            draw_tray_slot(p, it, it["tray_image"].as_str().unwrap_or(""), it["image"].as_str().unwrap_or(""), r, tz);
             out.push((r, format!("app:{i}")));
-            at += z + DOCK_GAP;
+            at += len + TRAY_DOCK_GAP;
             last_gap = DOCK_GAP;
             continue;
         }
@@ -1786,15 +1837,22 @@ fn dock(p: &Painter, peek: &Value, body: Rect, horizontal: bool) -> Vec<(Rect, S
         // was)
         let pin = if large { 3.0 } else { 1.0 };
         let pic = Rect::new(r.x + pin, r.y + pin, r.w - 2.0 * pin, r.h - 2.0 * pin);
-        if !p.picture(img, pic, pic.w * 0.22) {
+        // (large, playing something with a cover: the cover in place of its icon)
+        let cover = it["media"]["art"].as_str().filter(|_| large).unwrap_or("");
+        let covered = !cover.is_empty() && p.picture(cover, pic, pic.w * 0.18);
+        if !covered && !p.picture(img, pic, pic.w * 0.22) {
             p.round(pic, pic.w * 0.3, SOFT);
             let name = it["name"].as_str().unwrap_or("?");
             let letter: String = name.chars().take(1).collect();
             let w = p.measure(&letter, 13.0, Weight::Semibold, z);
             p.text(&letter, r.x + z / 2.0 - w / 2.0, r.y + z / 2.0, 13.0, Weight::Semibold, z, TEXT);
         }
-        // (downloading, or making sound: its one mark over it)
-        icon_mark(p, it, pic, pic.w * 0.22);
+        // (downloading, or making sound: its one mark over it, over its cover too)
+        if covered {
+            icon_mark_at(p, it, pic, pic.w * 0.18, 0.66);
+        } else {
+            icon_mark(p, it, pic, pic.w * 0.22);
+        }
         // (its tray icon has a new picture (an unread mark): a dot on its corner, in the theme's second colour, cut out of it)
         if it["news"] == true {
             let d = (z * 0.17).clamp(3.0, 4.5);
@@ -1818,14 +1876,15 @@ fn dock(p: &Painter, peek: &Value, body: Rect, horizontal: bool) -> Vec<(Rect, S
         let _ = last_gap;
         let mut t = if !divided && !items.is_empty() { line(at) } else { at };
         for r_ in rest {
-            let r = place(t);
+            let len = tray_slot(p, r_, tz, horizontal && peek["dock"]["large"] == true);
+            let r = tray_place(t, len);
             let a = r_["action"].as_str().unwrap_or("").to_string();
             if hovered == a {
-                p.round(Rect::new(r.x - 3.0, r.y - 3.0, r.w + 6.0, r.h + 6.0), (z + 6.0) * 0.3, FAINT);
+                p.round(Rect::new(r.x - 3.0, r.y - 3.0, r.w + 6.0, r.h + 6.0), (tz + 6.0) / 2.0, FAINT);
             }
-            tray_icon(p, r_["image"].as_str().unwrap_or(""), r);
+            draw_tray_slot(p, r_, r_["image"].as_str().unwrap_or(""), "", r, tz);
             out.push((r, a));
-            t += z + DOCK_GAP;
+            t += len + TRAY_DOCK_GAP;
         }
     }
     // (its grips: a small dot in the middle of each end while the mouse is on it; the one the mouse is over, brighter and a touch

@@ -112,6 +112,9 @@ return {
 widget unless the person asked to see it anyway (right-click: Hide When Idle), so send one rather than taking the widget away: it
 keeps its place, and its banners still come out there.
 
+**Its own switches:** `toggles = { { icon, tip, on, action } }` on a widget adds switches to its right-click menu, after NADI's
+own. Pressed, the plugin is sent `action`, as for anything pressed in the widget; send the widget again with `on` flipped.
+
 **Banners:**
 - A banner comes out of the plugin's own widget: the widget becomes the banner for a while (in its place, merged or floating, as the
   person put it), and the widgets beside it make room. `widget = "id"` picks which of its widgets; without it, the first that shows.

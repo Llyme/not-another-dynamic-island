@@ -120,6 +120,8 @@ pub struct Config {
     pub open_on: String,
     /// the tray icons in the Tray widget's row, in order (by program and number)
     pub tray_pinned: Vec<String>,
+    /// the Tray and the Taskbar show Windows' own icons too (the volume, the network, the battery, removing a drive)
+    pub tray_system: bool,
     /// the small banners wait while something full screen is in front (a game, a video, a talk), as they do while a plugin asks
     /// for quiet
     pub quiet_full: bool,
@@ -175,7 +177,7 @@ impl Config {
 
 impl Default for Config {
     fn default() -> Self {
-        Config { widgets: BTreeMap::new(), groups: BTreeMap::new(), monitors: "follow".into(), taskbar: "keep".into(), scale: 1.0, auto_hide: "fullscreen".into(), pinned: Vec::new(), launcher_pins: None, launcher_foot: None, win_key: "auto".into(), reveal: "all".into(), hold_key: "none".into(), open_on: "hover".into(), tray_pinned: Vec::new(), quiet_full: true, quiet_banners: Vec::new(), liquid: 50.0, theme: "#5ac88c".into(), theme2: "#e8b04a".into(), desk_map: BTreeMap::new(), desk_keys: true, launcher_reveal: false, update_told: String::new(), last_run: String::new(), admin_keys: false, roundness: 1.0, edge_busy_only: false, software_draw: false, foot_signout: false, depth_small: 32.0, depth_large: 44.0, explorer_menu: false, edge_reach: 6.0, edge_wait: 0 }
+        Config { widgets: BTreeMap::new(), groups: BTreeMap::new(), monitors: "follow".into(), taskbar: "keep".into(), scale: 1.0, auto_hide: "fullscreen".into(), pinned: Vec::new(), launcher_pins: None, launcher_foot: None, win_key: "auto".into(), reveal: "all".into(), hold_key: "none".into(), open_on: "hover".into(), tray_pinned: Vec::new(), tray_system: false, quiet_full: true, quiet_banners: Vec::new(), liquid: 50.0, theme: "#5ac88c".into(), theme2: "#e8b04a".into(), desk_map: BTreeMap::new(), desk_keys: true, launcher_reveal: false, update_told: String::new(), last_run: String::new(), admin_keys: false, roundness: 1.0, edge_busy_only: false, software_draw: false, foot_signout: false, depth_small: 32.0, depth_large: 44.0, explorer_menu: false, edge_reach: 6.0, edge_wait: 0 }
     }
 }
 

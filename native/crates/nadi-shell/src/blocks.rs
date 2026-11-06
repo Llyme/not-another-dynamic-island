@@ -119,6 +119,14 @@ pub fn tile_over(p: &crate::draw::Painter, r: Rect, it: &Value, g: &Value, hover
     }
     let t = if s(it, "short").is_empty() { s(it, "title") } else { s(it, "short") };
     p.text(t, pic.right() + 6.0, pic.y + 8.0, 11.0, Weight::Semibold, (r.right() - 8.0 - if busy { 50.0 } else { 0.0 } - pic.right() - 6.0).max(20.0), TEXT);
+    // (what it plays: a card low on its picture, its cover, its title and who by, how far along; above the bar while the mouse is on
+    // it)
+    // (the mouse coming onto it, or going: its bar grows out of its thin line, and the card rises over it, eased)
+    let k = hover_ease(s(it, "action"), on);
+    let barred = g["sound"] == true && g["volume"].is_number() && g["progress"].is_null();
+    if !s(&g["media"], "title").is_empty() && r.w >= 160.0 {
+        song_card(p, r, &g["media"], if barred { 14.0 + 28.0 * k } else { 14.0 }, k);
+    }
     // its foot
     if let Some(f) = g["progress"].as_f64() {
         let lr = Rect::new(r.x + 8.0, r.bottom() - 9.0, r.w - 16.0, 3.0);
@@ -143,19 +151,109 @@ pub fn tile_over(p: &crate::draw::Painter, r: Rect, it: &Value, g: &Value, hover
             p.round(Rect::new(lr.x, lr.y, (lr.w * live).max(lr.h), lr.h), lr.h / 2.0, LIVE);
         }
     };
-    if !on {
-        line(p, Rect::new(r.x + 8.0, r.bottom() - 9.0, r.w - 16.0, 3.0));
+    let thin = Rect::new(r.x + 8.0, r.bottom() - 9.0, r.w - 16.0, 3.0);
+    if k < 0.01 {
+        line(p, thin);
         return;
     }
     let (bar, mute, track, media) = tile_bar(r, g);
-    p.round(bar, bar.h / 2.0, black(0.8));
-    p.icon(if muted { "volume-x" } else { "volume" }, mute.x + 4.0, mute.y + 4.0, 14.0, if muted { RED } else { TEXT });
-    line(p, Rect::new(track.x + SEEK_INSET, track.y + track.h / 2.0 - 2.0, track.w - 2.0 * SEEK_INSET, 4.0));
-    p.circle(track.x + SEEK_INSET + (track.w - 2.0 * SEEK_INSET) * v, track.y + track.h / 2.0, 5.0, if muted { DIM } else { TEXT });
+    let lerp = |a: Rect, b: Rect| Rect::new(a.x + (b.x - a.x) * k, a.y + (b.y - a.y) * k, a.w + (b.w - a.w) * k, a.h + (b.h - a.h) * k);
+    let fade = |c: crate::paint::Color| crate::paint::Color(c.0, c.1, c.2, c.3 * k);
+    let grown = lerp(thin, bar);
+    p.round(grown, grown.h / 2.0, black(0.8 * k));
+    // (what is on it comes up with it, faded in)
+    let up = (1.0 - k) * 6.0;
+    p.icon(if muted { "volume-x" } else { "volume" }, mute.x + 4.0, mute.y + 4.0 + up, 14.0, fade(if muted { RED } else { TEXT }));
+    let tl = Rect::new(track.x + SEEK_INSET, track.y + track.h / 2.0 - 2.0, track.w - 2.0 * SEEK_INSET, 4.0);
+    let lr = lerp(thin, tl);
+    line(p, lr);
+    p.circle(lr.x + lr.w * v, lr.y + lr.h / 2.0, 5.0 * k, fade(if muted { DIM } else { TEXT }));
     if let Some([prev, play, next]) = media {
         let playing = g["media"]["playing"] == true;
         for (b, icon) in [(prev, "prev"), (play, if playing { "pause" } else { "play" }), (next, "next")] {
-            p.icon(icon, b.x + 3.0, b.y + 3.0, 14.0, TEXT);
+            p.icon(icon, b.x + 3.0, b.y + 3.0 + up, 14.0, fade(TEXT));
+        }
+    }
+}
+
+thread_local! {
+    /// each tile's hover as drawn (0: off it, 1: on it), and when it was last drawn
+    static TILE_HOVER: std::cell::RefCell<std::collections::HashMap<String, (f32, std::time::Instant)>> = std::cell::RefCell::new(std::collections::HashMap::new());
+}
+
+/// A tile's hover, eased toward the mouse being on it or not (`id`: what names the tile). Still going: drawn again soon.
+fn hover_ease(id: &str, on: bool) -> f32 {
+    let to = if on { 1.0 } else { 0.0 };
+    let now = std::time::Instant::now();
+    let k = TILE_HOVER.with(|m| {
+        let mut m = m.borrow_mut();
+        let (was, at) = m.get(id).copied().unwrap_or((0.0, now));
+        let dt = now.duration_since(at).as_secs_f32().min(0.05);
+        let k = to + (was - to) * (-dt * 16.0).exp();
+        let k = if (k - to).abs() < 0.01 { to } else { k };
+        if k == 0.0 && to == 0.0 {
+            m.remove(id);
+        } else {
+            m.insert(id.to_string(), (k, now));
+        }
+        k
+    });
+    if k != to {
+        crate::draw::keep_moving();
+    }
+    // (eased out: quick at first, settling)
+    1.0 - (1.0 - k).powi(2)
+}
+
+/// What an app plays, on its window's picture: a dark card `lift` up from its foot, the cover, the title and the artist, and a thin
+/// line of how far along it is.
+/// How tall a song card is, and the box of its seek bar (pressed and dragged: what it plays goes there), `lift` up from its tile's foot.
+const SONG_H: f32 = 46.0;
+
+fn song_seek(r: Rect, lift: f32) -> Rect {
+    let c = Rect::new(r.x + 6.0, r.bottom() - lift - SONG_H, r.w - 12.0, SONG_H);
+    let tx = c.x + 6.0 + (SONG_H - 12.0) + 9.0;
+    let tw = (c.right() - 10.0 - tx).max(20.0);
+    Rect::new(tx - SEEK_INSET, c.bottom() - 13.0, tw + 2.0 * SEEK_INSET, 13.0)
+}
+
+/// What it seeks with: where it is, and how long it is, in its action.
+fn seek_action(m: &Value) -> Option<String> {
+    let dur = m["duration"].as_f64().filter(|d| *d > 0.0 && m["can_seek"] == true)?;
+    Some(format!("mediaseek:{dur}:{}", s(m, "source")))
+}
+
+fn song_card(p: &crate::draw::Painter, r: Rect, m: &Value, lift: f32, k: f32) {
+    let h = SONG_H;
+    let c = Rect::new(r.x + 6.0, r.bottom() - lift - h, r.w - 12.0, h);
+    p.round(c, 10.0, crate::paint::Color(0.0, 0.0, 0.0, 0.78));
+    let cz = h - 12.0;
+    let cover = Rect::new(c.x + 6.0, c.y + 6.0, cz, cz);
+    if !p.picture(s(m, "art"), cover, 6.0) {
+        p.round(cover, 6.0, GROUND);
+        p.icon("music", cover.x + cz / 2.0 - 8.0, cover.y + cz / 2.0 - 8.0, 16.0, DIM);
+    }
+    let tx = cover.right() + 9.0;
+    let tw = (c.right() - 10.0 - tx).max(20.0);
+    let artist = s(m, "artist");
+    if artist.is_empty() {
+        p.text(s(m, "title"), tx, c.y + h / 2.0 - 2.0, 12.0, Weight::Semibold, tw, TEXT);
+    } else {
+        p.text(s(m, "title"), tx, c.y + 15.0, 12.0, Weight::Semibold, tw, TEXT);
+        p.text(artist, tx, c.y + 29.0, 10.5, Weight::Regular, tw, DIM);
+    }
+    // (how far along: a thin line; the mouse on the tile, where it can be sought, a little thicker with a knob, which a drag moves)
+    let seek = seek_action(m);
+    let f = seek.as_deref().and_then(sliding).or(m["progress"].as_f64().map(|f| f as f32));
+    if let Some(f) = f {
+        let f = f.clamp(0.0, 1.0);
+        let k = if seek.is_some() { k } else { 0.0 };
+        let th = 2.0 + k;
+        let lr = Rect::new(tx, c.bottom() - 7.0 - th / 2.0 + 1.0, tw, th);
+        p.round(lr, th / 2.0, crate::paint::Color(1.0, 1.0, 1.0, 0.16));
+        p.round(Rect::new(lr.x, lr.y, (lr.w * f).max(th), th), th / 2.0, accent());
+        if k > 0.01 {
+            p.circle(lr.x + lr.w * f, lr.y + th / 2.0, 4.5 * k, TEXT);
         }
     }
 }
@@ -3479,6 +3577,11 @@ impl<'a, 'b> Ctx<'a, 'b> {
                             self.hit(play, Press::Action(format!("mediatoggle:{src}"), Value::Null));
                             self.hit(next, Press::Action(format!("medianext:{src}"), Value::Null));
                         }
+                    }
+                    // (what it plays, where the player lets it be sought: its card's line)
+                    if let (Some(a), true) = (seek_action(&g["media"]), !s(&g["media"], "title").is_empty() && r.w >= 160.0) {
+                        let barred = g["sound"] == true && g["volume"].is_number() && g["progress"].is_null();
+                        self.hit(song_seek(r, if barred { 42.0 } else { 14.0 }), Press::Seek(a));
                     }
                     self.hit_tip(r, Press::Action(s(it, "action").to_string(), Value::Null), it["title"].clone());
                     self.last_hit(false, it["menu"].clone());

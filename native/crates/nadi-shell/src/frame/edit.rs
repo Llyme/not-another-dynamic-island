@@ -68,7 +68,7 @@ pub(super) struct Edit {
 }
 
 /// NADI's own widgets: each its id, its name, and whether it can be placed.
-const OWN: [(&str, &str, bool); 14] = [
+const OWN: [(&str, &str, bool); 16] = [
     (crate::builtin::APPS, "Apps", true),
     (crate::builtin::DOCK, "Dock", true),
     (crate::builtin::TASKBAR, "Taskbar", true),
@@ -83,6 +83,8 @@ const OWN: [(&str, &str, bool); 14] = [
     (crate::screen::SCREEN, "Screen", true),
     (crate::screen::FOCUS, "Focus", true),
     (crate::screen::POWER, "Power Mode", true),
+    (crate::builtin::NOTIFS, "Notifications", true),
+    (crate::builtin::FLYOUT, "Quick Settings", true),
 ];
 
 impl Frame {

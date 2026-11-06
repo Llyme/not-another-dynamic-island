@@ -32,6 +32,8 @@ pub enum Act {
     Exit,
     /// a row of a thing's own menu (by its place)
     Item(usize),
+    /// one of the widget's own switches (by its place)
+    Custom(usize),
 }
 
 /// How the widget stands now (what the menu shows).
@@ -50,6 +52,8 @@ pub struct State {
     pub take_out: bool,
     /// one of a group's: whether it is the one shown at rest (none: not in a group)
     pub front: Option<bool>,
+    /// the widget's own switches: each its icon, its name, on or not
+    pub extra: Vec<(String, String, bool)>,
     /// it bumps: comes out for a moment when something happens
     pub bump: bool,
     /// none: it is its icon alone always (no switch)
@@ -178,7 +182,7 @@ fn look_glyph(p: &Painter, kind: &str, cx: f32, cy: f32, c: crate::paint::Color)
 
 /// Draw the widget's menu (from its top-left corner, logical px); the boxes that can be pressed, and what each does. All pictures,
 /// each a ghost button; `names`: each one's name, in the same order (the tip of the one under the mouse).
-pub fn draw_widget(p: &Painter, st: &State, hover: Option<usize>, names: &mut Vec<&'static str>) -> Vec<(Rect, Act)> {
+pub fn draw_widget(p: &Painter, st: &State, hover: Option<usize>, names: &mut Vec<String>) -> Vec<(Rect, Act)> {
     let mut hits: Vec<(Rect, Act)> = Vec::new();
     names.clear();
     let x = P;
@@ -210,7 +214,7 @@ pub fn draw_widget(p: &Painter, st: &State, hover: Option<usize>, names: &mut Ve
             }
             look_glyph(p, kind, r.x + r.w / 2.0, r.y + r.h / 2.0, if on { draw::TEXT } else { draw::DIM });
             hits.push((r, act));
-            names.push(name);
+            names.push(name.to_string());
         }
     }
     // where it goes: the screen, a bar on each edge and a bracket in each corner; where it is now in colour
@@ -235,29 +239,33 @@ pub fn draw_widget(p: &Painter, st: &State, hover: Option<usize>, names: &mut Ve
             p.round(mk, 2.0, c);
         }
         hits.push((hit, Act::Move(place)));
-        names.push(name);
+        names.push(name.to_string());
     }
     // the switches: a row of pictures (one that has no panel: no Always Open)
     y += MAP + GAP;
-    let mut toggles: Vec<(&str, &'static str, bool, Act)> = vec![
-        ("desktop", "Pin to This Monitor", st.pinned, Act::Pin),
-        ("eye", "Always Show", st.always_shown, Act::AlwaysShow),
-        ("maximize", "Show Over Full Screen", st.over_full, Act::OverFull),
+    let mut toggles: Vec<(&str, String, bool, Act)> = vec![
+        ("desktop", "Pin to This Monitor".into(), st.pinned, Act::Pin),
+        ("eye", "Always Show".into(), st.always_shown, Act::AlwaysShow),
+        ("maximize", "Show Over Full Screen".into(), st.over_full, Act::OverFull),
     ];
     if st.can_pop {
-        toggles.push(("window-new", "Always Open", st.always_open, Act::AlwaysOpen));
+        toggles.push(("window-new", "Always Open".into(), st.always_open, Act::AlwaysOpen));
     }
-    toggles.push(("moon", "Hide When Idle", st.hide_idle, Act::HideIdle));
+    toggles.push(("moon", "Hide When Idle".into(), st.hide_idle, Act::HideIdle));
     if let Some(on) = st.front {
-        toggles.push(("star", "Show at Front", on, Act::Front));
+        toggles.push(("star", "Show at Front".into(), on, Act::Front));
     }
     if st.take_out {
-        toggles.push(("external", "Take Out of Group", false, Act::TakeOut));
+        toggles.push(("external", "Take Out of Group".into(), false, Act::TakeOut));
     }
     if st.group {
-        toggles.push(("grid", "Ungroup", false, Act::Ungroup));
+        toggles.push(("grid", "Ungroup".into(), false, Act::Ungroup));
     }
-    toggles.push(("sparkle", "Bump When Something Happens", st.bump, Act::Bump));
+    toggles.push(("sparkle", "Bump When Something Happens".into(), st.bump, Act::Bump));
+    // (the widget's own, after NADI's)
+    for (i, (icon, name, on)) in st.extra.iter().enumerate() {
+        toggles.push((icon.as_str(), name.clone(), *on, Act::Custom(i)));
+    }
     let n = toggles.len() as f32;
     let step = (w - TOG) / (n - 1.0).max(1.0);
     for (i, (icon, name, on, act)) in toggles.into_iter().enumerate() {
@@ -265,7 +273,7 @@ pub fn draw_widget(p: &Painter, st: &State, hover: Option<usize>, names: &mut Ve
         ghost(p, r, lit(&hits), on);
         p.icon(icon, r.x + (TOG - 16.0) / 2.0, r.y + (TOG - 16.0) / 2.0 - 1.0, 16.0, ink(on));
         hits.push((r, act));
-        names.push(name);
+        names.push(name.to_string());
     }
     // the foot: hide and edit; pop out and settings; between them, the name of what is under the mouse
     y += TOG + GAP;
@@ -283,7 +291,7 @@ pub fn draw_widget(p: &Painter, st: &State, hover: Option<usize>, names: &mut Ve
         ghost(p, r, lit(&hits), on);
         p.icon(icon, r.x + 9.0, r.y + 7.0, 16.0, ink(on));
         hits.push((r, act));
-        names.push(name);
+        names.push(name.to_string());
     }
     hits
 }
@@ -313,7 +321,7 @@ pub fn preview(g: &crate::gfx::Gfx, pc: &std::sync::Arc<nadi_core::pc::Pc>) -> w
     let p = Painter { g, dc: &g.dc, s, pc, t: 0.0, viz: [0.0; 3] };
     let big = crate::shape::floating(&g.d2d_factory, w * s, h * s, RADIUS * s)?;
     let small = crate::shape::floating(&g.d2d_factory, mw * s, mh * s, RADIUS * s)?;
-    let st = State { floating: false, large: true, place: "top".into(), pinned: false, always_shown: true, over_full: false, always_open: false, hide_idle: true, group: false, take_out: false, front: None, bump: true, icon_only: Some(false), can_pop: true, popped: false };
+    let st = State { floating: false, large: true, place: "top".into(), pinned: false, always_shown: true, over_full: false, always_open: false, hide_idle: true, group: false, take_out: false, front: None, extra: Vec::new(), bump: true, icon_only: Some(false), can_pop: true, popped: false };
     let (tw, th) = (((w + mw + 60.0) * s) as u32, ((h + 40.0) * s) as u32);
     let px = g.snapshot(tw, th, [0.17, 0.2, 0.3, 1.0], |dc| unsafe {
         dc.SetTransform(&windows::Foundation::Numerics::Matrix3x2::translation(20.0 * s, 20.0 * s));

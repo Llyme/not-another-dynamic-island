@@ -30,6 +30,78 @@ impl Frame {
         self.config.groups.get(gid).and_then(|g| g.members.iter().filter(|m| self.widgets.contains_key(*m)).nth(i).cloned()).or(Some(shown))
     }
 
+    /// The pictogram of a group's (beside the one it shows) under a point: its widget, and its box (logical, in its screen).
+    pub(super) fn fan_at(&self, si: usize, k: &str, x: f32, y: f32) -> Option<(String, Rect)> {
+        let it = self.screens.get(si)?.items.get(k)?;
+        let (_, b) = self.shape_now(si, it).ok()?;
+        let (lx, ly) = (x - b.x, y - b.y);
+        let (r, a) = it.buttons.iter().find(|(r, a)| a.starts_with("\u{0}group:") && lx >= r.x && lx < r.x + r.w && ly >= r.y && ly < r.y + r.h)?;
+        let (gid, i) = a.strip_prefix("\u{0}group:")?.split_once(':')?;
+        let i: usize = i.parse().ok()?;
+        let m = self.config.groups.get(gid)?.members.iter().filter(|m| self.widgets.contains_key(*m)).nth(i)?.clone();
+        Some((m, Rect::new(r.x + b.x, r.y + b.y, r.w, r.h)))
+    }
+
+    /// A group's pictogram dragged: past the middle of another's, it takes that one's place (the others move up). Whether one is
+    /// being dragged.
+    pub(super) fn fan_move(&mut self, si: usize, x: f32, y: f32) -> bool {
+        let Some((fs, gk, m, px, py, moved)) = self.fan_drag.clone() else { return false };
+        if fs != si {
+            return moved;
+        }
+        if !moved {
+            if (x - px).hypot(y - py) <= DRAG_START {
+                return false;
+            }
+            self.fan_drag = Some((fs, gk.clone(), m.clone(), px, py, true));
+            self.press = None;
+            unsafe {
+                let _ = windows::Win32::UI::Input::KeyboardAndMouse::SetCapture(self.screens[si].ov.hwnd);
+            }
+        }
+        self.mouse = (si, x, y);
+        let Some(id) = self.group_of(&m) else { return true };
+        let Some((other, r)) = self.fan_at(si, &gk, x, y).filter(|(o, _)| *o != m) else { return true };
+        let members = self.config.groups.get(&id).map(|g| g.members.clone()).unwrap_or_default();
+        let (Some(from), Some(to)) = (members.iter().position(|k| *k == m), members.iter().position(|k| *k == other)) else { return true };
+        // (along the edge: across the middle of the other, in the way it is dragged; so that a wide one and a narrow one never swap
+        // back and forth)
+        let horizontal = (r.x + r.w / 2.0 - px).abs() >= (r.y + r.h / 2.0 - py).abs();
+        let (at, mid) = if horizontal { (x, r.x + r.w / 2.0) } else { (y, r.y + r.h / 2.0) };
+        if (to > from && at < mid) || (to < from && at > mid) {
+            return true;
+        }
+        self.reorder_group(&id, from, to);
+        true
+    }
+
+    /// One of a group's widgets moved from one place in its order to another; the one shown, and the one opened, kept.
+    fn reorder_group(&mut self, id: &str, from: usize, to: usize) {
+        let Some(g) = self.config.groups.get(id).cloned() else { return };
+        let alive: Vec<String> = g.members.iter().filter(|k| self.widgets.contains_key(*k)).cloned().collect();
+        let shown = alive.get(g.shown.min(alive.len().saturating_sub(1))).cloned();
+        let opened = self.group_opened.get(id).and_then(|i| alive.get(*i)).cloned();
+        let mut members = g.members.clone();
+        let k = members.remove(from);
+        members.insert(to, k);
+        let alive: Vec<String> = members.iter().filter(|k| self.widgets.contains_key(*k)).cloned().collect();
+        let place = |k: &Option<String>| k.as_ref().and_then(|k| alive.iter().position(|a| a == k));
+        let (new_shown, new_opened) = (place(&shown).unwrap_or(0), place(&opened));
+        let id_s = id.to_string();
+        self.change_config(|c| {
+            if let Some(gr) = c.groups.get_mut(&id_s) {
+                gr.members = members;
+                gr.shown = new_shown;
+            }
+        });
+        if let Some(o) = new_opened {
+            self.group_opened.insert(id_s, o);
+        }
+        let changed = self.refresh_groups(None);
+        self.relayout_with(Some(&changed.into_iter().collect()));
+        self.commit();
+    }
+
     /// One of a group's widgets taken out of it: beside it on the edge (the group of one left undone).
     pub(super) fn take_out(&mut self, gk: &str, member: &str) {
         let Some(id) = self.widgets.get(gk).and_then(|w| w.content["group"]["id"].as_str().map(str::to_string)) else { return };

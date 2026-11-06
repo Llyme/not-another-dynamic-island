@@ -17,6 +17,19 @@ pub const TASKBAR: &str = "taskbar";
 /// the launcher's button, a widget of its own (placed where you like, beside the dock or not)
 pub const APPS: &str = "apps";
 
+pub const NOTIFS: &str = "notifs";
+pub const FLYOUT: &str = "flyout";
+
+/// Windows' notification center (Win+N), as a widget: pressed, it opens.
+pub fn notifs_widget() -> Value {
+    json!({ "peek": { "icon": "bell" }, "press": "winnotifs", "tip": "Notifications" })
+}
+
+/// Windows' quick settings (Win+A: Wi-Fi, Bluetooth, the volume, brightness), as a widget: pressed, it opens.
+pub fn flyout_widget() -> Value {
+    json!({ "peek": { "icon": "wifi" }, "press": "winflyout", "tip": "Quick Settings" })
+}
+
 /// The launcher's button, as a widget: pressed, the launcher opens.
 pub fn apps_widget() -> Value {
     json!({ "peek": { "icon": "grid" }, "press": "launcher", "tip": "Apps" })
@@ -28,7 +41,29 @@ pub fn apps_widget() -> Value {
 pub fn tray_icons() -> Vec<crate::trayhost::Icon> {
     let me = std::process::id();
     let windows = crate::trayhost::explorer_pid();
-    crate::trayhost::icons().into_iter().filter(|i| !i.hidden && i.pid != me && Some(i.pid) != windows).collect()
+    let all = SYSTEM_ICONS.load(std::sync::atomic::Ordering::Relaxed);
+    crate::trayhost::icons().into_iter().filter(|i| !i.hidden && i.pid != me && (all || !(Some(i.pid) == windows && replaced(i)))).collect()
+}
+
+/// Windows' own icons that NADI has widgets for (the volume, the network, the battery, removing a drive), shown in the Tray and the
+/// Taskbar too (their switch, in their menus)?
+static SYSTEM_ICONS: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+pub fn set_system_icons(on: bool) {
+    SYSTEM_ICONS.store(on, std::sync::atomic::Ordering::Relaxed);
+}
+
+/// The Tray's and the Taskbar's switch, in their menus: Windows' own icons too.
+fn system_toggle(cfg: &Config) -> Value {
+    json!([{ "icon": "desktop", "tip": "Windows' Own Icons", "on": cfg.tray_system, "action": "traysystem" }])
+}
+
+/// Is it one of Windows' own icons that NADI has a widget for (the volume, the network, the battery, removing a drive)? Explorer names
+/// them by GUIDs of one family ({7820AE73-23E3-4229-82C1-E41CB67D5B9C} the volume, ...74 the network, ...75 the battery, ...78
+/// removing a drive); its others (Windows Update, a location in use) are shown.
+fn replaced(i: &crate::trayhost::Icon) -> bool {
+    const FAMILY: [u8; 15] = [0xae, 0x20, 0x78, 0xe3, 0x23, 0x29, 0x42, 0x82, 0xc1, 0xe4, 0x1c, 0xb6, 0x7d, 0x5b, 0x9c];
+    i.guid.is_some_and(|g| matches!(g[0], 0x73 | 0x74 | 0x75 | 0x78) && g[1..] == FAMILY)
 }
 
 /// A process's program (asked of Windows once, then kept a while: a tray that changes twice a second would ask every process each time).
@@ -67,7 +102,7 @@ pub fn tray_row(list: &[crate::trayhost::Icon], pinned: &[String]) -> Vec<String
 
 /// The tray as a widget: at rest its row of icons and how many more; open, every one. While editing, every one in its peek, the row
 /// first (a mark after it), so they can be dragged in and out of the row.
-pub fn tray(pinned: &[String], editing: bool) -> Value {
+pub fn tray(pinned: &[String], editing: bool, cfg: &Config) -> Value {
     let list = tray_icons();
     let item = |i: &crate::trayhost::Icon| json!({ "image": format!("trayicon:{}", i.icon), "action": format!("tray:{}:{}", i.owner, i.uid), "label": i.tip.lines().next().unwrap_or(""), "news": tray_news(&i.tip, &tray_words(i).1) });
     let keys = tray_row(&list, pinned);
@@ -86,6 +121,7 @@ pub fn tray(pinned: &[String], editing: bool) -> Value {
     };
     json!({
         "peek": { "tray": { "items": row.iter().map(|i| item(i)).collect::<Vec<_>>(), "more": more, "split": if editing { split } else { 0 } } },
+        "toggles": system_toggle(cfg),
         "panel": { "width": width, "body": [{ "kind": "traytiles", "items": list.iter().map(tile).collect::<Vec<_>>() }] },
         // (the ones not in its row, by name)
         "tip": list.iter().filter(|i| !row.iter().any(|r| r.owner == i.owner && r.uid == i.uid)).map(|i| i.tip.lines().next().unwrap_or("").to_string()).filter(|t| !t.is_empty()).collect::<Vec<_>>().join("\n"),
@@ -236,11 +272,13 @@ pub struct TrayRef {
     pub tip: String,
     /// what names it from one start to the next
     pub key: String,
+    /// what its app has to say worth a glance (as the Tray widget's chips: `tray_news`)
+    pub chip: Value,
 }
 
 impl TrayRef {
     fn of(i: &crate::trayhost::Icon) -> TrayRef {
-        TrayRef { owner: i.owner, uid: i.uid, icon: i.icon, pic: i.pic, tip: i.tip.lines().next().unwrap_or("").trim().to_string(), key: tray_key(i) }
+        TrayRef { owner: i.owner, uid: i.uid, icon: i.icon, pic: i.pic, tip: i.tip.lines().next().unwrap_or("").trim().to_string(), key: tray_key(i), chip: tray_news(&i.tip, &tray_words(i).1) }
     }
 
     pub fn action(&self) -> String {
@@ -611,6 +649,11 @@ impl Builtins {
                     "tray_image": a.tray.first().map(|t| format!("trayicon:{}", t.icon)),
                     "tray_action": a.tray.first().map(|t| t.action()),
                     "news": self.tray_news_of(a),
+                    // (in the tray alone: what it has to say, as a chip: how far its download is, else its tray icon's news)
+                    "chip": match progress.get(&file) {
+                        Some(f) => json!({ "text": format!("{:.0}%", (*f as f64 * 100.0).clamp(0.0, 100.0)) }),
+                        None => a.tray.first().map_or(Value::Null, |t| t.chip.clone()),
+                    },
                     // (its right-click: new window, pin, its file in Explorer (a program on disk, not a store app's), close all (held))
                     "menu": menu,
                     // (the app in front: its window, and what it used lately, for the dock at its largest)
@@ -679,12 +722,13 @@ impl Builtins {
         let n = groups.iter().map(|g| g["windows"].as_array().map_or(0, |w| w.len())).sum::<usize>().clamp(1, 4) as f32;
         let width = (2.0 * 16.0 + 6.0 + 4.0 + n * crate::blocks::TILE_W + (n - 1.0) * crate::blocks::TILE_GAP).clamp(400.0, 1100.0);
         json!({
-            "peek": { "dock": { "items": items, "numbers": self.numbers, "trays": rest.iter().map(|t| json!({ "image": format!("trayicon:{}", t.icon), "action": t.action() })).collect::<Vec<_>>() } },
+            "peek": { "dock": { "items": items, "numbers": self.numbers, "trays": rest.iter().map(|t| json!({ "image": format!("trayicon:{}", t.icon), "action": t.action(), "chip": t.chip })).collect::<Vec<_>>() } },
             "panel": { "width": width, "body": [{ "kind": "appwindows", "groups": groups, "pins": pins }] },
             "tiles": tiles,
             "tip": "Apps",
             // (nothing pinned and nothing open: nothing to show; hidden as an idle widget is, unless shown anyway)
             "idle": items.is_empty() && rest.is_empty(),
+            "toggles": if merged { system_toggle(cfg) } else { Value::Null },
         })
     }
 
@@ -772,6 +816,20 @@ impl Builtins {
         let apps = self.dock_apps(cfg);
         let find = |k: &str| apps.iter().find(|a| a.key == k).cloned();
         // (the second value: the config changed, and is kept)
+        // (Windows' own flyouts: its notifications, its quick settings)
+        if action == "traysystem" {
+            cfg.tray_system = !cfg.tray_system;
+            set_system_icons(cfg.tray_system);
+            return (Effect::Changed, true);
+        }
+        if action == "winnotifs" {
+            crate::keyhook::chord(&[0x5B, 0x4E]);
+            return (Effect::None, false);
+        }
+        if action == "winflyout" {
+            crate::keyhook::chord(&[0x5B, 0x41]);
+            return (Effect::None, false);
+        }
         if action == "launcher" {
             return (Effect::Launcher, false);
         }
@@ -788,6 +846,13 @@ impl Builtins {
         // (the Now Card's cover: what plays there, paused or played)
         if let Some(source) = action.strip_prefix("mediatoggle:") {
             nadi_core::sensors::media::media_play_pause(Some(source.to_string()));
+            return (Effect::None, false);
+        }
+        // (a window's tile: what it plays, sought to where its bar was let go)
+        if let Some((dur, source)) = action.strip_prefix("mediaseek:").and_then(|r| r.split_once(':')) {
+            if let (Ok(dur), Some(f)) = (dur.parse::<f64>(), args["fraction"].as_f64()) {
+                nadi_core::sensors::media::media_seek(f.clamp(0.0, 1.0) * dur, Some(source.to_string()));
+            }
             return (Effect::None, false);
         }
         // (a window's tile in the open dock: what it plays, back and next)

@@ -200,7 +200,7 @@ struct Menu {
     point: (f32, f32),
     hits: Vec<(Rect, crate::menu::Act)>,
     /// each one's name, as its tip says it (a widget's menu)
-    names: Vec<&'static str>,
+    names: Vec<String>,
     hover: Option<usize>,
     /// words in it too long for their room, scrolling: drawn again each frame
     marquee: bool,
@@ -450,6 +450,11 @@ pub struct Frame {
     active: usize,
     /// the left button went down on a widget: (screen, widget, where, when)
     press: Option<(usize, String, f32, f32, Instant)>,
+    /// a slider held in a tip: whose, its action, its box (in the tip), whether its plugin is told as it moves
+    tip_slide: Option<(String, String, Rect, bool)>,
+    /// one of a group's pictograms pressed: (screen, the group's key, its widget, where pressed, dragged yet); dragged along the
+    /// others, it moves among them
+    fan_drag: Option<(usize, String, String, f32, f32, bool)>,
     /// where the mouse is (screen, logical px)
     mouse: (usize, f32, f32),
     /// the tip out, and what the mouse rests on that has one (since when)
@@ -648,6 +653,7 @@ fn s_of<'v>(v: &'v Value, k: &str) -> &'v str {
 impl Frame {
     pub fn new(g: Gfx, pc: Arc<Pc>, tx: Sender<Command>, msg_hwnd: HWND) -> Frame {
         let (mut config, config_when) = config::load();
+        crate::builtin::set_system_icons(config.tray_system);
         // (Sign Out, once, in a launcher's foot set before it was)
         if !config.foot_signout {
             config.foot_signout = true;
@@ -745,6 +751,8 @@ impl Frame {
             dock_sig: Vec::new(),
             rolls: Default::default(),
             drag: None,
+            fan_drag: None,
+            tip_slide: None,
             drag_last: None,
             drag_at: None,
             drag_join: None,
@@ -846,6 +854,8 @@ impl Frame {
             Update::Widget { plugin: PLUGIN.into(), widget: crate::builtin::TASKBAR.into(), content: taskbar },
             Update::Widget { plugin: PLUGIN.into(), widget: QUICK.into(), content: quick },
             Update::Widget { plugin: PLUGIN.into(), widget: crate::builtin::APPS.into(), content: crate::builtin::apps_widget() },
+            Update::Widget { plugin: PLUGIN.into(), widget: crate::builtin::NOTIFS.into(), content: crate::builtin::notifs_widget() },
+            Update::Widget { plugin: PLUGIN.into(), widget: crate::builtin::FLYOUT.into(), content: crate::builtin::flyout_widget() },
         ]);
     }
 
@@ -1382,6 +1392,15 @@ impl Frame {
     fn act(&mut self, plugin: String, action: String, args: Value) {
         // (a group's pictogram pressed: its widget's own panel, opened)
         if let Some((gid, i)) = action.strip_prefix("\u{0}group:").and_then(|r| r.split_once(':')).and_then(|(g, i)| Some((g.to_string(), i.parse::<usize>().ok()?))) {
+            // (a widget that is a button, with no panel: pressed, it does its one thing)
+            let member = self.config.groups.get(&gid).and_then(|g| g.members.iter().filter(|m| self.widgets.contains_key(*m)).nth(i).cloned());
+            if let Some(w) = member.as_ref().and_then(|m| self.widgets.get(m)) {
+                if let (Some(a), false) = (w.content["press"].as_str(), w.content["panel"].is_object()) {
+                    let (plugin, a) = (w.plugin.clone(), a.to_string());
+                    self.act(plugin, a, json!({}));
+                    return;
+                }
+            }
             self.group_opened.insert(gid.clone(), i);
             let gk = key(crate::builtin::PLUGIN, &format!("group:{gid}"));
             self.refresh_groups(None);
@@ -1667,6 +1686,8 @@ impl Frame {
         add(crate::builtin::PLUGIN, "NADI", crate::screen::SCREEN, "Screen");
         add(crate::builtin::PLUGIN, "NADI", crate::screen::FOCUS, "Focus");
         add(crate::builtin::PLUGIN, "NADI", crate::screen::POWER, "Power Mode");
+        add(crate::builtin::PLUGIN, "NADI", crate::builtin::NOTIFS, "Notifications");
+        add(crate::builtin::PLUGIN, "NADI", crate::builtin::FLYOUT, "Quick Settings");
         add(crate::builtin::PLUGIN, "NADI", crate::recycle::BIN, "Recycle Bin");
         out
     }
@@ -2585,12 +2606,13 @@ impl Frame {
                 peek["dock"]["front_prev"] = json!(prev);
             }
         }
-        // (the dock at its largest: the app in front on its card, with what it plays when it plays)
+        // (the dock at its largest: the app in front on its card, with what it plays when it plays; the others, the cover of what
+        // they play in place of their icons)
         if peek["dock"].is_object() && self.large(k) {
             peek["dock"]["large"] = json!(true);
             let sessions = self.pc.media_seen.lock().unwrap().clone();
             if let Some(items) = peek["dock"]["items"].as_array_mut() {
-                for it in items.iter_mut().filter(|i| i["front"] == true) {
+                for it in items.iter_mut().filter(|i| i["tray_only"] != true) {
                     if let Some(m) = media_of(&sessions, it) {
                         it["media"] = m;
                     }
@@ -2684,6 +2706,8 @@ impl Frame {
                 crate::screen::SCREEN => ("bottom-right".to_string(), 15),
                 crate::screen::FOCUS => ("bottom-right".to_string(), 16),
                 crate::screen::POWER => ("bottom-right".to_string(), 17),
+                crate::builtin::NOTIFS => ("bottom-right".to_string(), 18),
+                crate::builtin::FLYOUT => ("bottom-right".to_string(), 19),
                 crate::recycle::BIN => ("bottom-right".to_string(), 16),
                 _ => ("bottom-right".to_string(), 0),
             }
@@ -4316,6 +4340,12 @@ impl Frame {
         }
         it.scroll = it.scroll.clamp(0.0, (it.content_h - it.visible).max(0.0));
         self.place_thumbs(si, k, b, t);
+        // (what is over its live pictures still moving (a tile's hover easing): drawn again on the next tick)
+        if crate::draw::take_marquee() {
+            if let Some(it) = self.screens[si].items.get_mut(k) {
+                it.alive = true;
+            }
+        }
     }
 
     /// A piece's glow: soft light out of its outline, on the glass under the frame's window (where the mouse goes through it); gone
@@ -5614,7 +5644,7 @@ impl Frame {
         use crate::builtin::{PLUGIN, TRAY};
         let have = self.widgets.contains_key(&key(PLUGIN, TRAY));
         if self.tray_held() {
-            let content = crate::builtin::tray(&self.config.tray_pinned, self.edit.is_some());
+            let content = crate::builtin::tray(&self.config.tray_pinned, self.edit.is_some(), &self.config);
             self.apply(vec![Update::Widget { plugin: PLUGIN.into(), widget: TRAY.into(), content }]);
         } else if have {
             self.apply(vec![Update::Widget { plugin: PLUGIN.into(), widget: TRAY.into(), content: Value::Null }]);
@@ -5846,7 +5876,7 @@ impl Frame {
         let banner = self.banner.as_ref().map(|b| json!({ "plugin": b.plugin, "say": b.say, "at": b.at.map(|a| [a.x, a.y, a.w, a.h]) }));
         let moving: Vec<String> = self.screens.iter().flat_map(|s| s.items.iter().filter(|(_, i)| i.open.moving() || i.rest.moving() || i.alive).map(|(k, _)| k.clone())).collect();
         let prof: serde_json::Map<String, Value> = self.prof.iter().map(|(k, (n, ms))| (k.clone(), json!([n, (ms * 10.0).round() / 10.0]))).collect();
-        let out = json!({ "prof": prof, "settings_open": self.settings.is_some(), "settings_heard": crate::settings::HEARD.load(Ordering::Relaxed), "timer_ms": self.timer_ms, "edit": self.edit_dump(), "menu": self.menu.as_ref().map(|m| json!({ "key": m.key, "at": [m.at.x, m.at.y, m.at.w, m.at.h], "hits": m.hits.len() })), "tray_forwarded": [crate::trayhost::FORWARDED.load(Ordering::Relaxed), crate::trayhost::UNANSWERED.load(Ordering::Relaxed)], "tray": crate::trayhost::icons().iter().map(|i| json!({ "tip": i.tip, "pid": i.pid, "hidden": i.hidden, "icon": i.icon != 0, "version": i.version, "callback": i.callback })).collect::<Vec<_>>(), "ghost": self.ghost.as_ref().map(|g| { let b = g.rest.now(); [b.x, b.y, b.w, b.h] }), "screens": self.screens.iter().map(|s| json!({ "area": [s.area.x, s.area.y, s.area.w, s.area.h], "full": s.full, "maxed": s.maxed })).collect::<Vec<_>>(), "moving": moving, "widgets": list, "banner": banner, "queue": self.queue.len(), "plugins": self.plugins.iter().map(|p| json!({ "id": p.id, "on": p.on, "note": p.note, "problem": p.problem })).collect::<Vec<_>>() });
+        let out = json!({ "prof": prof, "settings_open": self.settings.is_some(), "settings_heard": crate::settings::HEARD.load(Ordering::Relaxed), "timer_ms": self.timer_ms, "edit": self.edit_dump(), "menu": self.menu.as_ref().map(|m| json!({ "key": m.key, "at": [m.at.x, m.at.y, m.at.w, m.at.h], "hits": m.hits.len() })), "tray_forwarded": [crate::trayhost::FORWARDED.load(Ordering::Relaxed), crate::trayhost::UNANSWERED.load(Ordering::Relaxed)], "tray": crate::trayhost::icons().iter().map(|i| json!({ "tip": i.tip, "pid": i.pid, "hidden": i.hidden, "icon": i.icon != 0, "version": i.version, "callback": i.callback, "uid": i.uid, "guid": i.guid.map(|g| g.iter().map(|b| format!("{b:02x}")).collect::<String>()) })).collect::<Vec<_>>(), "ghost": self.ghost.as_ref().map(|g| { let b = g.rest.now(); [b.x, b.y, b.w, b.h] }), "screens": self.screens.iter().map(|s| json!({ "area": [s.area.x, s.area.y, s.area.w, s.area.h], "full": s.full, "maxed": s.maxed })).collect::<Vec<_>>(), "moving": moving, "widgets": list, "banner": banner, "queue": self.queue.len(), "plugins": self.plugins.iter().map(|p| json!({ "id": p.id, "on": p.on, "note": p.note, "problem": p.problem })).collect::<Vec<_>>() });
         let _ = nadi_core::paths::write_atomic(std::path::Path::new(&path), serde_json::to_string_pretty(&out).unwrap_or_default().as_bytes());
     }
 
@@ -5968,8 +5998,9 @@ impl Frame {
 
     /// The left button went down: on a widget, it may be a press or the start of a drag.
     pub fn mouse_down(&mut self, si: usize, x: f32, y: f32) {
-        // (on a tip that can be pressed: taken when let go)
+        // (on a tip that can be pressed: taken when let go; a slider in it, held and dragged)
         if self.on_tip(si, x, y) {
+            self.tip_press(si, x, y);
             return;
         }
         // (on a free side of a panel: it is resized)
@@ -6104,6 +6135,7 @@ impl Frame {
         if self.in_banner(si, x, y) {
             return;
         }
+        self.fan_drag = self.item_at(si, x, y).and_then(|k| self.fan_at(si, &k, x, y).map(|(m, _)| (si, k, m, x, y, false)));
         self.press = self.item_at(si, x, y).filter(|k| !is_pop(k)).map(|k| (si, k, x, y, Instant::now()));
         self.mouse = (si, x, y);
         self.tick_rate();
@@ -6467,6 +6499,11 @@ impl Frame {
 
     pub fn mouse_move(&mut self, si: usize, x: f32, y: f32) {
         // (on a tip that can be pressed: only it answers)
+        if self.tip_slide.is_some() {
+            self.tip_slide_move(x, false);
+            self.mouse = (si, x, y);
+            return;
+        }
         if self.tip_hover(si, x, y) {
             self.mouse = (si, x, y);
             return;
@@ -6526,6 +6563,9 @@ impl Frame {
             return;
         }
         if self.edit_move(si, x, y) {
+            return;
+        }
+        if self.fan_move(si, x, y) {
             return;
         }
         if self.drag_move(si, x, y) {
@@ -6931,8 +6971,22 @@ impl Frame {
         if self.size_release() {
             return;
         }
+        if self.tip_slide.is_some() {
+            self.tip_slide_move(x, true);
+            return;
+        }
         if self.tip_click(si, x, y) {
             return;
+        }
+        // (a group's pictogram let go: dragged, it stays where it was put; else a click on it)
+        if let Some((.., moved)) = self.fan_drag.take() {
+            if moved {
+                unsafe {
+                    let _ = windows::Win32::UI::Input::KeyboardAndMouse::ReleaseCapture();
+                }
+                self.press = None;
+                return;
+            }
         }
         // (a desktop's card let go: carried, it goes where it was dropped; else its action)
         if let Some((cs, ck, cid, a, _, _, _, carried)) = self.card_press.take() {
@@ -7441,6 +7495,8 @@ impl Frame {
                 None => if self.icon_always(k) { None } else { Some(self.icon_alone(k)) },
             },
             take_out: m.member.is_some(),
+            // (the widget's own switches: `toggles = { { icon, tip, on, action } }`)
+            extra: self.widgets.get(m.member.as_deref().unwrap_or(k)).map(|w| w.content["toggles"].as_array().cloned().unwrap_or_default()).unwrap_or_default().iter().map(|t| (t["icon"].as_str().unwrap_or("dot").to_string(), t["tip"].as_str().unwrap_or("").to_string(), t["on"] == true)).collect(),
             front: m.member.as_deref().and_then(|mk| self.group_of(mk).and_then(|g| self.config.groups.get(&g).map(|gr| gr.members.iter().filter(|x| self.widgets.contains_key(*x)).position(|x| x == mk) == Some(gr.shown.min(gr.members.len().saturating_sub(1)))))),
         });
         let hover = m.hover;
@@ -7450,7 +7506,7 @@ impl Frame {
         let surface = m.piece.surface.clone();
         let p = self.painter(s);
         let mut hits = Vec::new();
-        let mut names: Vec<&'static str> = Vec::new();
+        let mut names: Vec<String> = Vec::new();
         let g = &self.g;
         let _ = crate::draw::take_marquee();
         let _ = self.g.draw_surface(&surface, |dc| unsafe {
@@ -7603,13 +7659,68 @@ impl Frame {
         let owner = t.owner.split('@').next().unwrap_or("").to_string();
         let plugin = self.widgets.get(unpop(&owner)).map(|w| w.sender()).unwrap_or_else(|| crate::builtin::PLUGIN.to_string());
         if let Some(Press::Action(a, args)) = hit {
-            if let Some(t) = &mut self.tip {
-                t.grow.to = 0.0;
+            // (its sound's buttons (mute, back, play, next): it stays out, drawn again; anything else, done and put away)
+            let stays = ["appmute:", "mediaprev:", "mediatoggle:", "medianext:"].iter().any(|p| a.starts_with(p));
+            if !stays {
+                if let Some(t) = &mut self.tip {
+                    t.grow.to = 0.0;
+                }
             }
             self.act(plugin, a, if args.is_null() { json!({}) } else { args });
+            if stays {
+                self.render_tip();
+                self.commit();
+            }
             self.tick_rate();
         }
         true
+    }
+
+    /// A press on a tip: on a slider in it (a volume, a seek bar), it is held, its knob where the mouse is.
+    fn tip_press(&mut self, si: usize, x: f32, y: f32) {
+        let Some(t) = self.tip.as_ref() else { return };
+        let Some(b) = t.at else { return };
+        let (lx, ly) = (x - b.x, y - b.y);
+        let Some((rect, action)) = t.hits.iter().find(|h| lx >= h.rect.x && lx < h.rect.x + h.rect.w && ly >= h.rect.y && ly < h.rect.y + h.rect.h).and_then(|h| match &h.press {
+            Press::Seek(a) => Some((h.rect, a.clone())),
+            _ => None,
+        }) else {
+            return;
+        };
+        let owner = t.owner.split('@').next().unwrap_or("").to_string();
+        let plugin = self.widgets.get(unpop(&owner)).map(|w| w.sender()).unwrap_or_else(|| crate::builtin::PLUGIN.to_string());
+        let live = blocks::slider_value(&action).is_some();
+        self.tip_slide = Some((plugin, action, rect, live));
+        unsafe {
+            let _ = windows::Win32::UI::Input::KeyboardAndMouse::SetCapture(self.screens[si].ov.hwnd);
+        }
+        self.tip_slide_move(x, false);
+    }
+
+    /// The slider held in a tip, dragged (`done`: let go): its knob follows; a live one's plugin told as it goes, any other's when
+    /// let go.
+    fn tip_slide_move(&mut self, x: f32, done: bool) {
+        let Some((plugin, action, rect, live)) = self.tip_slide.clone() else { return };
+        let Some(b) = self.tip.as_ref().and_then(|t| t.at) else {
+            self.tip_slide = None;
+            return;
+        };
+        let frac = slide_frac(rect, x - b.x);
+        if live || done {
+            self.act(plugin, action.clone(), json!({ "fraction": frac }));
+        }
+        if done {
+            self.tip_slide = None;
+            blocks::set_sliding(None);
+            unsafe {
+                let _ = windows::Win32::UI::Input::KeyboardAndMouse::ReleaseCapture();
+            }
+        } else {
+            blocks::set_sliding(Some((action, frac)));
+        }
+        self.render_tip();
+        self.commit();
+        self.tick_rate();
     }
 
     /// The widget a tip that can be pressed came out of, while the mouse is on that tip (it stays out with it).
@@ -7622,7 +7733,7 @@ impl Frame {
         // (in a widget's menu: the name of the picture under the mouse)
         if let Some(m) = self.menu.as_ref().filter(|m| !m.closing && m.grow.now > 0.9) {
             let i = m.hover?;
-            let name = *m.names.get(i)?;
+            let name = m.names.get(i)?.clone();
             let r = m.hits.get(i)?.0;
             let a = Bx { x: m.at.x + r.x, y: m.at.y + r.y, w: r.w, h: r.h };
             let out = if a.y > 70.0 { Edge::Top } else { Edge::Bottom };
@@ -7631,7 +7742,7 @@ impl Frame {
         // (the mouse on a tip with something in it to press (a window's picture): it stays, to be pressed)
         if let Some(t) = self.tip.as_ref().filter(|t| t.grow.to == 1.0) {
             let (msi, mx, my) = self.mouse;
-            if self.menu.is_none() && self.edit.is_none() && self.on_tip(msi, mx, my) {
+            if self.menu.is_none() && self.edit.is_none() && (self.on_tip(msi, mx, my) || self.tip_slide.is_some()) {
                 return Some((t.si, t.owner.clone(), t.content.clone(), t.anchor, t.out));
             }
         }
@@ -7678,6 +7789,10 @@ impl Frame {
                     if let Some(mut group) = group {
                         if let Some(ws) = group["windows"].as_array_mut() {
                             ws.truncate(4);
+                        }
+                        let sessions = self.pc.media_seen.lock().unwrap().clone();
+                        if let Some(m) = media_of(&sessions, &group) {
+                            group["media"] = m;
                         }
                         let n = group["windows"].as_array().map_or(1, |w| w.len()).max(1) as f32;
                         let tile = if n <= 1.0 { 340.0 } else if n <= 2.0 { 290.0 } else if n <= 3.0 { 250.0 } else { 220.0 };
@@ -7750,7 +7865,13 @@ impl Frame {
                         drop_tip_thumbs(t);
                     }
                     let piece = match old {
-                        Some(t) if t.si == si => Some(t.piece),
+                        Some(mut t) if t.si == si => {
+                            // (its tiles' piece under the live pictures, gone with it: else what it last showed stays on the frame)
+                            if let Some(u) = t.under.take() {
+                                let _ = self.screens[si].ov.remove(&u);
+                            }
+                            Some(t.piece)
+                        }
                         Some(mut t) => {
                             self.screens[t.si].ov.remove_top(&t.piece);
                             if let Some(u) = t.under.take() {
@@ -7941,7 +8062,7 @@ impl Frame {
         t.moving = crate::draw::take_marquee();
         t.drawn = Some((t.content.clone(), t.anchor));
         t.at = Some(Bx { x, y, w, h });
-        t.hits = hits.into_iter().filter(|h| matches!(&h.press, Press::Action(a, _) if !a.is_empty())).collect();
+        t.hits = hits.into_iter().filter(|h| matches!(&h.press, Press::Action(a, _) | Press::Seek(a) if !a.is_empty())).collect();
         // (its windows' live pictures: once it stands still, in their boxes; while it springs, none)
         if settled && !boxes.is_empty() {
             t.thumbs.retain(|(wnd, th)| {
@@ -8057,6 +8178,17 @@ impl Frame {
             }
             (Act::AlwaysShow, Some(k)) => self.change_config(|c| set(c, &k, &|w| w.always_shown = if w.always_shown == Some(true) { None } else { Some(true) })),
             (Act::OverFull, Some(k)) => self.change_config(|c| set(c, &k, &|w| w.over_full = if w.over_full == Some(true) { None } else { Some(true) })),
+            (Act::Custom(i), Some(k)) => {
+                // (one of the widget's own switches: its plugin told, as for anything pressed in it)
+                let own = member.clone().unwrap_or(k);
+                if let Some(w) = self.widgets.get(&own) {
+                    let action = w.content["toggles"][i]["action"].as_str().unwrap_or("").to_string();
+                    let plugin = w.sender();
+                    if !action.is_empty() {
+                        self.act(plugin, action, json!({}));
+                    }
+                }
+            }
             (Act::Ungroup, Some(k)) => {
                 self.close_menu();
                 self.ungroup(&k);
@@ -8485,7 +8617,7 @@ fn media_of(sessions: &Value, it: &Value) -> Option<Value> {
     let dur = s["duration"].as_f64().unwrap_or(0.0);
     let art = s["art_id"].as_u64().filter(|a| *a != 0).map(|a| format!("media:{}:{}", s["source"].as_str().unwrap_or(""), a));
     Some(json!({
-        "title": title, "artist": s["artist"], "art": art, "source": s["source"], "playing": s["playing"],
+        "title": title, "artist": s["artist"], "art": art, "source": s["source"], "playing": s["playing"], "duration": dur, "can_seek": s["can_seek"],
         "progress": if dur > 0.0 { json!((s["position"].as_f64().unwrap_or(0.0) / dur).clamp(0.0, 1.0)) } else { Value::Null },
     }))
 }
