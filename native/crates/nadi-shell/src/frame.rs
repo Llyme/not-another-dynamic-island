@@ -982,7 +982,7 @@ impl Frame {
         let t = self.start.elapsed().as_secs_f32();
         let sig: Vec<i32> = w.content["peek"]["dock"]["items"].as_array().into_iter().flatten().filter(|i| i["sound"] == true).flat_map(|i| {
             let name = i["key"].as_str().unwrap_or("");
-            sound_bars(self.dock_loud.get(name).copied().unwrap_or(0.0), t).into_iter().map(|b| (b * 8.0 * 2.0).round() as i32)
+            self.app_bars(name, t).into_iter().map(|b| (b * 8.0 * 2.0).round() as i32)
         }).collect();
         let bars_moved = sig != self.dock_sig;
         self.dock_sig = sig;
@@ -993,6 +993,20 @@ impl Frame {
                 }
             }
         }
+    }
+
+    /// A program's three sound bars and their lift: the analyzer's (what the speakers play, in three bands, the bass lifting them),
+    /// as much of them as its share of the sound (the loudest program, all of them); the analyzer silent, made up from how loud it is.
+    fn app_bars(&self, name: &str, t: f32) -> [f32; 7] {
+        let loud = self.dock_loud.get(name).copied().unwrap_or(0.0);
+        let top = self.dock_loud.values().copied().fold(0.0f32, f32::max);
+        if top > 0.001 && self.viz.now.iter().any(|v| *v > 0.01) {
+            let share = (loud / top).clamp(0.0, 1.0).sqrt();
+            let n = self.viz.now;
+            return std::array::from_fn(|i| if i < 6 { (n[i] * share).max(0.12) } else { self.viz.lift * share });
+        }
+        let b = sound_bars(loud, t);
+        [b[0], b[1], b[2], b[0], b[1], b[2], b[3]]
     }
 
     /// The dock's things as drawn now: its meters where their springs are, the sound bars of each program that makes sound.
@@ -1010,8 +1024,8 @@ impl Frame {
                 }
             }
             if it["sound"] == true {
-                // (as loud as it sounds: quiet sound still stands up)
-                it["audio"] = json!(sound_bars(self.dock_loud.get(&name).copied().unwrap_or(0.0), t));
+                // (the sound's own bars, as loud as it is among the others; quiet sound still stands up)
+                it["audio"] = json!(self.app_bars(&name, t));
             }
         };
         for it in content["peek"]["dock"]["items"].as_array_mut().into_iter().flatten() {
@@ -1057,7 +1071,17 @@ impl Frame {
     /// of its widgets that shows, else the first it has). (Its key, its place and rank, floating.) A plugin with no widget: the top.
     fn banner_home(&self, plugin: &str, say: &Value) -> (String, Place, i32, bool, bool) {
         let ids: Vec<String> = self.plugins.iter().find(|p| p.id == plugin).map(|p| p.widgets.iter().map(|w| w.id.clone()).collect()).unwrap_or_default();
-        let placed = |w: &String| self.place_of(plugin, w).is_some();
+        // (a widget in a group: its group, where it stands)
+        let home = |w: &String| -> (String, String) {
+            match self.group_of(&key(plugin, w)) {
+                Some(g) => (crate::builtin::PLUGIN.to_string(), format!("group:{g}")),
+                None => (plugin.to_string(), w.clone()),
+            }
+        };
+        let placed = |w: &String| {
+            let (hp, hw) = home(w);
+            self.place_of(&hp, &hw).is_some()
+        };
         let pick = say["widget"]
             .as_str()
             .map(String::from)
@@ -1065,8 +1089,9 @@ impl Frame {
             .or_else(|| ids.iter().find(|w| placed(w) && self.widgets.get(&key(plugin, w)).is_some_and(|x| x.content["peek"].is_object())).cloned())
             .or_else(|| ids.iter().find(|w| placed(w)).cloned());
         if let Some(w) = pick {
-            let k = key(plugin, &w);
-            if let Some((p, r)) = self.place_of(plugin, &w) {
+            let (hp, hw) = home(&w);
+            let k = key(&hp, &hw);
+            if let Some((p, r)) = self.place_of(&hp, &hw) {
                 let f = self.floating(&k);
                 let d = self.stacked_down(&k);
                 return (k, p, r, f, d);
@@ -1381,7 +1406,7 @@ impl Frame {
         }
         let Some(piece) = &self.fx[si] else { return };
         let surface = piece.surface.clone();
-        let p = Painter { g: &self.g, dc: &self.g.dc, s: sc.s, pc: &self.pc, t: 0.0, viz: [0.0; 3] };
+        let p = Painter { g: &self.g, dc: &self.g.dc, s: sc.s, pc: &self.pc, t: 0.0, viz: [0.0; 6] };
         let ripples = &mut self.ripples;
         let _ = self.g.draw_surface(&surface, |_| {
             ripples.paint(&p, now, cx, cy, w.max(h));
@@ -4248,9 +4273,8 @@ impl Frame {
                                     Edge::Right => (bd.x, bd.y, bd.w + ext, bd.h),
                                 };
                                 let half = 1.5 * s;
-                                let dep = if matches!(e, Edge::Top | Edge::Bottom) { bd.h } else { bd.w };
-                                let along = if matches!(e, Edge::Top | Edge::Bottom) { bd.w } else { bd.h };
-                                let r = ((dep * 0.44).min(along / 2.0)) * crate::paint::roundness() - half;
+                                // (as round as its own corners: an open panel's are far less round than a closed one's)
+                                let r = shape.radius - half;
                                 let rr = windows::Win32::Graphics::Direct2D::D2D1_ROUNDED_RECT {
                                     rect: windows::Win32::Graphics::Direct2D::Common::D2D_RECT_F { left: x + half, top: y + half, right: x + w - half, bottom: y + h - half },
                                     radiusX: r.max(0.0),
@@ -5100,10 +5124,26 @@ impl Frame {
             self.prof_add("full screen check", tq);
         }
         // the bars of the sound (and the analyzer is listened to while a widget shows them)
-        let want_viz = self.widgets.iter().any(|(k, w)| shows_bars(&w.content["peek"]) || (w.content["peek"]["level"]["playing"] == true && self.large(k)));
+        let want_viz = self.widgets.iter().any(|(k, w)| shows_bars(&w.content["peek"]) || (w.content["peek"]["level"]["playing"] == true && self.large(k)))
+            || self.widgets.get(unpop(&self.dock_in_use())).is_some_and(|w| w.content["peek"]["dock"]["items"].as_array().is_some_and(|a| a.iter().any(|i| i["sound"] == true)));
         self.pc.want.shell_audio.store(want_viz || !self.faces.is_empty(), Ordering::Relaxed);
         if want_viz {
             self.viz.step(&self.pc, dt);
+            // (for checking: with NADI_VIZ_LOG set, the bars and the pan written there now and then)
+            if let Some(path) = std::env::var_os("NADI_VIZ_LOG") {
+                static LAST: std::sync::Mutex<Option<Instant>> = std::sync::Mutex::new(None);
+                let mut last = LAST.lock().unwrap();
+                if last.is_none_or(|t| t.elapsed() > Duration::from_millis(500)) {
+                    *last = Some(Instant::now());
+                    let a = self.pc.audio_last.lock().unwrap().clone();
+                    let sum = |k: &str| a[k].as_array().map_or(-1.0, |v| v.iter().filter_map(|x| x.as_f64()).sum::<f64>());
+                    let line = format!("now={:?} pan={} spec={:.2} l={:.2} r={:.2}\n", self.viz.now, a["pan"], sum("spectrum"), sum("spectrum_l"), sum("spectrum_r"));
+                    use std::io::Write;
+                    if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(path) {
+                        let _ = f.write_all(line.as_bytes());
+                    }
+                }
+            }
         }
         crate::draw::set_lift(if want_viz { self.viz.lift } else { 0.0 });
         // the faces
@@ -6961,6 +7001,10 @@ impl Frame {
         }
         for it in self.screens[si].items.values_mut() {
             it.pinned = false;
+        }
+        // (off the frame: the mouse is on nothing of it now, a tip held out by it neither; but a slider held in one keeps it)
+        if self.mouse.0 == si && self.tip_slide.is_none() {
+            self.mouse = (si, -10000.0, -10000.0);
         }
         // (off the frame from a group: its pictograms go)
         self.sync_fan();

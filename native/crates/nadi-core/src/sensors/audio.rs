@@ -47,6 +47,9 @@ pub struct AudioTick {
     /// The same 16 bands for a meter: each in true dBFS (a full-scale sine reads 0 dB), -72..-6 mapped to 0..1, smoothed
     /// the same way. `bands` is a scale for lights and saturates on loud music; this one keeps its range.
     pub spectrum: [f32; VIZ_BANDS],
+    /// The same meter for each speaker alone: the front left's, the front right's (a mono source: both the same).
+    pub spectrum_l: [f32; VIZ_BANDS],
+    pub spectrum_r: [f32; VIZ_BANDS],
     /// a beat landed since the previous tick (a real onset, or a tempo-predicted
     /// one when the track has a steady pulse but this hit was too soft to catch)
     pub beat: bool,
@@ -136,6 +139,8 @@ struct Analyzer {
     // stuck dim after a loud passage)
     band_env: [f32; VIZ_BANDS],
     spec_env: [f32; VIZ_BANDS],
+    spec_l: [f32; VIZ_BANDS],
+    spec_r: [f32; VIZ_BANDS],
     // onsets + tempo
     prev_log: Vec<f32>,
     flux_prev: f32,
@@ -183,6 +188,8 @@ impl Analyzer {
             frame_no: 0,
             band_env: [0.0; VIZ_BANDS],
             spec_env: [0.0; VIZ_BANDS],
+            spec_l: [0.0; VIZ_BANDS],
+            spec_r: [0.0; VIZ_BANDS],
             prev_log: vec![0.0; FFT_N / 2],
             flux_prev: 0.0,
             prev_log_bass: [0.0; 16],
@@ -212,6 +219,51 @@ impl Analyzer {
 
     fn fps(&self) -> f32 {
         self.rate / FFT_N as f32
+    }
+
+    /// The visualizer bands' edges, as FFT bins: log-spaced, ~60 Hz .. ~12 kHz, each at least one bin.
+    fn viz_edges(&self) -> [usize; VIZ_BANDS + 1] {
+        let mut edges = [1usize; VIZ_BANDS + 1];
+        let (f_min, f_max) = (60.0f32, 12000.0f32);
+        for i in 0..=VIZ_BANDS {
+            let f = f_min * (f_max / f_min).powf(i as f32 / VIZ_BANDS as f32);
+            edges[i] = self.bin(f).clamp(1, FFT_N / 2 - 1);
+            if i > 0 && edges[i] <= edges[i - 1] {
+                edges[i] = (edges[i - 1] + 1).min(FFT_N / 2 - 1);
+            }
+        }
+        edges
+    }
+
+    /// One FFT_N-sample block of the two front speakers (left, right): each one's meter (`spectrum_l`, `spectrum_r`), on the
+    /// same scale as the mix's. One FFT holds both: the left in the real part, the right in the imaginary part, pulled apart
+    /// after by the transform's symmetry.
+    fn stereo(&mut self, lr: &[(f32, f32)]) {
+        if lr.len() < FFT_N {
+            return;
+        }
+        let mut re: Vec<f32> = lr.iter().zip(&self.hann).map(|((l, _), w)| l * w).collect();
+        let mut im: Vec<f32> = lr.iter().zip(&self.hann).map(|((_, r), w)| r * w).collect();
+        fft(&mut re, &mut im);
+        let edges = self.viz_edges();
+        for b in 0..VIZ_BANDS {
+            let (mut pl, mut pr) = (0.0f32, 0.0f32);
+            for k in edges[b]..edges[b + 1] {
+                let (a, bi) = (re[k], im[k]);
+                let (c, d) = (re[FFT_N - k], im[FFT_N - k]);
+                // (L_k = (Z_k + conj Z_{N-k}) / 2, R_k = (Z_k - conj Z_{N-k}) / 2i)
+                pl += ((a + c) * (a + c) + (bi - d) * (bi - d)) / 4.0;
+                pr += ((bi + d) * (bi + d) + (a - c) * (a - c)) / 4.0;
+            }
+            let nb = (edges[b + 1] - edges[b]).max(1) as f32;
+            for (pw, env) in [(pl, &mut self.spec_l[b]), (pr, &mut self.spec_r[b])] {
+                let e = (pw / nb).sqrt();
+                let true_db = 20.0 * (e * 4.0 / FFT_N as f32 + 1e-9).log10();
+                let st = ((true_db + 72.0) / 66.0).clamp(0.0, 1.0);
+                let sk = if st > *env { 0.7 } else { 0.22 };
+                *env += (st - *env) * sk;
+            }
+        }
     }
 
     fn bin(&self, hz: f32) -> usize {
@@ -495,6 +547,8 @@ impl Analyzer {
             high: avg_range(3000.0, 12000.0),
             bands: self.band_env,
             spectrum: self.spec_env,
+            spectrum_l: self.spec_l,
+            spectrum_r: self.spec_r,
             beat: std::mem::take(&mut self.beat_pending),
             kick: std::mem::take(&mut self.kick_pending),
             hit: std::mem::take(&mut self.hit_pending),
@@ -581,7 +635,7 @@ unsafe fn capture_session(state: &Arc<Pc>) -> windows::core::Result<()> {
                         }
                     }
                     pending.push(acc / channels.max(1) as f32);
-                    pending_lr.push((left * left, right * right));
+                    pending_lr.push((left, right));
                 }
                 capture.ReleaseBuffer(frames)?;
                 packet = capture.GetNextPacketSize()?;
@@ -601,9 +655,9 @@ unsafe fn capture_session(state: &Arc<Pc>) -> windows::core::Result<()> {
 
             while pending.len() >= FFT_N {
                 let block: Vec<f32> = pending.drain(..FFT_N).collect();
-                let (el, er) = pending_lr
-                    .drain(..FFT_N)
-                    .fold((0.0f32, 0.0f32), |(a, b), (l, r)| (a + l, b + r));
+                let lr: Vec<(f32, f32)> = pending_lr.drain(..FFT_N).collect();
+                let (el, er) = lr.iter().fold((0.0f32, 0.0f32), |(a, b), (l, r)| (a + l * l, b + r * r));
+                analyzer.stereo(&lr);
                 if let Some(tick) = analyzer.process(&block, el, er) {
                     // (the modules that may hear get what the island works out, never the sound)
                     state.audio_put(&tick);
@@ -645,6 +699,32 @@ pub fn spawn(state: Arc<Pc>) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A tone in the right speaker alone: the right's meter loud, the left's silent; a centred one: both the same.
+    #[test]
+    fn hears_each_speaker() {
+        let rate = 48000.0;
+        let tone = |i: usize| 0.5 * (2.0 * std::f32::consts::PI * 440.0 * i as f32 / rate).sin();
+        for (lk, rk) in [(0.0f32, 1.0f32), (1.0, 1.0)] {
+            let mut a = Analyzer::new(rate);
+            let mut last = None;
+            for blk in 0..20 {
+                let lr: Vec<(f32, f32)> = (blk * FFT_N..(blk + 1) * FFT_N).map(|i| (tone(i) * lk, tone(i) * rk)).collect();
+                let mono: Vec<f32> = lr.iter().map(|(l, r)| (l + r) / 2.0).collect();
+                a.stereo(&lr);
+                if let Some(t) = a.process(&mono, 0.0, 0.0) {
+                    last = Some(t);
+                }
+            }
+            let t = last.expect("a tick");
+            let (l, r): (f32, f32) = (t.spectrum_l.iter().sum(), t.spectrum_r.iter().sum());
+            if lk == 0.0 {
+                assert!(r > 1.0 && l < 0.2 * r, "right alone: left {l}, right {r}");
+            } else {
+                assert!((l - r).abs() < 0.05 * r, "centred: left {l}, right {r}");
+            }
+        }
+    }
 
     fn run(gen: impl Fn(usize) -> f32, seconds: f32) -> (String, usize, f32) {
         let rate = 48000.0;

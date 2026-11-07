@@ -481,7 +481,7 @@ impl Modal {
     pub fn render(&mut self, g: &Gfx, pc: &Arc<Pc>) {
         let s = self.s;
         let age = self.opened.elapsed().as_secs_f32();
-        let p = Painter { g, dc: &g.dc, s, pc, t: age, viz: [0.0; 3] };
+        let p = Painter { g, dc: &g.dc, s, pc, t: age, viz: [0.0; 6] };
         // (its words measured first, wrapped, so the card is as tall as they need)
         {
             let cw = self.cw();

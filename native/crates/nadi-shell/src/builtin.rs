@@ -150,6 +150,35 @@ pub fn tray_words(i: &crate::trayhost::Icon) -> (String, String) {
     (name, status)
 }
 
+/// An app's menu rows (`appmenu`, shared with the launcher) as the dock's menu: each its action here. `hwnd`: one window's menu.
+fn dock_menu(f: &crate::appmenu::Facts, a: &DockApp, hwnd: Option<isize>) -> Vec<Value> {
+    use crate::appmenu::Act;
+    crate::appmenu::rows(f)
+        .into_iter()
+        .map(|r| {
+            let action = match (r.act, hwnd) {
+                (Act::Open, _) => format!("launch:{}", a.open),
+                (Act::DockPin, _) => format!("pin:{}", a.open),
+                (Act::AppsPin, _) => format!("apppin:{}", a.key),
+                (Act::Location, _) => format!("reveal:{}", a.key),
+                (Act::Admin, _) => format!("runas:{}", a.key),
+                (Act::Rename, _) => format!("pinrename:dock:{}", a.open),
+                (Act::ChangeIcon, _) => format!("pinicon:dock:{}", a.open),
+                (Act::ResetIcon, _) => format!("pinreset:dock:{}", a.open),
+                (Act::Close, Some(h)) => format!("close:{h}"),
+                (Act::Close, None) => format!("closeall:{}", a.key),
+                (Act::EndTask, Some(h)) => format!("kill:{h}"),
+                (Act::EndTask, None) => format!("killapp:{}", a.key),
+            };
+            if r.danger {
+                json!({ "icon": r.icon, "label": r.label, "action": action, "hold": true, "tone": "no", "confirm": crate::appmenu::END_TASK_WARNING })
+            } else {
+                json!({ "icon": r.icon, "label": r.label, "action": action })
+            }
+        })
+        .collect()
+}
+
 /// A window's title less its app's name ("notes.txt - Folder - Editor" is "notes.txt - Folder"); the name alone: nothing.
 pub fn short_title(title: &str, app: &str) -> String {
     let t = title.trim();
@@ -611,26 +640,10 @@ impl Builtins {
                 for t in a.tray.iter().skip(1) {
                     menu.push(json!({ "image": format!("trayicon:{}", t.icon), "icon": "dot", "label": if t.tip.is_empty() { a.name.clone() } else { t.tip.clone() }, "action": t.action() }));
                 }
-                menu.extend([
-                    json!({ "icon": "window-new", "label": if running { "New Window" } else { "Open" }, "action": format!("launch:{}", a.open) }),
-                    json!({ "icon": if a.pinned { "unpin" } else { "pin" }, "label": if a.pinned { "Unpin" } else { "Pin" }, "action": format!("pin:{}", a.open) }),
-                    json!({ "icon": "grid", "label": if in_apps { "Unpin from Apps" } else { "Pin to Apps" }, "action": format!("apppin:{}", a.key) }),
-                ]);
-                if std::path::Path::new(&a.key).is_file() {
-                    menu.push(json!({ "icon": "folder", "label": "Reveal in File Explorer", "action": format!("reveal:{}", a.key) }));
-                }
-                // (pinned: its name and its picture made one's own)
-                if a.pinned {
-                    menu.push(json!({ "icon": "pen", "label": "Rename", "action": format!("pinrename:dock:{}", a.open) }));
-                    menu.push(json!({ "icon": "image", "label": "Change Icon", "action": format!("pinicon:dock:{}", a.open) }));
-                    if a.image.starts_with("img:") {
-                        menu.push(json!({ "icon": "reset", "label": "Reset Icon", "action": format!("pinreset:dock:{}", a.open) }));
-                    }
-                }
-                // (only an open one can be closed)
-                if running {
-                    menu.push(json!({ "icon": "x", "label": if a.windows.len() > 1 { "Close All" } else { "Close" }, "action": format!("closeall:{}", a.key), "hold": true, "tone": "no" }));
-                }
+                // (the rows every app's menu has, as the launcher's: Close asks it (it may save, or ask you), End Task stops it at
+                // once, held and asked)
+                let facts = crate::appmenu::Facts { open_row: true, windows: a.windows.len(), one_window: false, in_dock: a.pinned, in_apps, location: std::path::Path::new(&a.key).exists(), program: std::path::Path::new(&a.key).is_file(), own_pin: a.pinned.then(|| a.image.starts_with("img:")) };
+                menu.extend(dock_menu(&facts, a, None));
                 let front_i = {
                     let mut hw: Vec<isize> = a.windows.iter().map(|w| w.hwnd).collect();
                     hw.sort();
@@ -683,23 +696,9 @@ impl Builtins {
                 let u = used(&a.key);
                 // (its menu: close it, pin its app, end its task; ending is held)
                 let in_apps = cfg.launcher_pins.as_ref().is_some_and(|l| l.iter().any(|p| p.kind == "app" && p.id.eq_ignore_ascii_case(&a.key)));
-                let mut menu = vec![
-                    json!({ "icon": "x", "label": "Close", "action": format!("close:{}", w.hwnd) }),
-                    json!({ "icon": if a.pinned { "unpin" } else { "pin" }, "label": if a.pinned { "Unpin" } else { "Pin" }, "action": format!("pin:{}", a.open) }),
-                    json!({ "icon": "grid", "label": if in_apps { "Unpin from Apps" } else { "Pin to Apps" }, "action": format!("apppin:{}", a.key) }),
-                ];
-                if std::path::Path::new(&a.key).is_file() {
-                    menu.push(json!({ "icon": "folder", "label": "Reveal in File Explorer", "action": format!("reveal:{}", a.key) }));
-                }
-                // (pinned: its name and its picture made one's own)
-                if a.pinned {
-                    menu.push(json!({ "icon": "pen", "label": "Rename", "action": format!("pinrename:dock:{}", a.open) }));
-                    menu.push(json!({ "icon": "image", "label": "Change Icon", "action": format!("pinicon:dock:{}", a.open) }));
-                    if a.image.starts_with("img:") {
-                        menu.push(json!({ "icon": "reset", "label": "Reset Icon", "action": format!("pinreset:dock:{}", a.open) }));
-                    }
-                }
-                menu.push(json!({ "icon": "power", "label": "End Task", "action": format!("kill:{}", w.hwnd), "hold": true, "tone": "no", "confirm": "What it has not saved will be lost." }));
+                // (the same rows as every app's menu, for this one window)
+                let facts = crate::appmenu::Facts { open_row: false, windows: 1, one_window: true, in_dock: a.pinned, in_apps, location: std::path::Path::new(&a.key).exists(), program: std::path::Path::new(&a.key).is_file(), own_pin: a.pinned.then(|| a.image.starts_with("img:")) };
+                let menu = dock_menu(&facts, a, Some(w.hwnd));
                 let file = a.key.rsplit(['\\', '/']).next().unwrap_or("").to_string();
                 tiles.push(json!({ "key": a.key, "hwnd": if w.minimized { 0 } else { w.hwnd }, "image": a.image, "title": title, "short": short_title(&title, &a.name), "action": format!("win:{}", w.hwnd), "front": w.front, "cpu": u.cpu, "ram": (u.mem as f64 / total) as f32, "progress": progress.get(&file).copied(), "sound": self.sounding.contains(&a.key), "attention": self.flashing.contains(&w.hwnd), "menu": menu }));
             }
@@ -953,6 +952,29 @@ impl Builtins {
             crate::procstats::end_task(h);
             self.scanned = None;
             return (Effect::Changed, false);
+        }
+        // (an app on the dock, ended at once: every window's program)
+        if let Some(k) = action.strip_prefix("killapp:") {
+            if let Some(a) = find(k) {
+                for w in &a.windows {
+                    crate::procstats::end_task(w.hwnd);
+                }
+            }
+            self.scanned = None;
+            return (Effect::Changed, false);
+        }
+        // (a program, ended at once: each of its windows' (the launcher's End Task))
+        if let Some(exe) = action.strip_prefix("killexe:") {
+            for w in winlist::app_windows().iter().filter(|w| w.exe.eq_ignore_ascii_case(exe)) {
+                crate::procstats::end_task(w.hwnd);
+            }
+            self.scanned = None;
+            return (Effect::Changed, false);
+        }
+        // (a program, run as administrator: Windows asks first)
+        if let Some(path) = action.strip_prefix("runas:") {
+            crate::launcher::run_as_admin(path);
+            return (Effect::None, false);
         }
         if let Some(k) = action.strip_prefix("closeall:") {
             if let Some(a) = find(k) {

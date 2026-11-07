@@ -138,6 +138,30 @@ pub fn item(id: &str) -> Option<IShellItem> {
     unsafe { SHCreateItemFromParsingName::<_, _, IShellItem>(&HSTRING::from(format!("shell:AppsFolder\\{id}")), None).ok() }
 }
 
+/// Where an app is on disk: a path as it is; else what its Start menu entry leads to (a program, a folder), or a path in a known
+/// folder (`{GUID}` then the rest). None: a store app, or nothing found.
+pub fn app_path(id: &str) -> Option<String> {
+    use windows::core::Interface;
+    let found = |p: String| (!p.is_empty() && std::path::Path::new(&p).exists()).then_some(p);
+    if id.contains(":\\") && !id.contains('!') {
+        return found(id.to_string());
+    }
+    unsafe {
+        // (what it leads to: System.Link.TargetParsingPath)
+        if let Some(i2) = item(id).and_then(|i| i.cast::<IShellItem2>().ok()) {
+            let key = windows::Win32::UI::Shell::PropertiesSystem::PROPERTYKEY { fmtid: windows::core::GUID::from_u128(0xB9B4B3FC_2B51_4A42_B5D8_324146AFCF25), pid: 2 };
+            if let Some(p) = i2.GetString(&key).ok().map(take).and_then(found) {
+                return Some(p);
+            }
+        }
+        // (a known folder's: its path, and the rest after it)
+        let (g, rest) = id.strip_prefix('{')?.split_once("}\\")?;
+        let guid = windows::core::GUID::try_from(g).ok()?;
+        let base = take(SHGetKnownFolderPath(&guid, KF_FLAG_DEFAULT, None).ok()?);
+        found(format!("{base}\\{rest}"))
+    }
+}
+
 /// Launch an app by its id; a path (a program, a shortcut) is opened as it is.
 pub fn launch(id: &str) {
     // (an address (a plugin's, as `steam://...`): opened as one)

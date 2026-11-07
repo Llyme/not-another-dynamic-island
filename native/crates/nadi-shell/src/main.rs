@@ -6,6 +6,7 @@
 #![windows_subsystem = "windows"]
 
 mod apps;
+mod appmenu;
 mod blocks;
 mod builtin;
 mod clip;

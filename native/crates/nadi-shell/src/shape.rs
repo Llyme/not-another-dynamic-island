@@ -53,6 +53,8 @@ pub struct Shape {
     pub w: f32,
     pub h: f32,
     pub body: Rect,
+    /// how round its corners facing the screen are (physical px)
+    pub radius: f32,
 }
 
 fn pt(x: f32, y: f32) -> D2D_POINT_2F {
@@ -112,7 +114,7 @@ pub fn notch(factory: &ID2D1Factory1, edge: Edge, along: f32, across: f32, radiu
         Edge::Left => (Matrix3x2 { M11: 0.0, M12: 1.0, M21: 1.0, M22: 0.0, M31: 0.0, M32: 0.0 }, dep, len, Rect::new(0.0, f, dep, along)),
         Edge::Right => (Matrix3x2 { M11: 0.0, M12: 1.0, M21: -1.0, M22: 0.0, M31: dep, M32: 0.0 }, dep, len, Rect::new(0.0, f, dep, along)),
     };
-    Ok(Shape { geometry: turned(factory, &g, m)?, w, h, body })
+    Ok(Shape { geometry: turned(factory, &g, m)?, w, h, body, radius: r })
 }
 
 /// A piece in a corner: `w` × `h`, rounded by `radius` on the corner that faces the screen, curving into both edges by `fillet` (the box is
@@ -138,12 +140,12 @@ pub fn corner(factory: &ID2D1Factory1, which: Corner, w: f32, h: f32, radius: f3
         Corner::BottomLeft => (Matrix3x2 { M11: 1.0, M12: 0.0, M21: 0.0, M22: -1.0, M31: 0.0, M32: bh }, Rect::new(0.0, f, w, h)),
         Corner::BottomRight => (Matrix3x2 { M11: -1.0, M12: 0.0, M21: 0.0, M22: -1.0, M31: bw, M32: bh }, Rect::new(f, f, w, h)),
     };
-    Ok(Shape { geometry: turned(factory, &g, m)?, w: bw, h: bh, body })
+    Ok(Shape { geometry: turned(factory, &g, m)?, w: bw, h: bh, body, radius: r })
 }
 
 /// A floating piece: its own rounded shape, `w` × `h`.
 pub fn floating(factory: &ID2D1Factory1, w: f32, h: f32, radius: f32) -> Result<Shape> {
     let r = crate::paint::rounded(radius.min(w / 2.0).min(h / 2.0), w, h);
     let g = unsafe { factory.CreateRoundedRectangleGeometry(&D2D1_ROUNDED_RECT { rect: D2D_RECT_F { left: 0.0, top: 0.0, right: w, bottom: h }, radiusX: r, radiusY: r })? };
-    Ok(Shape { geometry: g.into(), w, h, body: Rect::new(0.0, 0.0, w, h) })
+    Ok(Shape { geometry: g.into(), w, h, body: Rect::new(0.0, 0.0, w, h), radius: r })
 }

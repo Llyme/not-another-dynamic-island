@@ -49,7 +49,7 @@ impl Pc {
     /// a tick of the sound analyzer
     pub fn audio_put(&self, tick: &crate::sensors::audio::AudioTick) {
         let v = serde_json::json!({
-            "level": tick.level, "bands": tick.bands, "spectrum": tick.spectrum, "beat": tick.beat, "kick": tick.kick, "hit": tick.hit,
+            "level": tick.level, "bands": tick.bands, "spectrum": tick.spectrum, "spectrum_l": tick.spectrum_l, "spectrum_r": tick.spectrum_r, "beat": tick.beat, "kick": tick.kick, "hit": tick.hit,
             "kind": tick.kind, "voice": tick.voice, "bpm": tick.bpm, "energy": tick.energy, "pan": tick.pan,
         });
         *self.audio_last.lock().unwrap() = v;

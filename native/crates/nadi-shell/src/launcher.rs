@@ -372,6 +372,13 @@ enum CtxAct {
     ToDock(App),
     Location(String),
     Admin(String),
+    /// a program, or one window's, ended at once (asked first): its action
+    EndTask(String),
+    /// an app opened; one taken off the dock (the frame told); a program's windows closed (asked to); one window closed
+    Launch(String),
+    FromDock(String),
+    CloseApp(String),
+    CloseWin(isize),
     OutOfFolder(usize),
     Ungroup(String),
     Rename(String),
@@ -517,6 +524,11 @@ fn find_programs() -> Vec<(String, String)> {
         }
     }
     out
+}
+
+/// A program run as administrator (Windows asks first).
+pub fn run_as_admin(path: &str) {
+    shell_open(path, "runas");
 }
 
 fn shell_open(what: &str, verb: &str) {
@@ -1835,61 +1847,96 @@ impl Launcher {
     fn menu_for(&self, i: usize) -> Vec<(&'static str, String, CtxAct)> {
         let mut rows: Vec<(&'static str, String, CtxAct)> = Vec::new();
         let pin_toggle = |rows: &mut Vec<(&'static str, String, CtxAct)>, kind: &str, id: &str, name: &str| match self.pinned_at(kind, id) {
-            Some(k) => rows.push(("unpin", "Unpin".into(), CtxAct::Unpin(k))),
-            None => rows.push(("pin", "Pin".into(), CtxAct::PinIt(AppPin { kind: kind.into(), id: id.into(), name: name.into(), folder: String::new(), icon: String::new() }))),
+            Some(k) => rows.push(("grid", "Unpin from Apps".into(), CtxAct::Unpin(k))),
+            None => rows.push(("grid", "Pin to Apps".into(), CtxAct::PinIt(AppPin { kind: kind.into(), id: id.into(), name: name.into(), folder: String::new(), icon: String::new() }))),
         };
-        let app_more = |rows: &mut Vec<(&'static str, String, CtxAct)>, id: &str, name: &str| {
-            if !self.pinned.iter().any(|p| p.id.eq_ignore_ascii_case(id)) {
-                rows.push(("island", "Pin to the Dock".into(), CtxAct::ToDock(App { name: name.into(), id: id.into() })));
-            }
-            if is_program(id) {
-                rows.push(("folder", "Open File Location".into(), CtxAct::Location(id.into())));
-                rows.push(("shield", "Run as Administrator".into(), CtxAct::Admin(id.into())));
+        // (an app: the rows every app's menu has, as the dock's (`appmenu`); `pin`: its pin here, `hwnd`: one window's)
+        let app_rows = |rows: &mut Vec<(&'static str, String, CtxAct)>, id: &str, name: &str, pin: Option<usize>, hwnd: Option<isize>| {
+            use crate::appmenu::Act;
+            // (where it is on disk: a Start menu app's program, found from its entry)
+            let file = crate::apps::app_path(id).unwrap_or_default();
+            let file = file.as_str();
+            let open = if file.is_empty() { 0 } else { winlist::app_windows().iter().filter(|w| w.exe.eq_ignore_ascii_case(file)).count() };
+            let apps_pin = self.pinned_at("app", id);
+            let facts = crate::appmenu::Facts {
+                open_row: false,
+                windows: if hwnd.is_some() { 1 } else { open },
+                one_window: hwnd.is_some(),
+                in_dock: self.pinned.iter().any(|p| p.id.eq_ignore_ascii_case(id)),
+                in_apps: apps_pin.is_some() || pin.is_some(),
+                location: !file.is_empty(),
+                program: is_program(file),
+                own_pin: pin.and_then(|k| self.pins.get(k)).map(|p| !p.icon.is_empty()),
+            };
+            for r in crate::appmenu::rows(&facts) {
+                let act = match r.act {
+                    Act::Open => CtxAct::Launch(id.into()),
+                    Act::DockPin if facts.in_dock => CtxAct::FromDock(id.into()),
+                    Act::DockPin => CtxAct::ToDock(App { name: name.into(), id: id.into() }),
+                    Act::AppsPin => match pin.or(apps_pin) {
+                        Some(k) => CtxAct::Unpin(k),
+                        None => CtxAct::PinIt(AppPin { kind: "app".into(), id: id.into(), name: name.into(), folder: String::new(), icon: String::new() }),
+                    },
+                    Act::Location => CtxAct::Location(file.into()),
+                    Act::Admin => CtxAct::Admin(file.into()),
+                    Act::Rename => CtxAct::PinName(pin.unwrap_or(0)),
+                    Act::ChangeIcon => CtxAct::PinIcon(pin.unwrap_or(0)),
+                    Act::ResetIcon => CtxAct::PinIconReset(pin.unwrap_or(0)),
+                    Act::Close => match hwnd {
+                        Some(h) => CtxAct::CloseWin(h),
+                        None => CtxAct::CloseApp(file.into()),
+                    },
+                    Act::EndTask => CtxAct::EndTask(match hwnd {
+                        Some(h) => format!("kill:{h}"),
+                        None => format!("killexe:{}", file.to_lowercase()),
+                    }),
+                };
+                rows.push((r.icon, r.label.into(), act));
             }
         };
         match self.items.get(i).map(|(h, _, _)| h) {
             Some(Hit::Pin(k)) => {
                 let Some(p) = self.pins.get(*k) else { return rows };
-                rows.push(("unpin", "Unpin".into(), CtxAct::Unpin(*k)));
-                if *k > 0 {
-                    rows.push(("up", "Move to the Front".into(), CtxAct::Front(*k)));
-                }
-                if !p.folder.is_empty() {
-                    rows.push(("left", "Take Out of the Folder".into(), CtxAct::OutOfFolder(*k)));
-                }
-                rows.push(("minus", "Move to the Foot".into(), CtxAct::ToFoot(*k)));
-                rows.push(("pen", "Rename".into(), CtxAct::PinName(*k)));
-                rows.push(("image", "Change Icon".into(), CtxAct::PinIcon(*k)));
-                if !p.icon.is_empty() {
-                    rows.push(("reset", "Reset Icon".into(), CtxAct::PinIconReset(*k)));
-                }
-                // (a program or a shortcut pinned from File Explorer: as an app; another file, where it is)
+                // (a program or a shortcut pinned from File Explorer: as an app; another thing pinned: its own rows)
                 let low = p.id.to_lowercase();
                 if p.kind == "app" || (p.kind == "file" && (low.ends_with(".lnk") || low.ends_with(".exe"))) {
-                    app_more(&mut rows, &p.id, &p.name);
-                } else if p.kind == "file" && std::path::Path::new(&p.id).exists() {
-                    rows.push(("folder", "Open File Location".into(), CtxAct::Location(p.id.clone())));
+                    app_rows(&mut rows, &p.id, &p.name, Some(*k), None);
+                } else {
+                    rows.push(("grid", "Unpin from Apps".into(), CtxAct::Unpin(*k)));
+                    if p.kind == "file" && std::path::Path::new(&p.id).exists() {
+                        rows.push(("folder", "Open File Location".into(), CtxAct::Location(p.id.clone())));
+                    }
+                    rows.push(("pen", "Rename".into(), CtxAct::PinName(*k)));
+                    rows.push(("image", "Change Icon".into(), CtxAct::PinIcon(*k)));
+                    if !p.icon.is_empty() {
+                        rows.push(("reset", "Reset Icon".into(), CtxAct::PinIconReset(*k)));
+                    }
                 }
+                // (where it sits among the pins: before Close and End Task)
+                let at = rows.iter().position(|(_, _, a)| matches!(a, CtxAct::CloseApp(_) | CtxAct::CloseWin(_) | CtxAct::EndTask(_))).unwrap_or(rows.len());
+                let mut arrange: Vec<(&'static str, String, CtxAct)> = Vec::new();
+                if *k > 0 {
+                    arrange.push(("up", "Move to the Front".into(), CtxAct::Front(*k)));
+                }
+                if !p.folder.is_empty() {
+                    arrange.push(("left", "Take Out of the Folder".into(), CtxAct::OutOfFolder(*k)));
+                }
+                arrange.push(("minus", "Move to the Foot".into(), CtxAct::ToFoot(*k)));
+                rows.splice(at..at, arrange);
             }
             Some(Hit::FootPin(k)) => {
                 rows.push(("unpin", "Unpin".into(), CtxAct::UnpinFoot(*k)));
                 rows.push(("up", "Move to the Pins".into(), CtxAct::FromFoot(*k)));
             }
-            Some(Hit::Program(path, _)) => {
-                rows.push(("folder", "Open File Location".into(), CtxAct::Location(path.clone())));
-                rows.push(("shield", "Run as Administrator".into(), CtxAct::Admin(path.clone())));
-            }
+            Some(Hit::Program(path, name)) => app_rows(&mut rows, path, name, None, None),
             Some(Hit::Folder(name)) => {
                 rows.push(("pen", "Rename".into(), CtxAct::Rename(name.clone())));
                 rows.push(("grid", "Ungroup".into(), CtxAct::Ungroup(name.clone())));
             }
-            Some(Hit::App(a)) => {
-                pin_toggle(&mut rows, "app", &a.id, &a.name);
-                app_more(&mut rows, &a.id, &a.name);
-            }
-            Some(Hit::Window(_, title, exe)) if !exe.is_empty() => {
+            Some(Hit::App(a)) => app_rows(&mut rows, &a.id, &a.name, None, None),
+            Some(Hit::Window(h, title, exe)) if !exe.is_empty() => {
                 let name = winlist::app_name(exe);
-                pin_toggle(&mut rows, "app", exe, if name.is_empty() { title } else { &name });
+                app_rows(&mut rows, exe, if name.is_empty() { title } else { &name }, None, Some(*h));
             }
             Some(Hit::File(path, name, _)) => pin_toggle(&mut rows, "file", path, name),
             Some(Hit::Setting(name, uri)) => pin_toggle(&mut rows, "setting", uri, name),
@@ -1908,8 +1955,28 @@ impl Launcher {
     }
 
     fn run_ctx(&mut self, act: CtxAct) {
+        let at = self.ctx.as_ref().map(|c| c.at);
         self.ctx = None;
         match act {
+            CtxAct::Launch(id) => {
+                crate::apps::launch(&id);
+                self.hide();
+            }
+            CtxAct::FromDock(id) => {
+                self.pinned.retain(|p| !p.id.eq_ignore_ascii_case(&id));
+                self.pin_req = Some(format!("pin:{id}"));
+            }
+            CtxAct::CloseApp(id) => {
+                for w in winlist::app_windows().iter().filter(|w| w.exe.eq_ignore_ascii_case(&id)) {
+                    winlist::close(w.hwnd);
+                }
+            }
+            CtxAct::CloseWin(h) => winlist::close(h),
+            CtxAct::EndTask(action) => {
+                let spec = serde_json::json!({ "icon": "power", "tone": "red", "title": "End Task?", "text": "What it has not saved will be lost.", "buttons": [{ "label": "Cancel" }, { "label": "End Task", "action": action, "tone": "red" }] });
+                self.ask = Some((spec, at.unwrap_or((W / 2.0, self.h / 2.0))));
+                self.hide();
+            }
             CtxAct::PinIt(p) => {
                 self.pins.push(p);
                 self.pins_changed();
@@ -2409,7 +2476,7 @@ impl Launcher {
         let h = self.h.max(2.0);
         let Ok(shp) = shape::floating(&g.d2d_factory, W * s, h * s, RADIUS.min(h / 2.0) * s) else { return };
         let age = self.opened.elapsed().as_secs_f32();
-        let p = Painter { g, dc: &g.dc, s, pc, t: age, viz: [0.0; 3] };
+        let p = Painter { g, dc: &g.dc, s, pc, t: age, viz: [0.0; 6] };
         let places = self.drawn_places();
         let onto = self.drag.as_ref().and_then(|(c, x, y)| self.aim_at(c, *x, *y).onto);
         let view = Paint { places: &places, onto, query: &self.query, hi: self.hi, items: &self.items, deco: &self.deco, pins: &self.pins, foot: &self.foot, held: self.hold.map(|(i, at)| (i, (at.elapsed().as_secs_f32() / HOLD).min(1.0))), tip: (self.sel, self.tip), side_tip: self.side_tip(), drag: self.drag.clone(), unlit: self.unlit, ctx: self.ctx.as_ref(), clip: self.clip, naming: self.naming.is_some() };
@@ -2652,13 +2719,15 @@ fn paint_inside(p: &Painter, age: f32, h: f32, v: &Paint) {
         let (mx, my) = ctx_origin(c, h);
         let mh = c.rows.len() as f32 * CTX_ROW + 10.0;
         p.round(Rect::new(mx, my, CTX_W, mh), 12.0, crate::paint::Color(0.11, 0.11, 0.13, 1.0));
-        for (i, (icon, label, _)) in c.rows.iter().enumerate() {
+        for (i, (icon, label, act)) in c.rows.iter().enumerate() {
+            // (what cannot be undone, in red)
+            let (ic, tc) = if matches!(act, CtxAct::EndTask(_)) { (draw::RED, draw::RED) } else { (draw::DIM, draw::TEXT) };
             let ry = my + 5.0 + i as f32 * CTX_ROW;
             if i == c.sel {
                 p.round(Rect::new(mx + 5.0, ry, CTX_W - 10.0, CTX_ROW), 8.0, crate::paint::Color(0.15, 0.15, 0.17, 1.0));
             }
-            p.icon(icon, mx + 14.0, ry + CTX_ROW / 2.0 - 7.0, 14.0, draw::DIM);
-            p.text(label, mx + 36.0, ry + CTX_ROW / 2.0, 12.0, Weight::Regular, CTX_W - 46.0, draw::TEXT);
+            p.icon(icon, mx + 14.0, ry + CTX_ROW / 2.0 - 7.0, 14.0, ic);
+            p.text(label, mx + 36.0, ry + CTX_ROW / 2.0, 12.0, Weight::Regular, CTX_W - 46.0, tc);
         }
     }
 }
@@ -2902,7 +2971,7 @@ pub fn preview(g: &Gfx, pc: &Arc<Pc>, query: &str) -> windows::core::Result<(u32
         l.ctx = Some(CtxMenu { at: (140.0, 150.0), rows: l.menu_for(1), sel: 0 });
     }
     let shp = shape::floating(&g.d2d_factory, W * s, l.h * s, RADIUS * s)?;
-    let p = Painter { g, dc: &g.dc, s, pc, t: 2.0, viz: [0.0; 3] };
+    let p = Painter { g, dc: &g.dc, s, pc, t: 2.0, viz: [0.0; 6] };
     let (pw, ph) = (((W + 2.0 * M) * s) as u32, ((H_MAX + 2.0 * M) * s) as u32);
     let hi = l.target();
     let places = l.drawn_places();

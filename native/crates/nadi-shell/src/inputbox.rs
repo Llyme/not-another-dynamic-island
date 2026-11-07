@@ -212,7 +212,7 @@ impl InputBox {
     /// Draw it: the field, what is typed (else its hint), the caret.
     pub fn render(&self, g: &Gfx, pc: &Arc<Pc>) {
         let s = self.s;
-        let p = Painter { g, dc: &g.dc, s, pc, t: 0.0, viz: [0.0; 3] };
+        let p = Painter { g, dc: &g.dc, s, pc, t: 0.0, viz: [0.0; 6] };
         let (w, h) = (self.w, self.h);
         let text = if self.secret { "•".repeat(self.text.chars().count()) } else { self.text.clone() };
         let hint = self.placeholder.clone();

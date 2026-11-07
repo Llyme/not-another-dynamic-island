@@ -1472,7 +1472,7 @@ impl<'a, 'b> Ctx<'a, 'b> {
                 self.text(s(b, "title"), x, y + 11.0, 16.0, Weight::Semibold, w - bw, TEXT);
                 self.text(s(b, "sub"), x, y + 31.0, 12.5, Weight::Regular, w - bw, DIM);
                 if self.draw && b["viz"].is_boolean() {
-                    let parts = if b["viz"] == true { self.p.viz } else { FLAT };
+                    let parts: &[f32] = if b["viz"] == true { &self.p.viz } else { &FLAT };
                     self.p.viz(x + w - 16.0, y + 20.0, 14.0, parts, self.tint(b, accent()));
                 }
                 42.0

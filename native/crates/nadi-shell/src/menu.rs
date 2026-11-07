@@ -318,7 +318,7 @@ pub fn preview(g: &crate::gfx::Gfx, pc: &std::sync::Arc<nadi_core::pc::Pc>) -> w
     let s = 1.25;
     let (w, h) = widget_size();
     let (mw, mh) = mini_size();
-    let p = Painter { g, dc: &g.dc, s, pc, t: 0.0, viz: [0.0; 3] };
+    let p = Painter { g, dc: &g.dc, s, pc, t: 0.0, viz: [0.0; 6] };
     let big = crate::shape::floating(&g.d2d_factory, w * s, h * s, RADIUS * s)?;
     let small = crate::shape::floating(&g.d2d_factory, mw * s, mh * s, RADIUS * s)?;
     let st = State { floating: false, large: true, place: "top".into(), pinned: false, always_shown: true, over_full: false, always_open: false, hide_idle: true, group: false, take_out: false, front: None, extra: Vec::new(), bump: true, icon_only: Some(false), can_pop: true, popped: false };

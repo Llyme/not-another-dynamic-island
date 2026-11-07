@@ -542,11 +542,12 @@ fn song(p: &Painter, peek: &Value, body: Rect) {
     let playing = s["playing"] == true;
     // (playing: never lower than paused, so a quiet moment (or a sound the loopback does not hear) never leaves it blank)
     let flat = crate::draw::FLAT;
-    let parts = if playing { [p.viz[0].max(flat[0]), p.viz[1].max(flat[1]), p.viz[2].max(flat[2])] } else { flat };
+    let parts: [f32; 6] = if playing { std::array::from_fn(|i| p.viz[i].max(flat[i % 3])) } else { std::array::from_fn(|i| flat[i % 3]) };
     let cy = body.y + body.h / 2.0;
     if s["alone"] == true {
-        let h: f32 = 16.0;
-        p.viz(body.x + body.w / 2.0 - crate::draw::bars_w(h) / 2.0, cy + 1.5, h, parts, c);
+        // (its icon alone: the rings filling most of its square)
+        let h = (body.w.min(body.h) * 0.62).max(14.0);
+        p.viz(body.x + body.w / 2.0 - crate::draw::bars_w(h) / 2.0, cy, h, parts, c);
         return;
     }
     let mut x = body.x + 12.0;
@@ -1554,7 +1555,7 @@ fn has_mark(it: &Value) -> bool {
 /// A dock app's one mark, over its picture (`pic`, rounded by `radius`): downloading, the picture dimmed and a ring over it filling
 /// as the download goes; else making sound, dimmed and its sound's bars over its middle. A download comes first.
 fn icon_mark(p: &Painter, it: &Value, pic: Rect, radius: f32) {
-    icon_mark_at(p, it, pic, radius, 0.42);
+    icon_mark_at(p, it, pic, radius, 0.82);
 }
 
 /// The same, its sound's bars `bars` of the picture tall (over a cover, with nothing else on it: taller).
@@ -1568,7 +1569,8 @@ fn icon_mark_at(p: &Painter, it: &Value, pic: Rect, radius: f32, bars: f32) {
     if let Some(f) = it["progress"].as_f64() {
         p.ring(cx, cy, z * 0.34, (z * 0.09).clamp(1.8, 2.6), (f as f32).clamp(0.0, 1.0), 0.0, BLUE, TEXT.alpha(0.2));
     } else if let Some(v) = it["audio"].as_array() {
-        sound_bars(p, v, cx, cy, (z * bars).max(7.0));
+        // (`bars`: how much of the picture its square is; the rings at rest reach 80% across that square)
+        sound_bars(p, v, cx, cy, (z * bars / crate::draw::bars_w(1.0)).max(7.0));
     }
 }
 
@@ -1655,8 +1657,10 @@ pub fn progress_bar(p: &Painter, f: f32, x: f32, foot: f32, h: f32) {
 pub fn sound_bars(p: &Painter, v: &[Value], cx: f32, cy: f32, h: f32) {
     let c = crate::paint::Color(0.35, 0.78, 0.9, 1.0);
     let at = |i: usize| v.get(i).and_then(|b| b.as_f64()).unwrap_or(0.0) as f32;
-    // (the same three bars as the sound's everywhere: as tall as it is loud, lifted as it swells)
-    p.bars(cx - crate::draw::bars_w(h) / 2.0, cy, h, [at(0), at(1), at(2)], at(3), c);
+    // (the same bars as the sound's everywhere: each speaker's bands, lifted as it swells; three alone: both wings the same)
+    let n = if v.len() >= 7 { 6 } else { 3 };
+    let parts: Vec<f32> = (0..n).map(at).collect();
+    p.bars(cx - crate::draw::bars_w(h) / 2.0, cy, h, parts, at(n), c);
 }
 
 /// How heavy a share of the processor reads: blue when light, amber when busy, red when heavy.
@@ -1849,7 +1853,7 @@ fn dock(p: &Painter, peek: &Value, body: Rect, horizontal: bool) -> Vec<(Rect, S
         }
         // (downloading, or making sound: its one mark over it, over its cover too)
         if covered {
-            icon_mark_at(p, it, pic, pic.w * 0.18, 0.66);
+            icon_mark_at(p, it, pic, pic.w * 0.18, 0.82);
         } else {
             icon_mark(p, it, pic, pic.w * 0.22);
         }

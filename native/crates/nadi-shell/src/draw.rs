@@ -124,8 +124,8 @@ pub struct Painter<'a> {
     pub pc: &'a Arc<Pc>,
     /// seconds, for what moves
     pub t: f32,
-    /// the three bars of the sound, now (0..1 each; all 0 when nothing is heard)
-    pub viz: [f32; 3],
+    /// the bars of the sound, now: the left speaker's low, middle and high, then the right's (0..1 each; all 0 when nothing is heard)
+    pub viz: [f32; 6],
 }
 
 impl<'a> Painter<'a> {
@@ -853,24 +853,66 @@ impl<'a> Painter<'a> {
     /// Three bars that dance with the sound, `h` tall, from `x`, centred on `cy`; `parts` 0..1 each.
     /// The three bars of the sound, from `x`, centred on `cy`, at most `h` tall: as tall as their bands, and lifted by the bass
     /// (the middle one most, a little hop). Paused (`FLAT`): still, low. Its width.
-    pub fn viz(&self, x: f32, cy: f32, h: f32, parts: [f32; 3], c: Color) -> f32 {
-        let lift = if parts == FLAT { 0.0 } else { LIFT.with(|l| l.get()) };
+    pub fn viz(&self, x: f32, cy: f32, h: f32, parts: impl AsRef<[f32]>, c: Color) -> f32 {
+        let parts = parts.as_ref();
+        let lift = if parts == FLAT || parts == [FLAT, FLAT].concat() { 0.0 } else { LIFT.with(|l| l.get()) };
         self.bars(x, cy, h, parts, lift, c)
     }
 
-    /// The three bars, lifted so much (0..1) — what every set of three bars is drawn with.
-    pub fn bars(&self, x: f32, cy: f32, h: f32, parts: [f32; 3], lift: f32, c: Color) -> f32 {
-        let w = (h * 0.24).max(2.0);
-        let gap = (h * 0.16).max(1.5);
-        for (i, p) in parts.iter().enumerate() {
-            if *p <= 0.01 {
+    /// The sound's mark, `lift` (0..1) how hard the bass hits now: three rings round one middle, the low band inside, the mid band
+    /// next, the high band outside, the bass spreading them apart (close together while it is soft). Each as bold as its band is loud: its left side as the left speaker has it, its right side the right's, blending smoothly round it.
+    /// `parts`: the left's low, middle, high, then the right's; three alone: both sides the same. It sits in an `h` square from `x`,
+    /// centred on `cy`. What every sound's mark is drawn with. Its width.
+    pub fn bars(&self, x: f32, cy: f32, h: f32, parts: impl AsRef<[f32]>, lift: f32, c: Color) -> f32 {
+        let p = parts.as_ref();
+        let at = |i: usize| p.get(if p.len() >= 6 { i } else { i % 3 }).copied().unwrap_or(0.0).clamp(0.0, 1.0);
+        let s = self.s;
+        // (a square a little taller than `h`: rings read small, so they get the room bars had)
+        let h = bars_w(h);
+        let cx = x + h / 2.0;
+        // (each ring a band's thickness, as each side has it; between them, gaps the bass alone sets: each ring sits that far out from
+        // the edge of the one inside it, all the way round, however thick that one is)
+        // (at rest (every band at nothing, no bass): the rings reach 80% across their square; louder, they thicken past it)
+        const BASE: f32 = 0.05;
+        const THIN: f32 = 0.05;
+        const GAP: f32 = (0.4 - BASE - 3.0 * THIN) / 2.0;
+        let gap = h * (GAP + 0.015 * lift.clamp(0.0, 1.0));
+        let base = h * BASE;
+        let thick = |v: f32| h * (THIN + 0.04 * v);
+        let t: [(f32, f32); 3] = std::array::from_fn(|b| (thick(at(b)), thick(at(3 + b))));
+        // (at an angle: how thick a ring is there, blending from its left side to its right)
+        let th = |b: usize, a: f32| t[b].0 + (t[b].1 - t[b].0) * (1.0 + a.cos()) / 2.0;
+        // (where its inner edge is there: the middle's room, and every ring inside it with its gap)
+        let inner = |b: usize, a: f32| base + (0..b).map(|j| th(j, a) + gap).sum::<f32>();
+        const N: usize = 72;
+        for b in 0..3 {
+            if at(b).max(at(3 + b)) <= 0.01 {
                 continue;
             }
-            let bh = (h * p).max(w);
-            let up = lift.clamp(0.0, 1.0) * h * 0.3 * [0.8, 1.0, 0.8][i];
-            self.round(Rect::new(x + i as f32 * (w + gap), cy - bh / 2.0 - up, w, bh), w / 2.0, c);
+            unsafe {
+                let Ok(g) = self.g.d2d_factory.CreatePathGeometry() else { continue };
+                let Ok(sink) = g.Open() else { continue };
+                // (its outline, then its hole)
+                let pt = |k: usize, outer: bool| {
+                    let a = k as f32 / N as f32 * std::f32::consts::TAU;
+                    let rad = inner(b, a) + if outer { th(b, a) } else { 0.0 };
+                    D2D_POINT_2F { x: (cx + rad * a.cos()) * s, y: (cy + rad * a.sin()) * s }
+                };
+                for outer in [true, false] {
+                    sink.BeginFigure(pt(0, outer), D2D1_FIGURE_BEGIN_FILLED);
+                    for k in 1..N {
+                        let k = if outer { k } else { N - k };
+                        sink.AddLine(pt(k, outer));
+                    }
+                    sink.EndFigure(D2D1_FIGURE_END_CLOSED);
+                }
+                let _ = sink.Close();
+                // (solid: how loud each side is, its thickness alone)
+                let Ok(br) = brush(self.dc, c) else { continue };
+                self.dc.FillGeometry(&g, &br, None);
+            }
         }
-        bars_w(h)
+        h
     }
 }
 
@@ -921,8 +963,9 @@ pub fn grip(p: &Painter, cx: f32, cy: f32, g: [f32; 4], a: f32) {
     p.round(Rect::new(cx - w / 2.0, cy - h / 2.0, w, h), h / 2.0, c.alpha(c.3 * fade));
 }
 
+/// How wide the sound's mark is, `h` tall: a square, a little taller than `h`.
 pub fn bars_w(h: f32) -> f32 {
-    3.0 * (h * 0.24).max(2.0) + 2.0 * (h * 0.16).max(1.5)
+    h * 1.3
 }
 
 thread_local! {

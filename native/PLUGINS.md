@@ -55,7 +55,7 @@ with a `manifest.json`, up to three levels down, is a plugin.
 | `battery` | `battery` events |
 | `system` | `system` (CPU, memory, GPU) every 2 s |
 | `audio` | `audio` (level, 16 bands, beat, kick, bpm, voice, pan) |
-| `viz` | its widget may show the three bars of the sound (`peek.viz`) |
+| `viz` | its widget may show the sound's mark (`peek.viz`): three rings, the bass inside, each bolder on the side its band comes from |
 | `media` | `media` (what plays) |
 | `media_art` | its widget may show the cover (`"media:<source>:<art_id>"`) |
 | `media_control` | `media` output: play, pause, skip, seek, rate, focus |

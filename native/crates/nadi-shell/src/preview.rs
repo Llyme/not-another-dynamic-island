@@ -85,7 +85,7 @@ pub fn preview(out: &std::path::Path, file: Option<&std::path::Path>) -> windows
     let float_off = crate::frame::FLOAT_OFF;
     // (laid out before drawing: the liquid is recorded from where they stand)
     let slots = {
-        let p = Painter { g: &g, dc: &g.dc, s, pc: &pc, t: 0.4, viz: [0.6, 0.95, 0.45] };
+        let p = Painter { g: &g, dc: &g.dc, s, pc: &pc, t: 0.4, viz: [0.6, 0.95, 0.45, 0.5, 0.8, 0.4] };
         let mut its: Vec<Item> = Vec::new();
         for (it, content, _) in &items {
             let mut it = it.clone();
@@ -180,7 +180,7 @@ pub fn preview(out: &std::path::Path, file: Option<&std::path::Path>) -> windows
         gpu.render(&g.d3d, pw, ph, (0.0, 0.0), s, neck, &field, &edges_at, &[], &lit, if lit_n.is_some() { [0.35, 0.78, 0.55, 1.0] } else { [0.0; 4] })
     });
     let px = g.snapshot(pw, ph, [0.17, 0.20, 0.30, 1.0], |dc| {
-        let p = Painter { g: &g, dc, s, pc: &pc, t: 0.4, viz: [0.6, 0.95, 0.45] };
+        let p = Painter { g: &g, dc, s, pc: &pc, t: 0.4, viz: [0.6, 0.95, 0.45, 0.5, 0.8, 0.4] };
         if let Some(tex) = &gpu_tex {
             crate::liquidgpu::draw_texture(dc, tex, pw, ph);
         } else if let (Some((list, liquid_shapes)), Some(r)) = (&liquid_list, liquid) {
