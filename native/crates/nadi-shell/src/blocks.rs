@@ -833,7 +833,7 @@ impl<'a, 'b> Ctx<'a, 'b> {
                         }
                         if wv["sound"] == true && wr.w > 14.0 {
                             let (parts, lift) = loud_bars(0.4, self.p.t);
-                            self.p.bars(wr.x + 4.0, wr.bottom() - 6.0, 7.0, parts, lift, crate::paint::Color(0.35, 0.78, 0.9, 1.0));
+                            self.p.bars_small(wr.x + 4.0, wr.bottom() - 6.0, 7.0, parts, lift, crate::paint::Color(0.35, 0.78, 0.9, 1.0));
                         }
                     }
                 });
@@ -4131,7 +4131,7 @@ impl<'a, 'b> Ctx<'a, 'b> {
                     self.text(name, nx, y + 7.0, 11.0, Weight::Semibold, w - 120.0, DIM);
                     if b["playing"] == true {
                         let (parts, lift) = loud_bars(meter(mtr), self.p.t);
-                        self.p.bars(nx + nw + 6.0, y + 7.0, 9.0, parts, lift, accent());
+                        self.p.bars_small(nx + nw + 6.0, y + 7.0, 9.0, parts, lift, accent());
                     }
                 }
                 let y = y + top;

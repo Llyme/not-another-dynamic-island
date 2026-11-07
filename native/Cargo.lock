@@ -584,7 +584,7 @@ dependencies = [
 
 [[package]]
 name = "nadi-core"
-version = "1.9.1"
+version = "1.9.2"
 dependencies = [
  "base64",
  "chrono",
@@ -602,7 +602,7 @@ dependencies = [
 
 [[package]]
 name = "nadi-keys"
-version = "1.9.1"
+version = "1.9.2"
 dependencies = [
  "serde_json",
  "windows 0.58.0",
@@ -610,14 +610,14 @@ dependencies = [
 
 [[package]]
 name = "nadi-setup"
-version = "1.9.1"
+version = "1.9.2"
 dependencies = [
  "windows 0.58.0",
 ]
 
 [[package]]
 name = "nadi-shell"
-version = "1.9.1"
+version = "1.9.2"
 dependencies = [
  "base64",
  "chrono",

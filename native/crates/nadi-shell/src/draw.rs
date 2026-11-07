@@ -867,6 +867,22 @@ impl<'a> Painter<'a> {
     pub fn bars(&self, x: f32, cy: f32, h: f32, parts: impl AsRef<[f32]>, lift: f32, c: Color) -> f32 {
         let p = parts.as_ref();
         let at = |i: usize| p.get(if p.len() >= 6 { i } else { i % 3 }).copied().unwrap_or(0.0).clamp(0.0, 1.0);
+        let rings: [(f32, f32); 3] = std::array::from_fn(|b| (at(b), at(3 + b)));
+        self.mark(x, cy, h, &rings, lift, c)
+    }
+
+    /// The sound's mark, small (a dock's icon, a tile's name): two rings, the bass inside and all above it outside (the louder of
+    /// the mid and the high, each side its own), each with more room, so that it reads at that size. As `bars` otherwise.
+    pub fn bars_small(&self, x: f32, cy: f32, h: f32, parts: impl AsRef<[f32]>, lift: f32, c: Color) -> f32 {
+        let p = parts.as_ref();
+        let at = |i: usize| p.get(if p.len() >= 6 { i } else { i % 3 }).copied().unwrap_or(0.0).clamp(0.0, 1.0);
+        let rings = [(at(0), at(3)), (at(1).max(at(2)), at(4).max(at(5)))];
+        self.mark(x, cy, h, &rings, lift, c)
+    }
+
+    /// The rings: each its left side's and its right side's loudness (0..1), the innermost first.
+    fn mark(&self, x: f32, cy: f32, h: f32, rings: &[(f32, f32)], lift: f32, c: Color) -> f32 {
+        let n = rings.len().max(1);
         let s = self.s;
         // (a square a little taller than `h`: rings read small, so they get the room bars had)
         let h = bars_w(h);
@@ -876,11 +892,13 @@ impl<'a> Painter<'a> {
         // (at rest (every band at nothing, no bass): the rings reach 80% across their square; louder, they thicken past it)
         const BASE: f32 = 0.05;
         const THIN: f32 = 0.03;
-        const GAP: f32 = (0.4 - BASE - 3.0 * THIN) / 2.0;
-        let gap = h * (GAP + 0.015 * lift.clamp(0.0, 1.0));
-        let base = h * BASE;
-        let thick = |v: f32| h * (THIN + 0.085 * v);
-        let t: [(f32, f32); 3] = std::array::from_fn(|b| (thick(at(b)), thick(at(3 + b))));
+        // (fewer rings: each thicker, and further apart)
+        let (thin, swell, mid) = if n <= 2 { (0.045, 0.13, 0.11) } else { (THIN, 0.085, BASE) };
+        let gap0 = (0.4 - mid - n as f32 * thin) / (n as f32 - 1.0).max(1.0);
+        let gap = h * (gap0 + 0.015 * lift.clamp(0.0, 1.0));
+        let base = h * mid;
+        let thick = |v: f32| h * (thin + swell * v);
+        let t: Vec<(f32, f32)> = rings.iter().map(|(l, r)| (thick(*l), thick(*r))).collect();
         // (at an angle: how thick a ring is there, blending from its left side to its right)
         let th = |b: usize, a: f32| t[b].0 + (t[b].1 - t[b].0) * (1.0 + a.cos()) / 2.0;
         // (where its inner edge is there: the middle's room, and every ring inside it with its gap)
@@ -889,11 +907,11 @@ impl<'a> Painter<'a> {
         // (never past its square: loud enough to reach past it, all of it drawn that much smaller)
         let reach = (0..N).map(|k| {
             let a = k as f32 / N as f32 * std::f32::consts::TAU;
-            inner(2, a) + th(2, a)
+            inner(n - 1, a) + th(n - 1, a)
         }).fold(0.0f32, f32::max);
         let fit = (h * 0.5 / reach.max(0.01)).min(1.0);
-        for b in 0..3 {
-            if at(b).max(at(3 + b)) <= 0.01 {
+        for b in 0..n {
+            if rings[b].0.max(rings[b].1) <= 0.01 {
                 continue;
             }
             unsafe {

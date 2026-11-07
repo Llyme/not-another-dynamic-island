@@ -1676,13 +1676,13 @@ pub fn sound_bars(p: &Painter, v: &[Value], cx: f32, cy: f32, h: f32) {
     sound_bars_in(p, v, cx, cy, h, SOUND);
 }
 
-/// A program's sound, in a colour of its own.
+/// A program's sound, in a colour of its own: small (a dock's icon, a tile's name), so as two rings.
 pub fn sound_bars_in(p: &Painter, v: &[Value], cx: f32, cy: f32, h: f32, c: crate::paint::Color) {
     let at = |i: usize| v.get(i).and_then(|b| b.as_f64()).unwrap_or(0.0) as f32;
-    // (the same bars as the sound's everywhere: each speaker's bands, lifted as it swells; three alone: both wings the same)
+    // (each speaker's bands, lifted as it swells; three alone: both sides the same)
     let n = if v.len() >= 7 { 6 } else { 3 };
     let parts: Vec<f32> = (0..n).map(at).collect();
-    p.bars(cx - crate::draw::bars_w(h) / 2.0, cy, h, parts, at(n), c);
+    p.bars_small(cx - crate::draw::bars_w(h) / 2.0, cy, h, parts, at(n), c);
 }
 
 /// How heavy a share of the processor reads: blue when light, amber when busy, red when heavy.
