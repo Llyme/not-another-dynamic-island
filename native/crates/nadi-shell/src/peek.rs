@@ -539,6 +539,8 @@ fn song_w(p: &Painter, peek: &Value) -> f32 {
 fn song(p: &Painter, peek: &Value, body: Rect) {
     let s = &peek["song"];
     let c = color_of(&peek["color"], TEXT);
+    // (its rings in the colour of its cover)
+    let rc = crate::images::tone(p.pc, s["cover"].as_str().unwrap_or("")).map_or(c, |(r, g, b)| bright(crate::paint::Color(r, g, b, 1.0), c));
     let playing = s["playing"] == true;
     // (playing: never lower than paused, so a quiet moment (or a sound the loopback does not hear) never leaves it blank)
     let flat = crate::draw::FLAT;
@@ -547,7 +549,7 @@ fn song(p: &Painter, peek: &Value, body: Rect) {
     if s["alone"] == true {
         // (its icon alone: the rings filling most of its square)
         let h = (body.w.min(body.h) * 0.62).max(14.0);
-        p.viz(body.x + body.w / 2.0 - crate::draw::bars_w(h) / 2.0, cy, h, parts, c);
+        p.viz(body.x + body.w / 2.0 - crate::draw::bars_w(h) / 2.0, cy, h, parts, rc);
         return;
     }
     let mut x = body.x + 12.0;
@@ -581,11 +583,11 @@ fn song(p: &Painter, peek: &Value, body: Rect) {
     let large = peek["scale"].as_f64().unwrap_or(1.0) > 1.01;
     let left = s["left"].as_str().unwrap_or("");
     if large && !left.is_empty() {
-        p.viz(x, cy - 4.0, 10.0, parts, c);
+        p.viz(x, cy - 4.0, 10.0, parts, rc);
         let lw = p.measure(left, 7.5, Weight::Regular, 40.0);
         p.text(left, x + 6.5 - lw / 2.0, cy + 6.5, 7.5, Weight::Regular, 40.0, DIM);
     } else {
-        p.viz(x, cy, 12.0, parts, c);
+        p.viz(x, cy, 12.0, parts, rc);
     }
 }
 
@@ -1569,8 +1571,10 @@ fn icon_mark_at(p: &Painter, it: &Value, pic: Rect, radius: f32, bars: f32) {
     if let Some(f) = it["progress"].as_f64() {
         p.ring(cx, cy, z * 0.34, (z * 0.09).clamp(1.8, 2.6), (f as f32).clamp(0.0, 1.0), 0.0, BLUE, TEXT.alpha(0.2));
     } else if let Some(v) = it["audio"].as_array() {
-        // (`bars`: how much of the picture its square is; the rings at rest reach 80% across that square)
-        sound_bars(p, v, cx, cy, (z * bars / crate::draw::bars_w(1.0)).max(7.0));
+        // (`bars`: how much of the picture its square is; the rings at rest reach 80% across that square. In the colour of the
+        // cover of what it plays)
+        let c = it["media"]["art"].as_str().and_then(|a| crate::images::tone(p.pc, a)).map_or(SOUND, |(r, g, b)| bright(crate::paint::Color(r, g, b, 1.0), SOUND));
+        sound_bars_in(p, v, cx, cy, (z * bars / crate::draw::bars_w(1.0)).max(7.0), c);
     }
 }
 
@@ -1654,8 +1658,26 @@ pub fn progress_bar(p: &Painter, f: f32, x: f32, foot: f32, h: f32) {
 }
 
 /// The sound a program makes: three small bars that move (`v`: each 0..1), `w` wide, centred on `cx`, their middle at `cy`.
+/// the sound's colour, where nothing gives it one
+const SOUND: crate::paint::Color = crate::paint::Color(0.35, 0.78, 0.9, 1.0);
+
+/// A cover's colour, made bright enough to stand out on dark (its hue kept); a grey one: `or`.
+fn bright(c: crate::paint::Color, or: crate::paint::Color) -> crate::paint::Color {
+    let m = c.0.max(c.1).max(c.2).max(0.05);
+    let k = (0.92 / m).max(1.0);
+    let (r, g, b) = ((c.0 * k).min(1.0), (c.1 * k).min(1.0), (c.2 * k).min(1.0));
+    if r.max(g).max(b) - r.min(g).min(b) < 0.12 {
+        return or;
+    }
+    crate::paint::Color(r, g, b, 1.0)
+}
+
 pub fn sound_bars(p: &Painter, v: &[Value], cx: f32, cy: f32, h: f32) {
-    let c = crate::paint::Color(0.35, 0.78, 0.9, 1.0);
+    sound_bars_in(p, v, cx, cy, h, SOUND);
+}
+
+/// A program's sound, in a colour of its own.
+pub fn sound_bars_in(p: &Painter, v: &[Value], cx: f32, cy: f32, h: f32, c: crate::paint::Color) {
     let at = |i: usize| v.get(i).and_then(|b| b.as_f64()).unwrap_or(0.0) as f32;
     // (the same bars as the sound's everywhere: each speaker's bands, lifted as it swells; three alone: both wings the same)
     let n = if v.len() >= 7 { 6 } else { 3 };

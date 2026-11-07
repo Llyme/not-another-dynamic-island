@@ -860,9 +860,10 @@ impl<'a> Painter<'a> {
     }
 
     /// The sound's mark, `lift` (0..1) how hard the bass hits now: three rings round one middle, the low band inside, the mid band
-    /// next, the high band outside, the bass spreading them apart (close together while it is soft). Each as bold as its band is loud: its left side as the left speaker has it, its right side the right's, blending smoothly round it.
-    /// `parts`: the left's low, middle, high, then the right's; three alone: both sides the same. It sits in an `h` square from `x`,
-    /// centred on `cy`. What every sound's mark is drawn with. Its width.
+    /// next, the high band outside, the bass alone setting the gaps between them (close together while it is soft). Each as thick as
+    /// its band is loud: its left side as the left speaker has it, its right side the right's, blending smoothly round it. Solid.
+    /// `parts`: the left's low, middle, high, then the right's; three alone: both sides the same. It sits in a square from `x`,
+    /// centred on `cy`, `bars_w(h)` wide. What every sound's mark is drawn with. Its width.
     pub fn bars(&self, x: f32, cy: f32, h: f32, parts: impl AsRef<[f32]>, lift: f32, c: Color) -> f32 {
         let p = parts.as_ref();
         let at = |i: usize| p.get(if p.len() >= 6 { i } else { i % 3 }).copied().unwrap_or(0.0).clamp(0.0, 1.0);
@@ -874,17 +875,23 @@ impl<'a> Painter<'a> {
         // the edge of the one inside it, all the way round, however thick that one is)
         // (at rest (every band at nothing, no bass): the rings reach 80% across their square; louder, they thicken past it)
         const BASE: f32 = 0.05;
-        const THIN: f32 = 0.05;
+        const THIN: f32 = 0.03;
         const GAP: f32 = (0.4 - BASE - 3.0 * THIN) / 2.0;
         let gap = h * (GAP + 0.015 * lift.clamp(0.0, 1.0));
         let base = h * BASE;
-        let thick = |v: f32| h * (THIN + 0.04 * v);
+        let thick = |v: f32| h * (THIN + 0.085 * v);
         let t: [(f32, f32); 3] = std::array::from_fn(|b| (thick(at(b)), thick(at(3 + b))));
         // (at an angle: how thick a ring is there, blending from its left side to its right)
         let th = |b: usize, a: f32| t[b].0 + (t[b].1 - t[b].0) * (1.0 + a.cos()) / 2.0;
         // (where its inner edge is there: the middle's room, and every ring inside it with its gap)
         let inner = |b: usize, a: f32| base + (0..b).map(|j| th(j, a) + gap).sum::<f32>();
         const N: usize = 72;
+        // (never past its square: loud enough to reach past it, all of it drawn that much smaller)
+        let reach = (0..N).map(|k| {
+            let a = k as f32 / N as f32 * std::f32::consts::TAU;
+            inner(2, a) + th(2, a)
+        }).fold(0.0f32, f32::max);
+        let fit = (h * 0.5 / reach.max(0.01)).min(1.0);
         for b in 0..3 {
             if at(b).max(at(3 + b)) <= 0.01 {
                 continue;
@@ -895,7 +902,7 @@ impl<'a> Painter<'a> {
                 // (its outline, then its hole)
                 let pt = |k: usize, outer: bool| {
                     let a = k as f32 / N as f32 * std::f32::consts::TAU;
-                    let rad = inner(b, a) + if outer { th(b, a) } else { 0.0 };
+                    let rad = fit * (inner(b, a) + if outer { th(b, a) } else { 0.0 });
                     D2D_POINT_2F { x: (cx + rad * a.cos()) * s, y: (cy + rad * a.sin()) * s }
                 };
                 for outer in [true, false] {

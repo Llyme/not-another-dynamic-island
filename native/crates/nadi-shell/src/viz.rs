@@ -56,12 +56,15 @@ impl Viz {
                     let range = (self.hi[b] - self.lo[b]).max(0.05);
                     // (how loud the band is, against its range; then where it is: how much more of it one speaker has than the other,
                     // from their own meters (true dB), taken off the quieter side. Loud music never squashes the direction away)
-                    let level = (0.25 + 0.75 * ((x - self.lo[b]) / range)).clamp(0.2, 1.0);
+                    // (with contrast: a quiet moment drops well down, a hit jumps up; so the marks move like a voice talking)
+                    let level = ((x - self.lo[b]) / range).clamp(0.0, 1.0).powf(1.5).max(0.06);
                     let lin = |v: f32| 10f32.powf((v * 66.0 - 72.0) / 20.0);
                     let bal = match (avg(&sl, b), avg(&sr, b)) {
                         (Some(l), Some(r)) => {
                             let (l, r) = (lin(l), lin(r));
-                            ((r - l) / (r + l + 1e-9)).clamp(-1.0, 1.0)
+                            let b = ((r - l) / (r + l + 1e-9)).clamp(-1.0, 1.0);
+                            // (most music leans only a little: a little made plain, a lot to the full)
+                            b.signum() * b.abs().sqrt()
                         }
                         _ => 0.0,
                     };
@@ -72,7 +75,7 @@ impl Viz {
         }
         let mut moving = false;
         for b in 0..6 {
-            let k = if self.target[b] > self.now[b] { 22.0 } else { 9.0 };
+            let k = if self.target[b] > self.now[b] { 34.0 } else { 15.0 };
             self.now[b] += (self.target[b] - self.now[b]) * (1.0 - (-dt * k).exp());
             if (self.target[b] - self.now[b]).abs() > 0.004 {
                 moving = true;

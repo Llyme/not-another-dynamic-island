@@ -1,6 +1,6 @@
 [package]
 name = "nadi-setup"
-version = "1.9.0"
+version = "1.9.1"
 edition = "2021"
 
 # NADI's installer: one exe that carries NADI inside it and puts it in place for this user (no administrator needed).
