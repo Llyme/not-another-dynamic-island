@@ -748,9 +748,9 @@ impl Builtins {
             body.push(json!({ "kind": "chips", "items": chips }));
         }
         body.push(json!({ "kind": "slider", "icon": slider_icon, "value": vol, "muted": muted, "text": format!("{pct}%"), "action": "volume", "press": "mute", "meter": "master" }));
-        // (each program that played lately, the ones playing first: its own volume, its name over it)
-        let mut apps: Vec<&crate::appaudio::AppVolume> = self.app_volumes.iter().collect();
-        apps.sort_by_key(|a| !playing(&a.key));
+        // (each program that played lately, in the order they came (none moves as others start or stop): its own volume, its name over
+        // it)
+        let apps: Vec<&crate::appaudio::AppVolume> = self.app_volumes.iter().collect();
         if !apps.is_empty() {
             body.push(json!({ "kind": "rule" }));
         }

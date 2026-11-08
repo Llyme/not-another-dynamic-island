@@ -270,6 +270,23 @@ fn tile_bar(r: Rect, g: &Value) -> (Rect, Rect, Rect, Option<[Rect; 3]>) {
     (bar, mute, track, buttons)
 }
 
+/// a group's bubble: its pictograms this big, this far in, this far apart
+pub const FAN_ICON: f32 = 15.0;
+pub const FAN_PAD: f32 = 6.0;
+pub const FAN_SEP: f32 = 8.0;
+
+/// How big one of a group's widgets is in its bubble.
+pub fn fan_size(p: &crate::draw::Painter, it: &Value, vertical: bool) -> (f32, f32) {
+    let words = s(it, "text");
+    if vertical {
+        let tw = if words.is_empty() { 0.0 } else { p.measure(words, 10.0, Weight::Semibold, 80.0) };
+        (FAN_ICON.max(tw) + 2.0 * FAN_PAD, FAN_ICON + 2.0 * FAN_PAD + if words.is_empty() { 0.0 } else { 14.0 })
+    } else {
+        let tw = if words.is_empty() { 0.0 } else { p.measure(words, 11.0, Weight::Semibold, 120.0) + 6.0 };
+        (FAN_ICON + tw + 2.0 * FAN_PAD + 4.0, FAN_ICON + 2.0 * FAN_PAD)
+    }
+}
+
 fn s_num(v: &Value, k: &str) -> f32 {
     v[k].as_f64().unwrap_or(0.0) as f32
 }
@@ -592,6 +609,56 @@ impl<'a, 'b> Ctx<'a, 'b> {
 
     fn hit(&mut self, rect: Rect, press: Press) {
         self.hit_tip(rect, press, Value::Null);
+    }
+
+    /// A group's widgets, as its bubble shows them: each as it looks alone (its pictogram, and its words unless it is set to its icon
+    /// alone), in a row (`vertical`: a column, its words under its pictogram), a thin line between them, the one it shows lit. Each
+    /// pressed: its action. How tall.
+    fn fan(&mut self, b: &Value, x: f32, y: f32) -> f32 {
+        let items = b["items"].as_array().cloned().unwrap_or_default();
+        let vertical = b["vertical"] == true;
+        let mut at = if vertical { y } else { x };
+        let mut tall = 0.0f32;
+        let n = items.len();
+        for (i, it) in items.iter().enumerate() {
+            let (w, h) = fan_size(self.p, it, vertical);
+            let r = if vertical { Rect::new(x, at, b["w"].as_f64().map_or(w, |v| v as f32), h) } else { Rect::new(at, y, w, h) };
+            let on = it["on"] == true;
+            if self.draw {
+                if on {
+                    self.round(r, 9.0, accent().alpha(0.14));
+                } else {
+                    self.ghost(r, 9.0);
+                }
+                let c = if on { accent() } else { TEXT };
+                let words = s(it, "text");
+                let (ix, iy) = if vertical { (r.x + r.w / 2.0 - FAN_ICON / 2.0, r.y + FAN_PAD) } else { (r.x + FAN_PAD + 2.0, r.y + r.h / 2.0 - FAN_ICON / 2.0) };
+                if !s(it, "image").is_empty() && self.p.picture(s(it, "image"), Rect::new(ix, iy, FAN_ICON, FAN_ICON), 4.0) {
+                } else {
+                    self.icon(if s(it, "icon").is_empty() { "dot" } else { s(it, "icon") }, ix, iy, FAN_ICON, c);
+                }
+                if !words.is_empty() {
+                    if vertical {
+                        let tw = self.p.measure(words, 10.0, Weight::Semibold, 80.0);
+                        self.text(words, r.x + r.w / 2.0 - tw / 2.0, iy + FAN_ICON + 9.0, 10.0, Weight::Semibold, 80.0, c);
+                    } else {
+                        self.text(words, ix + FAN_ICON + 6.0, r.y + r.h / 2.0, 11.0, Weight::Semibold, 120.0, c);
+                    }
+                }
+            }
+            self.hit_tip(r, Press::Action(s(it, "action").to_string(), Value::Null), it["tip"].clone());
+            at += if vertical { h } else { w };
+            tall = tall.max(if vertical { at - y } else { h });
+            // (a thin line before the next)
+            if i + 1 < n {
+                if self.draw {
+                    let line = if vertical { Rect::new(r.x + r.w / 2.0 - 8.0, at + FAN_SEP / 2.0, 16.0, 1.0) } else { Rect::new(at + FAN_SEP / 2.0, y + h / 2.0 - 8.0, 1.0, 16.0) };
+                    self.round(line, 0.5, crate::paint::Color(0.15, 0.15, 0.17, 1.0));
+                }
+                at += FAN_SEP + 1.0;
+            }
+        }
+        if vertical { at - y } else { tall }
     }
 
     /// Pictures to choose from: a row of small ones, the one shown ringed in the theme's colour (each pressed: its action; its
@@ -1380,6 +1447,7 @@ impl<'a, 'b> Ctx<'a, 'b> {
     /// One block at `x`, `y`, `w` wide; how tall it is.
     pub fn block(&mut self, b: &Value, x: f32, y: f32, w: f32) -> f32 {
         match s(b, "kind") {
+            "fan" => self.fan(b, x, y),
             "text" if !s(b, "action").is_empty() && self.draw => {
                 // (pressable: its ground lit while the mouse is on it)
                 let was = self.draw;

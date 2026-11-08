@@ -27,12 +27,15 @@ pub struct AppAudio {
     volumes: Vec<(String, ISimpleAudioVolume)>,
     /// when each program last played
     played: HashMap<String, Instant>,
+    /// the order the programs came in (each its place, kept while it is listed): the list stays in it
+    seen: HashMap<String, u64>,
+    next: u64,
     names: HashMap<u32, String>,
 }
 
 impl AppAudio {
     pub fn new() -> AppAudio {
-        AppAudio { meters: Vec::new(), volumes: Vec::new(), played: HashMap::new(), names: HashMap::new() }
+        AppAudio { meters: Vec::new(), volumes: Vec::new(), played: HashMap::new(), seen: HashMap::new(), next: 0, names: HashMap::new() }
     }
 
     /// Look for the sessions that play now.
@@ -41,8 +44,14 @@ impl AppAudio {
         let now = Instant::now();
         for (k, _) in &self.meters {
             self.played.insert(k.clone(), now);
+            if !self.seen.contains_key(k) {
+                self.seen.insert(k.clone(), self.next);
+                self.next += 1;
+            }
         }
         self.played.retain(|_, t| t.elapsed() < KEEP);
+        let played = &self.played;
+        self.seen.retain(|k, _| played.contains_key(k));
     }
 
     fn sessions(&mut self) -> windows::core::Result<()> {
@@ -107,10 +116,11 @@ impl AppAudio {
         out
     }
 
-    /// The programs that played lately, each with its own volume (its first session's), the latest first.
+    /// The programs that played lately, each with its own volume (its first session's), in the order they came: a new one last, and
+    /// none moves as others start or stop.
     pub fn apps(&self) -> Vec<AppVolume> {
         let mut keys: Vec<(&String, &Instant)> = self.played.iter().collect();
-        keys.sort_by(|a, b| b.1.cmp(a.1).then_with(|| a.0.cmp(b.0)));
+        keys.sort_by_key(|(k, _)| (self.seen.get(*k).copied().unwrap_or(u64::MAX), (*k).clone()));
         keys.into_iter()
             .filter_map(|(k, _)| {
                 let (_, v) = self.volumes.iter().find(|(n, _)| n == k)?;

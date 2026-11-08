@@ -738,10 +738,6 @@ function pagePerf(root) {
     }
     m.append(c);
   }
-  // (drawn without the graphics card: its driver kept out of NADI, for a driver that crashes)
-  const sc = el("div", "card");
-  sc.append(hintRow("Software Drawing", "Draws NADI without the graphics card, so a graphics driver that crashes can not take NADI with it. Uses a little more of the processor; the liquid edges move less smoothly.", sw(!!(S.config && S.config.software_draw), on => send("config", { patch: { software_draw: on } })), "cpu"));
-  m.append(sc);
 }
 
 // ----------------------------------------------------------------------------------------------------------------- look
@@ -853,6 +849,9 @@ function pageFrame(m) {
     hintRow("Pin From File Explorer", "Adds Pin to NADI Dock and Pin to NADI Apps to the right-click menu of files and folders. On Windows 11, under Show more options.", sw(!!c.explorer_menu, on => set({ explorer_menu: on })), "folder"),
     hintRow("Launcher Shows Widgets", "Opening the launcher brings every widget out, over a game too.", sw(!!c.launcher_reveal, on => set({ launcher_reveal: on })), "grid"),
     row("Start With Windows", sw(!!S.autostart, on => send("autostart", { on })), "power")));
+  // (drawn with the graphics card, or without it: its driver kept out of NADI, for a driver that crashes)
+  grid.append(card("Graphics",
+    hintRow("Hardware Acceleration", "Draws NADI with the graphics card: smooth, and light on the processor. Off: drawn without it, so a graphics driver that crashes can not take NADI with it, at the cost of more of the processor and less smooth liquid edges.", sw(!c.software_draw, on => set({ software_draw: !on })), "cpu")));
   m.append(grid);
 }
 

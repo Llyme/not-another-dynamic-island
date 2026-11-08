@@ -154,6 +154,8 @@ fn drop_tip_thumbs(t: &mut Tip) {
 const TIP_WAIT: Duration = Duration::from_millis(450);
 const TIP_NEXT: Duration = Duration::from_millis(90);
 const TIP_W: f32 = 260.0;
+/// a group's bubble: how far in from its rim its widgets are
+const TIP_FIT_PAD: f32 = 5.0;
 
 /// Something held until its ring fills (it cannot be undone): a thing in a widget's panel, or a row of a menu.
 /// A slider or a bar to seek on, being dragged: its widget, its action, its press area (in its panel), where its knob is, and when
@@ -2596,32 +2598,6 @@ impl Frame {
         }
         if peek["dock"].is_object() {
             peek["dock"]["depth"] = json!(self.even_depth(k));
-        }
-        // (a group, the mouse on it: its other widgets' pictograms beside it, each opening its own panel)
-        if let Some(members) = w.content["group"]["members"].as_array().filter(|_| self.edit.is_none() && self.hover.as_ref().is_some_and(|(_, h)| h == k)) {
-            let shown = w.content["group"]["shown"].as_u64().unwrap_or(0) as usize;
-            // (each as it looks alone: its icon alone or its words, as it is set; at the group's size)
-            let scale = peek["scale"].clone();
-            let fan: Vec<Value> = members
-                .iter()
-                .enumerate()
-                .filter(|(i, _)| *i != shown)
-                .map(|(_, m)| {
-                    let mut m = m.clone();
-                    if let Some(mw) = m["key"].as_str().and_then(|mk| self.widgets.get(mk).map(|w| (mk.to_string(), w))) {
-                        let (mk, w) = mw;
-                        let mut mp = if self.icon_alone(&mk) { peek::icon_only(&w.content["peek"]) } else { w.content["peek"].clone() };
-                        if mp.is_object() && !mp["dock"].is_object() {
-                            mp["scale"] = scale.clone();
-                            m["peek"] = mp;
-                        }
-                    }
-                    m
-                })
-                .collect();
-            if !fan.is_empty() && peek.is_object() {
-                peek["fan"] = json!(fan);
-            }
         }
         // (the app in front just changed: how far its coming has got, and which it was before)
         if peek["dock"].is_object() {
@@ -5466,7 +5442,7 @@ impl Frame {
                 }
                 let hovered = hover.as_ref().is_some_and(|(s, h)| *s == si && *h == k);
                 // (its window out: its panel opens there, not here)
-                let has_panel = self.widgets.get(unpop(&k)).is_some_and(|w| w.content["panel"].is_object()) && !self.popped(&k);
+                let has_panel = self.widgets.get(unpop(&k)).is_some_and(|w| w.content["panel"].is_object() && !w.content["group"].is_object()) && !self.popped(&k);
                 // (being pulled off its edge: it stays open, the mouse off it or not)
                 let pulled = self.tear.as_ref().is_some_and(|(ts, tk, ..)| *ts == si && *tk == k) || self.sizing.as_ref().is_some_and(|z| z.si == si && z.key == k);
                 let it = self.screens[si].items.get_mut(&k).unwrap();
@@ -7821,6 +7797,43 @@ impl Frame {
         if it.open.now > 0.05 || it.open.to > 0.0 {
             return None;
         }
+        // (a group, the mouse resting on it: its widgets in a bubble, out toward the middle of the screen, each as it looks alone;
+        // pressed, its panel. A row on the top and the bottom, a column on the sides; in a corner, along its neighbours' edge)
+        if let Some(w) = self.widgets.get(unpop(&k)).filter(|w| w.content["group"].is_object()) {
+            let shown = w.content["group"]["shown"].as_u64().unwrap_or(0) as usize;
+            let items: Vec<Value> = w.content["group"]["members"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .enumerate()
+                .map(|(i, m)| {
+                    let mk = m["key"].as_str().unwrap_or("");
+                    let words = self.widgets.get(mk).filter(|_| !self.icon_alone(mk)).and_then(|x| x.content["peek"]["text"].as_str()).unwrap_or("");
+                    json!({ "icon": m["icon"], "image": m["image"], "text": words, "action": m["action"], "tip": m["tip"], "on": i == shown })
+                })
+                .collect();
+            let side = match it.slot.place {
+                Place::Edge(Edge::Left | Edge::Right) => true,
+                Place::Corner(_) => self.stacked_down(&k),
+                _ => false,
+            };
+            let out = match (it.slot.place, side) {
+                (Place::Edge(Edge::Left), _) | (Place::Corner(Corner::TopLeft | Corner::BottomLeft), true) => Edge::Right,
+                (Place::Edge(Edge::Right), _) | (Place::Corner(Corner::TopRight | Corner::BottomRight), true) => Edge::Left,
+                _ => away,
+            };
+            let p = self.painter(self.screens[hsi].s);
+            let sizes: Vec<(f32, f32)> = items.iter().map(|i| blocks::fan_size(&p, i, side)).collect();
+            let gaps = items.len().saturating_sub(1) as f32 * (blocks::FAN_SEP + 1.0);
+            let (fw, _) = if side {
+                (sizes.iter().map(|z| z.0).fold(0.0f32, f32::max), 0.0)
+            } else {
+                (sizes.iter().map(|z| z.0).sum::<f32>() + gaps, 0.0)
+            };
+            let body = json!({ "kind": "fan", "items": items, "vertical": side, "w": fw });
+            // (its room: the bubble's own, a little in from its rim)
+            return Some((hsi, format!("{k}@fan"), json!({ "width": fw + 2.0 * TIP_FIT_PAD, "fit": true, "pad": TIP_FIT_PAD, "body": [body] }), b, out));
+        }
         // (on the dock and the tray at rest: the app or the icon under the mouse)
         if let Some((r, a)) = it.buttons.iter().find(|(r, a)| !a.is_empty() && inside(r)) {
             // (an app on the dock with windows: a peek of them, their pictures and what the app uses)
@@ -7984,21 +7997,23 @@ impl Frame {
         let s = sc.s;
         let (sw, sh) = (sc.w, sc.h);
         let empty = HashSet::new();
-        const P: f32 = 12.0;
+        let fit = t.content["fit"] == true;
+        let pad = t.content["pad"].as_f64().map(|v| v as f32);
+        let p_ = pad.unwrap_or(12.0);
         // its size: words in a pill, or blocks like a panel's
         let p = self.painter(s);
         let (w, h) = if let Some(words) = t.content.as_str() {
             // (words: a line each, the first the strongest)
             let lines: Vec<&str> = words.lines().filter(|l| !l.is_empty()).collect();
             let lw = lines.iter().map(|l| p.measure(l, 12.0, Weight::Regular, 300.0)).fold(0.0f32, f32::max);
-            (lw + 2.0 * P + 2.0, 30.0 + (lines.len().max(1) - 1) as f32 * 17.0)
+            (lw + 2.0 * p_ + 2.0, 30.0 + (lines.len().max(1) - 1) as f32 * 17.0)
         } else {
-            let tw = t.content["width"].as_f64().map_or(TIP_W, |w| (w as f32).clamp(120.0, sw * 0.9));
-            let inner = tw - 2.0 * P;
+            let tw = t.content["width"].as_f64().map_or(TIP_W, |w| (w as f32).clamp(if fit { 24.0 } else { 120.0 }, sw * 0.9));
+            let inner = tw - 2.0 * p_;
             let mut c = Ctx { p: &p, draw: false, hits: Vec::new(), open: &empty, closed: &empty, thumbs: Vec::new() };
             let head = blocks::head(&mut c, &t.content, 0.0, 0.0, inner);
             let body = c.body(t.content["body"].as_array().map(|v| v.as_slice()).unwrap_or(&[]), 0.0, 0.0, inner);
-            (tw, head + if body > 0.0 { (if head > 0.0 { 10.0 } else { 0.0 }) + body } else { 0.0 } + 2.0 * P)
+            (tw, head + if body > 0.0 { (if head > 0.0 { 10.0 } else { 0.0 }) + body } else { 0.0 } + 2.0 * p_)
         };
         let a = t.anchor;
         let gap = 8.0;
@@ -8075,13 +8090,13 @@ impl Frame {
                 if let Some(words) = content.as_str() {
                     // (lines alike: no title)
                     for (i, l) in words.lines().filter(|l| !l.is_empty()).enumerate() {
-                        p.text(l, P + 1.0, 15.0 + i as f32 * 17.0, 12.0, Weight::Regular, 300.0, draw::TEXT);
+                        p.text(l, p_ + 1.0, 15.0 + i as f32 * 17.0, 12.0, Weight::Regular, 300.0, draw::TEXT);
                     }
                 } else {
                     let mut c = Ctx { p: &p, draw: true, hits: Vec::new(), open: &empty, closed: &empty, thumbs: Vec::new() };
-                    let inner = w - 2.0 * P;
-                    let head = blocks::head(&mut c, &content, P, P, inner);
-                    c.body(content["body"].as_array().map(|v| v.as_slice()).unwrap_or(&[]), P, P + head + if head > 0.0 { 10.0 } else { 0.0 }, inner);
+                    let inner = w - 2.0 * p_;
+                    let head = blocks::head(&mut c, &content, p_, p_, inner);
+                    c.body(content["body"].as_array().map(|v| v.as_slice()).unwrap_or(&[]), p_, p_ + head + if head > 0.0 { 10.0 } else { 0.0 }, inner);
                     boxes = std::mem::take(&mut c.thumbs);
                     hits = std::mem::take(&mut c.hits);
                 }

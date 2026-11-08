@@ -26,7 +26,7 @@ to rediscover it.
 
 ## What NADI does about it
 
-- **Software Drawing** (Settings > Performance, `config.software_draw`). NADI's devices are made on WARP, Windows' own software
+- **Hardware Acceleration off** (Settings > Look > Graphics; stored inverted as `config.software_draw`). NADI's devices are made on WARP, Windows' own software
   rasterizer, instead of the GPU (`gfx::set_software`, read when `Gfx::new` runs). With it on, no AMD DLL loads into NADI at all, so
   a driver crash cannot take NADI down. It costs a lot of processor time while things move (well over one core with the liquid
   animating), so it is a safety switch, not a default. It switches live: `Frame::rebuild_device`.
@@ -44,7 +44,7 @@ to rediscover it.
 
 - Prefer Direct2D. Every direct `ID3D11DeviceContext` path (shaders, render targets, copies) is more driver surface, and the one
   NADI has is the prime suspect above. If you add one, keep a Direct2D or software fallback.
-- Test with Software Drawing on as well as off. WARP is slower but correct, and it is what people who hit driver crashes will run.
+- Test with Hardware Acceleration off as well as on. WARP is slower but correct, and it is what people who hit driver crashes will run.
 - Assume the device can be lost at any time, and that a rebuild must free everything the old device made.
 - A crash report with a driver module in it: ask for the `crash.log` line and the newest dump, and for the driver version. Suggest
-  Software Drawing as the workaround, and turning off the driver's global features as the next thing to try.
+  turning Hardware Acceleration off as the workaround, and turning off the driver's global features as the next thing to try.
