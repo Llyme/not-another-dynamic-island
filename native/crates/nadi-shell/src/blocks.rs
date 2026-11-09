@@ -3053,9 +3053,19 @@ impl<'a, 'b> Ctx<'a, 'b> {
                 if self.draw {
                     self.p.ring(rx, cy, 19.0, 3.0, f(b, "part"), 0.0, c, TRACK);
                 }
+                // (its countdown inside its ring: "1h 46m" as two lines, so it fits)
                 let t = s(b, "text");
-                let tw = self.p.measure(t, 11.0, Weight::Bold, 40.0);
-                self.text(t, rx - tw / 2.0, cy, 11.0, Weight::Bold, 40.0, c);
+                let parts: Vec<&str> = t.split(' ').filter(|p| !p.is_empty()).collect();
+                if parts.len() == 2 {
+                    for (i, p) in parts.iter().enumerate() {
+                        let pw = self.p.measure(p, 10.0, Weight::Bold, 30.0);
+                        self.text(p, rx - pw / 2.0, cy + if i == 0 { -5.5 } else { 5.5 }, 10.0, Weight::Bold, 30.0, c);
+                    }
+                } else {
+                    let size = if self.p.measure(t, 11.0, Weight::Bold, 60.0) > 28.0 { 9.0 } else { 11.0 };
+                    let tw = self.p.measure(t, size, Weight::Bold, 30.0);
+                    self.text(t, rx - tw / 2.0, cy, size, Weight::Bold, 30.0, c);
+                }
                 let mut right = x + w - 12.0;
                 if !s(b, "join").is_empty() {
                     let label = "Join";

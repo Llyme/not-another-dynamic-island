@@ -3,7 +3,9 @@
 //! plugin is on: nothing is asked of Windows otherwise. Windows asks the user once (Settings > Privacy & security >
 //! Notifications > "Let apps access your notifications"); until it is granted this retries quietly once a minute.
 //!
-//! The plugins are told by `pluginwasm.rs`: each toast has a number, and a module is told of the ones it has not seen.
+//! The plugins are told by `pluginwasm.rs`: each toast has a number, and a module is told of the ones it has not seen. Each toast
+//! carries its `id`; one that leaves Windows' list (read elsewhere, dismissed, withdrawn by its app) comes again as `{ id, gone }`.
+//! A plugin may ask for its toasts to be taken off the list (`toast_dismiss`).
 
 use crate::pc::Pc;
 use serde_json::{json, Value};
@@ -80,14 +82,30 @@ pub fn spawn(state: Arc<Pc>) {
                         if let Some(mut t) = parse(&n) {
                             let seq = state.toast_seq.fetch_add(1, Ordering::Relaxed) + 1;
                             t["seq"] = json!(seq);
+                            t["id"] = json!(id);
                             let mut q = state.toasts.lock().unwrap();
                             q.push(t);
                             let over = q.len().saturating_sub(KEEP);
                             q.drain(..over);
                         }
                     }
-                    // ids that left the action center can be forgotten
+                    // ids that left the action center: told as gone, and forgotten
+                    let gone: Vec<u32> = seen.iter().filter(|id| !current.contains(id)).copied().collect();
+                    if primed && !gone.is_empty() {
+                        let mut q = state.toasts.lock().unwrap();
+                        for id in &gone {
+                            let seq = state.toast_seq.fetch_add(1, Ordering::Relaxed) + 1;
+                            q.push(json!({ "id": id, "gone": true, "seq": seq }));
+                        }
+                        let over = q.len().saturating_sub(KEEP);
+                        q.drain(..over);
+                    }
                     seen.retain(|id| current.contains(id));
+                    // (the ones a plugin asked to be taken off the list)
+                    let asked: Vec<u32> = std::mem::take(&mut *state.toast_dismiss.lock().unwrap());
+                    for id in asked {
+                        let _ = l.RemoveNotification(id);
+                    }
                     primed = true;
                 }
                 Err(_) => listener = None, // re-request access next round

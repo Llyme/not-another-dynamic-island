@@ -35,6 +35,8 @@ pub struct Pc {
     pub gpu: crate::sensors::gpu::GpuState,
     /// the notifications of other apps, numbered, the last few
     pub toasts: Mutex<Vec<Value>>,
+    /// toasts a plugin asked to be taken off Windows' list (their ids): done by the notifications sensor
+    pub toast_dismiss: Mutex<Vec<u32>>,
     pub toast_seq: AtomicU64,
     /// what each plugin has cost since NADI started (by its id; "~ name": a sensor gathered for them): ms gathering its events, ms
     /// running them, how many events

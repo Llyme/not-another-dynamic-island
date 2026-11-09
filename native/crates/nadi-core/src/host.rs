@@ -1220,6 +1220,12 @@ impl Host {
                 });
             }
         }
+        // (toasts it was told of, taken off Windows' list: only with the notifications permission)
+        if perms.notifications {
+            if let Some(ids) = o.get("dismiss").and_then(|d| d.as_array()) {
+                self.pc.toast_dismiss.lock().unwrap().extend(ids.iter().filter_map(|i| i.as_u64()).map(|i| i as u32).take(100));
+            }
+        }
         if let Some(url) = o.get("open").and_then(|u| u.as_str()) {
             let low = url.to_lowercase();
             if url.len() <= 1000 && !url.chars().any(|c| c.is_control() || c == ' ') && perms.open.iter().any(|p| !p.is_empty() && (low.starts_with(&p.to_lowercase()) || open_under(p, url))) {

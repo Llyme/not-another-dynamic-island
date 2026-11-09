@@ -1,8 +1,8 @@
 //! Edit Mode: holding a widget (or Edit in its menu) puts the whole frame into it. Every widget comes out, the idle ones too (faded),
 //! the screen dims a little, and a shelf in its middle holds what is not on screen: the hidden widgets, then the widgets of plugins
 //! that are off (faded, a power mark on each), each a tile of its own peek, small, its name under it; with the dock out, a tile to
-//! pin an app. Over it, Find: typed into at once (Esc empties it, then ends Edit Mode); the tiles narrow to what it names, and, with
-//! the dock out, the apps it names come after them (pressed: pinned). A widget carried back toward it: the shelf rings in the theme
+//! pin an app. Over it, Find: typed into at once (Esc empties it, then ends Edit Mode); the tiles narrow to the widgets it names
+//! (apps are the launcher's to find). A widget carried back toward it: the shelf rings in the theme
 //! colour and opens a slot. A widget is placed by dragging it from the tray to an edge, and hidden by dragging it into the tray. The dock's apps
 //! are moved, pinned and unpinned by dragging them. A click on an empty spot, Esc, or a minute untouched ends it. While it lasts,
 //! panels stay shut and banners wait.
@@ -306,9 +306,9 @@ impl Frame {
             find.is_empty() || c.label.to_lowercase().contains(&find) || c.plugin_off.as_deref().unwrap_or(c.key.split('/').next().unwrap_or("")).to_lowercase().contains(&find)
         };
         let chips: Vec<Chip> = self.edit_chips().into_iter().filter(|c| names(c)).collect();
-        // (with the dock out: the apps Find names, after the widgets; and a tile to pin one from the launcher)
+        // (with the dock out: a tile to pin an app, from the launcher. Find names widgets alone: apps are the launcher's to find)
         let dock_on = self.dock_placed();
-        let apps: Vec<crate::apps::App> = if dock_on && find.len() >= 2 { crate::apps::cached().into_iter().filter(|a| a.name.to_lowercase().contains(&find)).take(8).collect() } else { Vec::new() };
+        let apps: Vec<crate::apps::App> = Vec::new();
         let add_tile = dock_on && find.is_empty();
         let field = Rect::new(TRAY_P, TRAY_P, TRAY_W - 2.0 * TRAY_P, FIND_H);
         let top = TRAY_P + FIND_H + 12.0;
@@ -416,6 +416,13 @@ impl Frame {
         e.chips = chip_boxes.into_iter().zip(chips).collect();
         e.apps = app_boxes.into_iter().zip(apps).collect();
         e.add = add_box;
+        // (the shelf is centred, so it moves as Find narrows it: the box typed in, with its field)
+        let m = self.screens[si].ov.monitor.rect;
+        let px = |v: f32| (v * s).round() as i32;
+        let r = RECT { left: m.left + px(at.x + field.x), top: m.top + px(at.y + field.y), right: m.left + px(at.x + field.x + field.w), bottom: m.top + px(at.y + field.y + field.h) };
+        if let Some(ib) = self.input.as_mut().filter(|i| i.shown && i.key == FIND_KEY) {
+            ib.follow(r);
+        }
         self.hit_regions();
         self.commit();
     }

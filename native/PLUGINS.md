@@ -59,7 +59,7 @@ with a `manifest.json`, up to three levels down, is a plugin.
 | `media` | `media` (what plays) |
 | `media_art` | its widget may show the cover (`"media:<source>:<art_id>"`) |
 | `media_control` | `media` output: play, pause, skip, seek, rate, focus |
-| `notifications` | `notifications` (other apps' toasts) |
+| `notifications` | `notifications` (other apps' toasts: each `{ id, app, title, body }`; one taken off Windows' list comes again as `{ id, gone = true }`); `dismiss = { ids }` takes toasts off the list |
 | `processes` | `processes` (the windows, every 2 s) |
 | `titles` | their titles |
 | `programs` | their programs (path, name, full screen) |

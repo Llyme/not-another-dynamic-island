@@ -16,22 +16,22 @@ pub struct CalendarEvent {
     /// exclusive end (== start for zero-length events)
     pub end_ms: i64,
     pub all_day: bool,
-    /// where it is (its LOCATION), and a link to join it when it has one (a meeting service's address in its URL, LOCATION
-    /// or DESCRIPTION; else its URL)
+    /// where it is (its LOCATION), and the web addresses in it (its URL, then those in its LOCATION and DESCRIPTION, in order;
+    /// a plugin picks what it wants of them, a meeting to join, say)
     pub location: String,
-    pub link: String,
+    pub links: Vec<String>,
 }
 
-/// A meeting's address in some words: the first web address of a meeting service in them.
-fn meeting_link(text: &str) -> Option<String> {
-    const HOSTS: [&str; 5] = ["meet.google.com", "teams.microsoft.com", "teams.live.com", "zoom.us", "webex.com"];
+/// The web addresses in some words, in order (trailing punctuation off; at most `MAX_LINKS` in all).
+const MAX_LINKS: usize = 8;
+
+fn web_links(text: &str, out: &mut Vec<String>) {
     for word in text.split(|c: char| c.is_whitespace() || c == '<' || c == '>' || c == '"' || c == '(' || c == ')') {
         let w = word.trim_end_matches(['.', ',', ';']);
-        if (w.starts_with("https://") || w.starts_with("http://")) && HOSTS.iter().any(|h| w.contains(h)) {
-            return Some(w.to_string());
+        if out.len() < MAX_LINKS && (w.starts_with("https://") || w.starts_with("http://")) && !out.iter().any(|o| o == w) {
+            out.push(w.to_string());
         }
     }
-    None
 }
 use chrono::{Datelike, Duration as CDuration, Local, Months, NaiveDate, NaiveDateTime, TimeZone, Utc, Weekday};
 use std::collections::{HashMap, HashSet};
@@ -264,7 +264,10 @@ fn parse_ics_window(text: &str, now_ms: i64) -> Vec<CalendarEvent> {
             _ => 0,
         };
         let uid = r.uid.clone().unwrap_or_else(|| format!("{summary}|{start_ms}"));
-        let link = meeting_link(&r.url).or_else(|| meeting_link(&r.location)).or_else(|| meeting_link(&r.description)).unwrap_or_else(|| if r.url.starts_with("http") { r.url.clone() } else { String::new() });
+        let mut links = Vec::new();
+        web_links(&r.url, &mut links);
+        web_links(&r.location, &mut links);
+        web_links(&r.description, &mut links);
         let recurring = r.rrule.is_some() && r.recurrence_id.is_none();
         let starts: Vec<i64> = if recurring {
             let skip: HashSet<i64> = r
@@ -292,7 +295,7 @@ fn parse_ics_window(text: &str, now_ms: i64) -> Vec<CalendarEvent> {
                 end_ms: s + duration,
                 all_day,
                 location: r.location.clone(),
-                link: link.clone(),
+                links: links.clone(),
             });
         }
     }
@@ -305,6 +308,14 @@ fn parse_ics_window(text: &str, now_ms: i64) -> Vec<CalendarEvent> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The web addresses in an event's words, in order, their trailing punctuation off.
+    #[test]
+    fn finds_web_links() {
+        let mut out = Vec::new();
+        web_links("Join: <https://meet.example/abc123> or https://example.com/x. and again https://meet.example/abc123", &mut out);
+        assert_eq!(out, vec!["https://meet.example/abc123".to_string(), "https://example.com/x".to_string()]);
+    }
 
     #[test]
     fn parses_folded_events_and_date_only() {
