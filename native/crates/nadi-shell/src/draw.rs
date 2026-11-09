@@ -859,11 +859,11 @@ impl<'a> Painter<'a> {
         self.bars(x, cy, h, parts, lift, c)
     }
 
-    /// The sound's mark, `lift` (0..1) how hard the bass hits now: three rings round one middle, the low band inside, the mid band
-    /// next, the high band outside, the bass alone setting the gaps between them (close together while it is soft). Each as thick as
-    /// its band is loud: its left side as the left speaker has it, its right side the right's, blending smoothly round it. Solid.
-    /// `parts`: the left's low, middle, high, then the right's; three alone: both sides the same. It sits in a square from `x`,
-    /// centred on `cy`, `bars_w(h)` wide. What every sound's mark is drawn with. Its width.
+    /// The sound's mark: half rings, the left speaker's on the left and the right's on the right, the low band inside, the mid band
+    /// next, the high band outside. Each fills its own lane (a faint ghost of it, always there) as far as its band is loud on its side;
+    /// the bass (`lift`, 0..1, how hard it hits now) swells the whole of it a little; at their loudest they just fill their square.
+    /// Solid. `parts`: the left's low, middle, high, then the right's; three alone: both sides the same. It sits in a square from
+    /// `x`, centred on `cy`, `bars_w(h)` wide. What every sound's mark is drawn with. Its width.
     pub fn bars(&self, x: f32, cy: f32, h: f32, parts: impl AsRef<[f32]>, lift: f32, c: Color) -> f32 {
         let p = parts.as_ref();
         let at = |i: usize| p.get(if p.len() >= 6 { i } else { i % 3 }).copied().unwrap_or(0.0).clamp(0.0, 1.0);
@@ -871,8 +871,8 @@ impl<'a> Painter<'a> {
         self.mark(x, cy, h, &rings, lift, c)
     }
 
-    /// The sound's mark, small (a dock's icon, a tile's name): two rings, the bass inside and all above it outside (the louder of
-    /// the mid and the high, each side its own), each with more room, so that it reads at that size. As `bars` otherwise.
+    /// The sound's mark, small (a dock's icon, a tile's name): two bands a side, the bass inside and all above it outside (the louder
+    /// of the mid and the high, each side its own), each with more room, so that it reads at that size. As `bars` otherwise.
     pub fn bars_small(&self, x: f32, cy: f32, h: f32, parts: impl AsRef<[f32]>, lift: f32, c: Color) -> f32 {
         let p = parts.as_ref();
         let at = |i: usize| p.get(if p.len() >= 6 { i } else { i % 3 }).copied().unwrap_or(0.0).clamp(0.0, 1.0);
@@ -880,61 +880,51 @@ impl<'a> Painter<'a> {
         self.mark(x, cy, h, &rings, lift, c)
     }
 
-    /// The rings: each its left side's and its right side's loudness (0..1), the innermost first.
+    /// The half rings: each band's left side's and right side's loudness (0..1), the innermost first. Each band has a lane of its own,
+    /// on each side, shown as a faint ghost of itself; its ring fills the lane from the inside as it gets louder (silent: the ghost
+    /// alone). The bass (`lift`) swells the whole of it, ghosts and all, a little.
     fn mark(&self, x: f32, cy: f32, h: f32, rings: &[(f32, f32)], lift: f32, c: Color) -> f32 {
         let n = rings.len().max(1);
         let s = self.s;
-        // (a square a little taller than `h`: rings read small, so they get the room bars had)
+        // (a square a little taller than `h`: the marks read small, so they get the room bars had)
         let h = bars_w(h);
         let cx = x + h / 2.0;
-        // (each ring a band's thickness, as each side has it; between them, gaps the bass alone sets: each ring sits that far out from
-        // the edge of the one inside it, all the way round, however thick that one is)
-        // (at rest (every band at nothing, no bass): the rings reach 80% across their square; louder, they thicken past it)
-        const BASE: f32 = 0.05;
-        const THIN: f32 = 0.03;
-        // (fewer rings: each thicker, and further apart)
-        let (thin, swell, mid) = if n <= 2 { (0.045, 0.13, 0.11) } else { (THIN, 0.085, BASE) };
-        let gap0 = (0.4 - mid - n as f32 * thin) / (n as f32 - 1.0).max(1.0);
-        let gap = h * (gap0 + 0.015 * lift.clamp(0.0, 1.0));
-        let base = h * mid;
-        let thick = |v: f32| h * (thin + swell * v);
-        let t: Vec<(f32, f32)> = rings.iter().map(|(l, r)| (thick(*l), thick(*r))).collect();
-        // (at an angle: how thick a ring is there, blending from its left side to its right)
-        let th = |b: usize, a: f32| t[b].0 + (t[b].1 - t[b].0) * (1.0 + a.cos()) / 2.0;
-        // (where its inner edge is there: the middle's room, and every ring inside it with its gap)
-        let inner = |b: usize, a: f32| base + (0..b).map(|j| th(j, a) + gap).sum::<f32>();
-        const N: usize = 72;
-        // (never past its square: loud enough to reach past it, all of it drawn that much smaller)
-        let reach = (0..N).map(|k| {
-            let a = k as f32 / N as f32 * std::f32::consts::TAU;
-            inner(n - 1, a) + th(n - 1, a)
-        }).fold(0.0f32, f32::max);
-        let fit = (h * 0.5 / reach.max(0.01)).min(1.0);
-        for b in 0..n {
-            if rings[b].0.max(rings[b].1) <= 0.01 {
-                continue;
+        // (from the middle's room out to just short of its edge: its lanes, each this much of its lane filled at its loudest; with the
+        // bass at full, it just fills the square. The gap between the two sides, top and bottom, in degrees)
+        let (base, split) = if n <= 2 { (0.12f32, 18.0f32) } else { (0.08, 14.0) };
+        let grow = h * (1.0 + 0.08 * lift.clamp(0.0, 1.0));
+        let lane = (0.46 - base) / n as f32;
+        let fill = lane * 0.8;
+        let half = (90.0 - split / 2.0).to_radians();
+        const N: usize = 36;
+        // (the ghost: the mark's own colour, very dim, solid)
+        let ghost = Color(c.0 * 0.15, c.1 * 0.15, c.2 * 0.15, c.3);
+        let (Ok(br), Ok(gb)) = (brush(self.dc, c), brush(self.dc, ghost)) else { return h };
+        let band = |ri: f32, ro: f32, a0: f32, a1: f32, b: &ID2D1SolidColorBrush| unsafe {
+            let Ok(g) = self.g.d2d_factory.CreatePathGeometry() else { return };
+            let Ok(sink) = g.Open() else { return };
+            let pt = |a: f32, rad: f32| D2D_POINT_2F { x: (cx + rad * a.cos()) * s, y: (cy + rad * a.sin()) * s };
+            // (along its outer edge, back along its inner one)
+            sink.BeginFigure(pt(a0, ro), D2D1_FIGURE_BEGIN_FILLED);
+            for k in 1..=N {
+                sink.AddLine(pt(a0 + (a1 - a0) * k as f32 / N as f32, ro));
             }
-            unsafe {
-                let Ok(g) = self.g.d2d_factory.CreatePathGeometry() else { continue };
-                let Ok(sink) = g.Open() else { continue };
-                // (its outline, then its hole)
-                let pt = |k: usize, outer: bool| {
-                    let a = k as f32 / N as f32 * std::f32::consts::TAU;
-                    let rad = fit * (inner(b, a) + if outer { th(b, a) } else { 0.0 });
-                    D2D_POINT_2F { x: (cx + rad * a.cos()) * s, y: (cy + rad * a.sin()) * s }
-                };
-                for outer in [true, false] {
-                    sink.BeginFigure(pt(0, outer), D2D1_FIGURE_BEGIN_FILLED);
-                    for k in 1..N {
-                        let k = if outer { k } else { N - k };
-                        sink.AddLine(pt(k, outer));
-                    }
-                    sink.EndFigure(D2D1_FIGURE_END_CLOSED);
+            for k in (0..=N).rev() {
+                sink.AddLine(pt(a0 + (a1 - a0) * k as f32 / N as f32, ri));
+            }
+            sink.EndFigure(D2D1_FIGURE_END_CLOSED);
+            let _ = sink.Close();
+            self.dc.FillGeometry(&g, b, None);
+        };
+        for (side, centre) in [(0usize, std::f32::consts::PI), (1, 0.0f32)] {
+            let (a0, a1) = (centre - half, centre + half);
+            for (b, &(l, r)) in rings.iter().enumerate() {
+                let ri = grow * (base + lane * b as f32);
+                band(ri, ri + grow * fill, a0, a1, &gb);
+                let t = grow * fill * if side == 0 { l } else { r };
+                if t * s >= 0.35 {
+                    band(ri, ri + t, a0, a1, &br);
                 }
-                let _ = sink.Close();
-                // (solid: how loud each side is, its thickness alone)
-                let Ok(br) = brush(self.dc, c) else { continue };
-                self.dc.FillGeometry(&g, &br, None);
             }
         }
         h
@@ -945,8 +935,9 @@ impl<'a> Painter<'a> {
 /// up, wavering with the time `t`.
 pub fn loud_bars(loud: f32, t: f32) -> ([f32; 3], f32) {
     let v = (loud.sqrt() * 1.6).min(1.0);
-    let parts = std::array::from_fn(|i| (v * (0.6 + 0.4 * (t * (7.0 + i as f32 * 2.3) + i as f32 * 1.9).sin())).max(0.25));
-    (parts, v * v * (0.55 + 0.45 * (t * 4.1).sin().max(0.0)))
+    // (slow waves: a breath, never a flicker)
+    let parts = std::array::from_fn(|i| v * (0.7 + 0.3 * (t * (2.2 + i as f32 * 0.7) + i as f32 * 1.9).sin()));
+    (parts, v * v * (0.55 + 0.45 * (t * 1.6).sin().max(0.0)))
 }
 
 /// how loud a thing is now, over its volume's fill: light, plain against the theme's colour
@@ -957,8 +948,8 @@ pub fn live_level(peak: f32) -> f32 {
     peak.clamp(0.0, 1.0).sqrt()
 }
 
-/// The three bars while paused: still, low.
-pub const FLAT: [f32; 3] = [0.18, 0.18, 0.18];
+/// The sound's mark while paused: nothing.
+pub const FLAT: [f32; 3] = [0.0, 0.0, 0.0];
 
 /// How wide the three bars are, `h` tall.
 /// A grip, centred on (`cx`, `cy`): a pill that springs out of a dot (`show`, a spring, a little past 1 as it comes), wider and

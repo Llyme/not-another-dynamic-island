@@ -542,9 +542,10 @@ fn song(p: &Painter, peek: &Value, body: Rect) {
     // (its rings in the colour of its cover)
     let rc = crate::images::tone(p.pc, s["cover"].as_str().unwrap_or("")).map_or(c, |(r, g, b)| bright(crate::paint::Color(r, g, b, 1.0), c));
     let playing = s["playing"] == true;
-    // (playing: never lower than paused, so a quiet moment (or a sound the loopback does not hear) never leaves it blank)
+    // (as loud as each band is: a quiet moment, or nothing heard, leaves it empty)
     let flat = crate::draw::FLAT;
-    let parts: [f32; 6] = if playing { std::array::from_fn(|i| p.viz[i].max(flat[i % 3])) } else { std::array::from_fn(|i| flat[i % 3]) };
+    // (no sound: nothing; paused: nothing either)
+    let parts: [f32; 6] = if playing { p.viz } else { std::array::from_fn(|i| flat[i % 3]) };
     let cy = body.y + body.h / 2.0;
     if s["alone"] == true {
         // (its icon alone: the rings filling most of its square)

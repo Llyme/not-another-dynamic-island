@@ -57,7 +57,7 @@ impl Viz {
                     // (how loud the band is, against its range; then where it is: how much more of it one speaker has than the other,
                     // from their own meters (true dB), taken off the quieter side. Loud music never squashes the direction away)
                     // (with contrast: a quiet moment drops well down, a hit jumps up; so the marks move like a voice talking)
-                    let level = ((x - self.lo[b]) / range).clamp(0.0, 1.0).powf(1.5).max(0.06);
+                    let level = ((x - self.lo[b]) / range).clamp(0.0, 1.0).powf(1.5);
                     let lin = |v: f32| 10f32.powf((v * 66.0 - 72.0) / 20.0);
                     let bal = match (avg(&sl, b), avg(&sr, b)) {
                         (Some(l), Some(r)) => {
@@ -68,14 +68,16 @@ impl Viz {
                         }
                         _ => 0.0,
                     };
-                    self.target[b] = (level * (1.0 - bal.max(0.0))).max(0.12);
-                    self.target[3 + b] = (level * (1.0 + bal.min(0.0))).max(0.12);
+                    // (nothing heard in a band, on a side: nothing there)
+                    self.target[b] = level * (1.0 - bal.max(0.0));
+                    self.target[3 + b] = level * (1.0 + bal.min(0.0));
                 }
             }
         }
         let mut moving = false;
         for b in 0..6 {
-            let k = if self.target[b] > self.now[b] { 34.0 } else { 15.0 };
+            // (gentle: up in about a fifth of a second, down slower; never a flicker)
+            let k = if self.target[b] > self.now[b] { 11.0 } else { 5.0 };
             self.now[b] += (self.target[b] - self.now[b]) * (1.0 - (-dt * k).exp());
             if (self.target[b] - self.now[b]).abs() > 0.004 {
                 moving = true;
@@ -84,7 +86,7 @@ impl Viz {
             }
         }
         // (it hops up quickly with a beat, and drifts down)
-        let k = if self.lift_to > self.lift { 30.0 } else { 7.0 };
+        let k = if self.lift_to > self.lift { 9.0 } else { 3.5 };
         self.lift += (self.lift_to - self.lift) * (1.0 - (-dt * k).exp());
         if (self.lift_to - self.lift).abs() > 0.004 {
             moving = true;

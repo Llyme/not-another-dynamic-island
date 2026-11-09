@@ -1005,7 +1005,7 @@ impl Frame {
         if top > 0.001 && self.viz.now.iter().any(|v| *v > 0.01) {
             let share = (loud / top).clamp(0.0, 1.0).sqrt();
             let n = self.viz.now;
-            return std::array::from_fn(|i| if i < 6 { (n[i] * share).max(0.12) } else { self.viz.lift * share });
+            return std::array::from_fn(|i| if i < 6 { n[i] * share } else { self.viz.lift * share });
         }
         let b = sound_bars(loud, t);
         [b[0], b[1], b[2], b[0], b[1], b[2], b[3]]
@@ -5275,15 +5275,19 @@ impl Frame {
         // the Volume Mixer's meters: how loud the output, the microphone and each program are now, springing (up at once, down
         // slowly); only while it is seen
         let qk = key(crate::builtin::PLUGIN, crate::builtin::QUICK);
+        // (in a group: where the group is)
+        let qhome = self.group_of(&qk).map(|g| Self::group_key(&g)).unwrap_or_else(|| qk.clone());
         let dock_open = self.screens.iter().any(|sc| sc.items.iter().any(|(k, it)| Self::is_dock(k) && it.open.now > 0.5));
-        if (self.place_of(crate::builtin::PLUGIN, crate::builtin::QUICK).is_some() && self.seen_anywhere(&qk)) || dock_open {
+        if self.seen_anywhere(&qhome) || dock_open {
             let (out, mic) = crate::volume::peaks();
             let mut raw: HashMap<String, f32> = self.bi.audio.peaks().into_iter().map(|(k, v)| (format!("app:{k}"), v)).collect();
             raw.insert("master".into(), out);
             raw.insert("mic".into(), mic);
             for (k, v) in self.meter_now.iter_mut() {
                 let to = raw.get(k).copied().unwrap_or(0.0);
-                *v = if to > *v { to } else { *v + (to - *v) * (1.0 - (-dt * 6.0).exp()) };
+                // (eased both ways: up quickly but not at once, down slowly; never a flicker)
+                let k = if to > *v { 12.0 } else { 4.0 };
+                *v += (to - *v) * (1.0 - (-dt * k).exp());
             }
             for (k, v) in raw {
                 self.meter_now.entry(k).or_insert(v);
@@ -5300,8 +5304,8 @@ impl Frame {
         // (the dock at its largest, out: what plays is looked at, for its card)
         let card = dock_seen && self.large(&self.dock_in_use());
         self.pc.want.shell_media.store(card || dock_open, Ordering::Relaxed);
-        // quick settings, placed and seen without the dock: its sound looked at with the windows
-        if !dock_seen && self.place_of(crate::builtin::PLUGIN, crate::builtin::QUICK).is_some() && self.seen_anywhere(&key(crate::builtin::PLUGIN, crate::builtin::QUICK)) {
+        // quick settings (on its own or in a group), seen without the dock: its sound looked at with the windows
+        if !dock_seen && self.seen_anywhere(&qhome) {
             self.sync_builtins(false);
         }
         if dock_seen && !self.dock_was_seen {

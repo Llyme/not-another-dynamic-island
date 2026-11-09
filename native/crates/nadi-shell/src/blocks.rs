@@ -1485,7 +1485,8 @@ impl<'a, 'b> Ctx<'a, 'b> {
                 for it in b["items"].as_array().cloned().unwrap_or_default() {
                     let name = s(&it, "name");
                     let nw = self.p.measure(name, 11.0, Weight::Semibold, 120.0);
-                    let cw = 4.0 + 20.0 + 6.0 + nw + 6.0 + 16.0 + 8.0;
+                    // (room for its sound's mark, as wide as it is drawn)
+                    let cw = 4.0 + 20.0 + 6.0 + nw + 6.0 + crate::draw::bars_w(10.0).max(16.0) + 8.0;
                     let r = Rect::new(cx, y, cw, 28.0);
                     let on = it["on"] == true;
                     self.round(r, 14.0, if on { CHOSEN } else if hovered(r) { LIT } else { TRACK });
@@ -1536,12 +1537,14 @@ impl<'a, 'b> Ctx<'a, 'b> {
             }
             // (a song's head: its name, big, who sings it and its album under it; its bars at its end)
             "songhead" => {
-                let bw = if b["viz"].is_boolean() { 22.0 } else { 0.0 };
+                // (its mark's room: as wide as it is drawn, and a gap before it)
+                let mw = crate::draw::bars_w(14.0);
+                let bw = if b["viz"].is_boolean() { mw + 6.0 } else { 0.0 };
                 self.text(s(b, "title"), x, y + 11.0, 16.0, Weight::Semibold, w - bw, TEXT);
                 self.text(s(b, "sub"), x, y + 31.0, 12.5, Weight::Regular, w - bw, DIM);
                 if self.draw && b["viz"].is_boolean() {
                     let parts: &[f32] = if b["viz"] == true { &self.p.viz } else { &FLAT };
-                    self.p.viz(x + w - 16.0, y + 20.0, 14.0, parts, self.tint(b, accent()));
+                    self.p.viz(x + w - mw, y + 20.0, 14.0, parts, self.tint(b, accent()));
                 }
                 42.0
             }
