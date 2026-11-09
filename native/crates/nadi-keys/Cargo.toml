@@ -1,6 +1,6 @@
 [package]
 name = "nadi-keys"
-version = "1.10.1"
+version = "1.11.0"
 edition = "2021"
 
 # NADI's Windows-key helper: run as administrator (set up once from NADI's settings), it hears the Windows key over apps that run as
